@@ -14,23 +14,25 @@ app.use(morgan('combined'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const sequelize = new Sequelize('livemoment', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 3306,
-  dialect: 'mysql'
-});
+const { User, LocalUser, SocialUser, Room, sequelize } = require('./models');
 
 sequelize.authenticate()
-  .then(() => {
+  .then(async () => {
     console.log('Connected to MySQL');
+
+    // 데이터베이스 테이블 동기화 (관계 포함)
+    await sequelize.sync({ alter: true });
+    console.log('Database synchronized');
   })
   .catch(err => {
     console.error('MySQL connection error:', err);
   });
 
 const roomRoutes = require('./routes/roomRoutes');
+const authRoutes = require('./routes/authRoutes');
 
 app.use('/api/rooms', roomRoutes);
+app.use('/api/auth', authRoutes);
 
 app.get('/', (req, res) => {
   res.json({ message: 'Rental API Server is running!' });
