@@ -1,4 +1,4 @@
-const { User, LocalUser, SocialUser, sequelize } = require('../models');
+const { User, LocalUser, SocialUser, UserBankAccount, sequelize } = require('../models');
 const { generateTokens, hashPassword, comparePassword } = require('../utils/auth');
 const { Op } = require('sequelize');
 
@@ -6,12 +6,12 @@ const register = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const { email, password, name } = req.body;
+    const { email, password, user_mode } = req.body;
 
-    if (!email || !password || !name) {
+    if (!email || !password) {
       return res.status(400).json({
         success: false,
-        message: '이메일, 비밀번호, 이름은 필수입니다.'
+        message: '이메일과 비밀번호는 필수입니다.'
       });
     }
 
@@ -29,7 +29,6 @@ const register = async (req, res) => {
     // 기본 사용자 정보 생성
     const newUser = await User.create({
       email,
-      name,
       userType: 'local'
     }, { transaction });
 
@@ -42,7 +41,9 @@ const register = async (req, res) => {
 
     const { accessToken, refreshToken } = generateTokens({
       userId: newUser.id,
-      email: newUser.email
+      email: newUser.email,
+      phoneVerified: newUser.phoneVerified || false,
+      hasBank: false
     });
 
     await newUser.update({ refreshToken }, { transaction });
@@ -56,9 +57,12 @@ const register = async (req, res) => {
         user: {
           id: newUser.id,
           email: newUser.email,
-          name: newUser.name,
+          name: newUser.name || null,
           profileImageUrl: newUser.profileImageUrl,
-          userType: newUser.userType
+          userType: newUser.userType,
+          userMode: user_mode === 'host' ? 'host' : 'guest',
+          phoneVerified: newUser.phoneVerified || false,
+          hasBank: false
         },
         accessToken,
         refreshToken
@@ -76,7 +80,7 @@ const register = async (req, res) => {
 
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, user_mode } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({
@@ -147,6 +151,17 @@ const login = async (req, res) => {
       lockUntil: null
     });
 
+    // 계좌 등록 여부 확인
+    const bankAccount = await UserBankAccount.findOne({
+      where: { userId: user.id }
+    });
+
+    // user_mode 결정: 계좌가 없으면 guest 강제, 있으면 요청값 또는 기본값
+    let userMode = 'guest';
+    if (bankAccount) {
+      userMode = user_mode === 'host' ? 'host' : 'guest';
+    }
+
     const { accessToken, refreshToken } = generateTokens({
       userId: user.id,
       email: user.email
@@ -166,7 +181,10 @@ const login = async (req, res) => {
           email: user.email,
           name: user.name,
           profileImageUrl: user.profileImageUrl,
-          userType: user.userType
+          userType: user.userType,
+          userMode: userMode,
+          phoneVerified: user.phoneVerified || false,
+          hasBank: !!bankAccount
         },
         accessToken,
         refreshToken
@@ -201,6 +219,21 @@ const refreshToken = async (req, res) => {
         success: false,
         message: '유효하지 않은 리프레시 토큰입니다.'
       });
+    }
+
+    // 최신 사용자 정보 조회 (계좌 정보 포함)
+    const updatedUser = await User.findByPk(user.id);
+    const bankAccount = await UserBankAccount.findOne({
+      where: { userId: user.id }
+    });
+
+    // 기존 토큰에서 userMode 추출 (없으면 기본값 설정)
+    const decoded = require('jsonwebtoken').decode(token);
+    let userMode = decoded?.userMode || 'guest';
+
+    // 계좌 상태에 따라 userMode 재검증
+    if (!bankAccount && userMode === 'host') {
+      userMode = 'guest';
     }
 
     const { accessToken, refreshToken: newRefreshToken } = generateTokens({

@@ -1,4 +1,4 @@
-const { User, SocialUser, sequelize } = require('../models');
+const { User, SocialUser, UserBankAccount, sequelize } = require('../models');
 const { generateTokens } = require('../utils/auth');
 const axios = require('axios');
 
@@ -6,7 +6,7 @@ const kakaoLogin = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const { code } = req.body;
+    const { code, user_mode } = req.body;
 
     if (!code) {
       return res.status(400).json({
@@ -118,6 +118,17 @@ const kakaoLogin = async (req, res) => {
       }, { transaction });
     }
 
+    // 계좌 등록 여부 확인
+    const bankAccount = await UserBankAccount.findOne({
+      where: { userId: user.id }
+    });
+
+    // user_mode 결정: 계좌가 없으면 guest 강제, 있으면 요청값 또는 기본값
+    let userMode = 'guest';
+    if (bankAccount) {
+      userMode = user_mode === 'host' ? 'host' : 'guest';
+    }
+
     const { accessToken, refreshToken } = generateTokens({
       userId: user.id,
       email: user.email
@@ -139,7 +150,10 @@ const kakaoLogin = async (req, res) => {
           email: user.email,
           name: user.name,
           profileImageUrl: user.profileImageUrl,
-          userType: user.userType
+          userType: user.userType,
+          userMode: userMode,
+          phoneVerified: user.phoneVerified || false,
+          hasBank: !!bankAccount
         },
         accessToken,
         refreshToken

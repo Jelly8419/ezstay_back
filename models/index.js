@@ -3,6 +3,7 @@ const { User } = require('./User');
 const { LocalUser } = require('./LocalUser');
 const { SocialUser } = require('./SocialUser');
 const { Room } = require('./Room');
+const { UserBankAccount } = require('./UserBankAccount');
 
 const sequelize = new Sequelize('livemoment', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -38,10 +39,20 @@ Room.belongsTo(User, {
   as: 'host'
 });
 
+User.hasMany(UserBankAccount, {
+  foreignKey: 'userId',
+  as: 'bankAccounts'
+});
+UserBankAccount.belongsTo(User, {
+  foreignKey: 'userId',
+  as: 'user'
+});
+
 module.exports = {
   sequelize,
   User,
   LocalUser,
   SocialUser,
-  Room
+  Room,
+  UserBankAccount
 };

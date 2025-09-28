@@ -23,7 +23,23 @@ const User = sequelize.define('User', {
   },
   name: {
     type: DataTypes.STRING(100),
-    allowNull: false
+    allowNull: true
+  },
+  phoneNumber: {
+    type: DataTypes.STRING(20),
+    allowNull: true,
+    comment: '휴대폰 번호'
+  },
+  phoneVerified: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    comment: '휴대폰 인증 여부'
+  },
+  phoneVerifiedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: '휴대폰 인증 완료 시간'
   },
   profileImageUrl: {
     type: DataTypes.STRING(500),
