@@ -62,6 +62,36 @@ const User = sequelize.define('User', {
   lastLoginAt: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+  // 약관 동의 정보
+  serviceTermsAgreed: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    comment: '서비스 이용약관 동의 여부'
+  },
+  privacyPolicyAgreed: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    comment: '개인정보처리방침 동의 여부'
+  },
+  marketingConsent: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    comment: '마케팅 정보 수신 동의 여부'
+  },
+  ageConfirmed: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    comment: '만 19세 이상 확인 여부'
+  },
+  termsAgreedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: '약관 동의 시간'
   }
 }, {
   tableName: 'users',

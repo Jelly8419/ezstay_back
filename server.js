@@ -30,9 +30,13 @@ sequelize.authenticate()
 
 const roomRoutes = require('./routes/roomRoutes');
 const authRoutes = require('./routes/authRoutes');
+const accountRoutes = require('./routes/accountRoutes');
+const userRoutes = require('./routes/userRoutes');
 
 app.use('/api/rooms', roomRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/account', accountRoutes);
+app.use('/api/user', userRoutes);
 
 app.get('/', (req, res) => {
   res.json({ message: 'Rental API Server is running!' });
