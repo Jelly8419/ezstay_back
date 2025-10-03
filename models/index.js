@@ -3,6 +3,9 @@ const { User } = require('./User');
 const { LocalUser } = require('./LocalUser');
 const { SocialUser } = require('./SocialUser');
 const { Room } = require('./Room');
+const { RoomPhoto } = require('./RoomPhoto');
+const { RoomAmenity } = require('./RoomAmenity');
+const { RoomFreeService } = require('./RoomFreeService');
 const { UserBankAccount } = require('./UserBankAccount');
 
 const sequelize = new Sequelize('livemoment', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
@@ -39,6 +42,34 @@ Room.belongsTo(User, {
   as: 'host'
 });
 
+// Room 관계 설정
+Room.hasMany(RoomPhoto, {
+  foreignKey: 'roomId',
+  as: 'photos'
+});
+RoomPhoto.belongsTo(Room, {
+  foreignKey: 'roomId',
+  as: 'room'
+});
+
+Room.hasOne(RoomAmenity, {
+  foreignKey: 'roomId',
+  as: 'amenity'
+});
+RoomAmenity.belongsTo(Room, {
+  foreignKey: 'roomId',
+  as: 'room'
+});
+
+Room.hasOne(RoomFreeService, {
+  foreignKey: 'roomId',
+  as: 'freeService'
+});
+RoomFreeService.belongsTo(Room, {
+  foreignKey: 'roomId',
+  as: 'room'
+});
+
 User.hasMany(UserBankAccount, {
   foreignKey: 'userId',
   as: 'bankAccounts'
@@ -54,5 +85,8 @@ module.exports = {
   LocalUser,
   SocialUser,
   Room,
+  RoomPhoto,
+  RoomAmenity,
+  RoomFreeService,
   UserBankAccount
 };

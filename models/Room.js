@@ -13,6 +13,15 @@ const Room = sequelize.define('Room', {
     primaryKey: true,
     autoIncrement: true
   },
+  hostId: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    references: {
+      model: 'users',
+      key: 'id'
+    }
+  },
+  // 기본 정보
   roomName: {
     type: DataTypes.STRING(255),
     allowNull: false
@@ -32,14 +41,22 @@ const Room = sequelize.define('Room', {
       min: 0
     }
   },
+  floor: {
+    type: DataTypes.STRING(50),
+    allowNull: true
+  },
   buildingType: {
-    type: DataTypes.ENUM('아파트', '오피스텔', '빌라', '주택', '원룸', '기타'),
+    type: DataTypes.STRING(50),
     allowNull: false
   },
   parkingAvailable: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
     defaultValue: false
+  },
+  parkingInfo: {
+    type: DataTypes.STRING(500),
+    allowNull: true
   },
   elevatorAvailable: {
     type: DataTypes.BOOLEAN,
@@ -79,13 +96,101 @@ const Room = sequelize.define('Room', {
     allowNull: false,
     defaultValue: false
   },
-  hostId: {
+  entrancePassword: {
+    type: DataTypes.STRING(100),
+    allowNull: true
+  },
+  // 요금 정보
+  weeklyRent: {
     type: DataTypes.INTEGER,
-    allowNull: true,
-    references: {
-      model: 'users',
-      key: 'id'
-    }
+    allowNull: true
+  },
+  longTermWeeks: {
+    type: DataTypes.INTEGER,
+    allowNull: true
+  },
+  longTermDiscount: {
+    type: DataTypes.INTEGER,
+    allowNull: true
+  },
+  quickMoveIn: {
+    type: DataTypes.STRING(100),
+    allowNull: true
+  },
+  quickMoveInDiscount: {
+    type: DataTypes.INTEGER,
+    allowNull: true
+  },
+  maintenanceFee: {
+    type: DataTypes.INTEGER,
+    allowNull: true
+  },
+  maintenanceDetail: {
+    type: DataTypes.STRING(500),
+    allowNull: true
+  },
+  includeElectricity: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
+  includeWater: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
+  includeGas: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
+  includeInternet: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
+  cleaningFee: {
+    type: DataTypes.INTEGER,
+    allowNull: true
+  },
+  minContractWeeks: {
+    type: DataTypes.INTEGER,
+    allowNull: true
+  },
+  refundPolicy: {
+    type: DataTypes.STRING(50),
+    allowNull: true
+  },
+  // 방 소개
+  description: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  },
+  transportation: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  },
+  houseRules: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  },
+  // 상태 관리
+  status: {
+    type: DataTypes.ENUM('draft', 'pending_review', 'approved', 'rejected', 'published'),
+    allowNull: false,
+    defaultValue: 'draft'
+  },
+  submittedAt: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  approvedAt: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  publishedAt: {
+    type: DataTypes.DATE,
+    allowNull: true
   }
 }, {
   tableName: 'rooms',

@@ -14,7 +14,10 @@ app.use(morgan('combined'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const { User, LocalUser, SocialUser, Room, sequelize } = require('./models');
+// 정적 파일 제공 (업로드된 이미지)
+app.use('/uploads', express.static('uploads'));
+
+const { User, LocalUser, SocialUser, Room, RoomPhoto, RoomAmenity, RoomFreeService, sequelize } = require('./models');
 
 sequelize.authenticate()
   .then(async () => {
@@ -32,11 +35,13 @@ const roomRoutes = require('./routes/roomRoutes');
 const authRoutes = require('./routes/authRoutes');
 const accountRoutes = require('./routes/accountRoutes');
 const userRoutes = require('./routes/userRoutes');
+const hostRoutes = require('./routes/hostRoutes');
 
 app.use('/api/rooms', roomRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/account', accountRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/host', hostRoutes);
 
 app.get('/', (req, res) => {
   res.json({ message: 'Rental API Server is running!' });
