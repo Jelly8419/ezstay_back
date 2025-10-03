@@ -11,6 +11,7 @@ const {
   submitReview,
   reorderPhotos,
   deletePhoto,
+  getMyRooms,
   getRoom
 } = require('../controllers/hostController');
 const { authenticateToken } = require('../middleware/auth');
@@ -18,6 +19,9 @@ const { uploadRoomPhotos, uploadSingleImage } = require('../middleware/upload');
 
 // 인증 필요한 모든 라우트에 미들웨어 적용
 router.use(authenticateToken);
+
+// 0. 내 방 목록 조회 (getRoom보다 먼저 와야 함)
+router.get('/rooms', getMyRooms);
 
 // 1. 기본 정보 등록
 router.post('/rooms', createRoom);
@@ -49,7 +53,7 @@ router.patch('/rooms/:roomId/photos/reorder', reorderPhotos);
 // 10. 사진 삭제
 router.delete('/rooms/:roomId/photos/:photoId', deletePhoto);
 
-// 11. 방 정보 조회
+// 11. 방 상세 정보 조회
 router.get('/rooms/:roomId', getRoom);
 
 module.exports = router;

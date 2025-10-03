@@ -581,7 +581,145 @@ const deletePhoto = async (req, res) => {
   }
 };
 
-// 11. 방 정보 조회
+// 진행 단계 계산 함수
+const calculateProgress = (room) => {
+  const steps = {
+    basicInfo: false,           // 1단계: 기본 정보
+    pricing: false,             // 2단계: 요금 설정
+    photosAndAmenities: false,  // 3단계: 사진 및 편의시설
+    freeServices: false,        // 4단계: 무료 부가서비스
+    description: false          // 5단계: 방 소개
+  };
+
+  // 1단계: 기본 정보 체크
+  if (room.roomName && room.address && room.detailAddress &&
+      room.area && room.buildingType) {
+    steps.basicInfo = true;
+  }
+
+  // 2단계: 요금 설정 체크
+  if (room.weeklyRent && room.minContractWeeks && room.refundPolicy) {
+    steps.pricing = true;
+  }
+
+  // 3단계: 사진 및 편의시설 체크
+  if (room.photos && room.photos.length >= 6 && room.amenity) {
+    steps.photosAndAmenities = true;
+  }
+
+  // 4단계: 무료 부가서비스 체크
+  if (room.freeService && room.freeService.agreeTerms) {
+    steps.freeServices = true;
+  }
+
+  // 5단계: 방 소개 체크
+  if (room.description && room.transportation && room.houseRules) {
+    steps.description = true;
+  }
+
+  // 현재 단계 결정 (가장 최근에 완료한 단계의 다음 단계)
+  let currentStep = 'basicInfo';
+  if (!steps.basicInfo) currentStep = 'basicInfo';
+  else if (!steps.pricing) currentStep = 'pricing';
+  else if (!steps.photosAndAmenities) currentStep = 'photosAndAmenities';
+  else if (!steps.freeServices) currentStep = 'freeServices';
+  else if (!steps.description) currentStep = 'description';
+  else currentStep = 'completed';
+
+  // 완료율 계산
+  const completedSteps = Object.values(steps).filter(Boolean).length;
+  const totalSteps = Object.keys(steps).length;
+  const completionRate = Math.round((completedSteps / totalSteps) * 100);
+
+  return {
+    currentStep,        // 현재 진행해야 할 단계
+    completionRate,     // 완료율 (%)
+    steps               // 각 단계별 완료 여부
+  };
+};
+
+// 11. 내 방 목록 조회
+const getMyRooms = async (req, res) => {
+  try {
+    const hostId = req.user.id;
+    const { status, page = 1, limit = 10 } = req.query;
+
+    const where = { hostId };
+    if (status) {
+      where.status = status;
+    }
+
+    const offset = (page - 1) * limit;
+
+    const { count, rows } = await Room.findAndCountAll({
+      where,
+      include: [
+        {
+          model: RoomPhoto,
+          as: 'photos',
+          limit: 1,
+          order: [['order', 'ASC']]
+        },
+        {
+          model: RoomAmenity,
+          as: 'amenity',
+          attributes: ['roomId']
+        },
+        {
+          model: RoomFreeService,
+          as: 'freeService',
+          attributes: ['roomId', 'agreeTerms']
+        }
+      ],
+      order: [['createdAt', 'DESC']],
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+
+    const rooms = rows.map(room => {
+      const registrationProgress = calculateProgress(room);
+
+      return {
+        id: room.id,
+        roomName: room.roomName,
+        address: room.address,
+        area: room.area,
+        buildingType: room.buildingType,
+        weeklyRent: room.weeklyRent,
+        status: room.status,
+        thumbnail: room.photos[0]?.url || null,
+        registrationProgress,
+        submittedAt: room.submittedAt,
+        approvedAt: room.approvedAt,
+        publishedAt: room.publishedAt,
+        createdAt: room.createdAt,
+        updatedAt: room.updatedAt
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        rooms,
+        pagination: {
+          total: count,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: Math.ceil(count / limit)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get my rooms error:', error);
+    res.status(500).json({
+      success: false,
+      message: '방 목록 조회 중 오류가 발생했습니다.',
+      error: error.message
+    });
+  }
+};
+
+// 12. 방 정보 조회
 const getRoom = async (req, res) => {
   try {
     const { roomId } = req.params;
@@ -612,6 +750,9 @@ const getRoom = async (req, res) => {
         message: '방을 찾을 수 없습니다.'
       });
     }
+
+    // 진행 단계 계산
+    const registrationProgress = calculateProgress(room);
 
     // 응답 데이터 구조화
     const responseData = {
@@ -688,7 +829,10 @@ const getRoom = async (req, res) => {
       status: room.status,
       submittedAt: room.submittedAt,
       approvedAt: room.approvedAt,
-      publishedAt: room.publishedAt
+      publishedAt: room.publishedAt,
+
+      // 등록 진행 상태
+      registrationProgress
     };
 
     res.status(200).json({
@@ -716,5 +860,6 @@ module.exports = {
   submitReview,
   reorderPhotos,
   deletePhoto,
+  getMyRooms,
   getRoom
 };

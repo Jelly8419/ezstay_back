@@ -2,8 +2,10 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+// 업로드 디렉토리 설정 (환경변수 또는 기본값)
+const uploadDir = process.env.UPLOAD_PATH || path.join(__dirname, '../uploads/rooms');
+
 // 업로드 디렉토리 생성
-const uploadDir = path.join(__dirname, '../uploads/rooms');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -22,11 +24,11 @@ const storage = multer.diskStorage({
 
 // 파일 필터 (이미지만 허용)
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = /jpeg|jpg|png|gif|webp/;
+  const allowedTypes = /jpeg|jpg|png|webp/;
   const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-  const mimetype = allowedTypes.test(file.mimetype);
 
-  if (extname && mimetype) {
+  // 확장자가 이미지 파일이면 허용 (mimetype이 'application/octet-stream'으로 오는 경우 대비)
+  if (extname) {
     cb(null, true);
   } else {
     cb(new Error('이미지 파일만 업로드 가능합니다. (jpeg, jpg, png, gif, webp)'));
