@@ -1,4 +1,5 @@
 const { User, UserBankAccount, sequelize } = require('../models');
+const { ErrorCodes, success, error } = require('../utils/responseHelper');
 
 // 게스트 본인인증정보 저장
 const saveGuestVerification = async (req, res) => {
@@ -11,19 +12,13 @@ const saveGuestVerification = async (req, res) => {
     // 필수 필드 검증
     if (!name || !phone_number) {
       await transaction.rollback();
-      return res.status(400).json({
-        success: false,
-        message: '이름과 전화번호는 필수입니다.'
-      });
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
     // 필수 약관 동의 검증
     if (!terms || !terms.service_terms || !terms.privacy_policy || !terms.age_confirmed) {
       await transaction.rollback();
-      return res.status(400).json({
-        success: false,
-        message: '필수 약관에 동의해야 합니다.'
-      });
+      return error(res, { code: 4501, message: '필수 약관에 동의해야 합니다.' }, 400);
     }
 
     // Users 테이블 업데이트 (본인인증정보 + 약관정보)
@@ -44,42 +39,31 @@ const saveGuestVerification = async (req, res) => {
 
     if (updatedUser[0] === 0) {
       await transaction.rollback();
-      return res.status(404).json({
-        success: false,
-        message: '사용자를 찾을 수 없습니다.'
-      });
+      return error(res, ErrorCodes.USER_NOT_FOUND, 404);
     }
 
     await transaction.commit();
 
-    res.status(200).json({
-      success: true,
-      message: '본인인증이 완료되었습니다.',
-      data: {
-        user: {
-          name: name,
-          phoneNumber: phone_number,
-          phoneVerified: true,
-          userType: 'guest'
-        },
-        terms: {
-          serviceTermsAgreed: terms.service_terms,
-          privacyPolicyAgreed: terms.privacy_policy,
-          marketingConsent: terms.marketing_consent || false,
-          ageConfirmed: terms.age_confirmed,
-          termsAgreedAt: new Date()
-        }
+    return success(res, {
+      user: {
+        name: name,
+        phoneNumber: phone_number,
+        phoneVerified: true,
+        userType: 'guest'
+      },
+      terms: {
+        serviceTermsAgreed: terms.service_terms,
+        privacyPolicyAgreed: terms.privacy_policy,
+        marketingConsent: terms.marketing_consent || false,
+        ageConfirmed: terms.age_confirmed,
+        termsAgreedAt: new Date()
       }
-    });
+    }, '본인인증이 완료되었습니다.');
 
-  } catch (error) {
+  } catch (err) {
     await transaction.rollback();
-    console.error('게스트 인증정보 저장 오류:', error);
-    res.status(500).json({
-      success: false,
-      message: '본인인증 중 오류가 발생했습니다.',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    console.error('게스트 인증정보 저장 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, process.env.NODE_ENV === 'development' ? err.message : undefined);
   }
 };
 
@@ -102,19 +86,13 @@ const saveHostVerification = async (req, res) => {
     // 모든 필드 필수 검증
     if (!name || !phone_number || !bank_code || !account_num || !account_holder_name) {
       await transaction.rollback();
-      return res.status(400).json({
-        success: false,
-        message: '이름, 전화번호, 은행코드, 계좌번호, 예금주명은 모두 필수입니다.'
-      });
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
     // 필수 약관 동의 검증
     if (!terms || !terms.service_terms || !terms.privacy_policy || !terms.age_confirmed) {
       await transaction.rollback();
-      return res.status(400).json({
-        success: false,
-        message: '필수 약관에 동의해야 합니다.'
-      });
+      return error(res, { code: 4501, message: '필수 약관에 동의해야 합니다.' }, 400);
     }
 
     // Users 테이블 업데이트 (본인인증정보 + 약관정보)
@@ -135,10 +113,7 @@ const saveHostVerification = async (req, res) => {
 
     if (updatedUser[0] === 0) {
       await transaction.rollback();
-      return res.status(404).json({
-        success: false,
-        message: '사용자를 찾을 수 없습니다.'
-      });
+      return error(res, ErrorCodes.USER_NOT_FOUND, 404);
     }
 
     // 계좌정보 저장
@@ -167,39 +142,31 @@ const saveHostVerification = async (req, res) => {
 
     await transaction.commit();
 
-    res.status(200).json({
-      success: true,
-      message: '본인인증 및 계좌등록이 완료되었습니다.',
-      data: {
-        user: {
-          name: name,
-          phoneNumber: phone_number,
-          phoneVerified: true,
-          userType: 'host',
-          hasBank: true
-        },
-        bankInfo: {
-          bankName: bank_code,
-          accountHolder: account_holder_name
-        },
-        terms: {
-          serviceTermsAgreed: terms.service_terms,
-          privacyPolicyAgreed: terms.privacy_policy,
-          marketingConsent: terms.marketing_consent || false,
-          ageConfirmed: terms.age_confirmed,
-          termsAgreedAt: new Date()
-        }
+    return success(res, {
+      user: {
+        name: name,
+        phoneNumber: phone_number,
+        phoneVerified: true,
+        userType: 'host',
+        hasBank: true
+      },
+      bankInfo: {
+        bankName: bank_code,
+        accountHolder: account_holder_name
+      },
+      terms: {
+        serviceTermsAgreed: terms.service_terms,
+        privacyPolicyAgreed: terms.privacy_policy,
+        marketingConsent: terms.marketing_consent || false,
+        ageConfirmed: terms.age_confirmed,
+        termsAgreedAt: new Date()
       }
-    });
+    }, '본인인증 및 계좌등록이 완료되었습니다.');
 
-  } catch (error) {
+  } catch (err) {
     await transaction.rollback();
-    console.error('호스트 인증정보 저장 오류:', error);
-    res.status(500).json({
-      success: false,
-      message: '호스트 인증 중 오류가 발생했습니다.',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    console.error('호스트 인증정보 저장 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, process.env.NODE_ENV === 'development' ? err.message : undefined);
   }
 };
 
@@ -217,10 +184,7 @@ const getVerificationStatus = async (req, res) => {
     });
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: '사용자를 찾을 수 없습니다.'
-      });
+      return error(res, ErrorCodes.USER_NOT_FOUND, 404);
     }
 
     // 계좌 등록 여부 확인
@@ -229,38 +193,32 @@ const getVerificationStatus = async (req, res) => {
       attributes: ['id', 'bankName', 'accountHolder', 'isVerified']
     });
 
-    res.status(200).json({
-      success: true,
-      data: {
-        user: {
-          id: user.id,
-          name: user.name,
-          phoneNumber: user.phoneNumber,
-          phoneVerified: user.phoneVerified || false,
-          phoneVerifiedAt: user.phoneVerifiedAt,
-          hasBank: !!bankAccount,
-          bankInfo: bankAccount ? {
-            bankName: bankAccount.bankName,
-            accountHolder: bankAccount.accountHolder,
-            isVerified: bankAccount.isVerified
-          } : null
-        },
-        terms: {
-          serviceTermsAgreed: user.serviceTermsAgreed || false,
-          privacyPolicyAgreed: user.privacyPolicyAgreed || false,
-          marketingConsent: user.marketingConsent || false,
-          ageConfirmed: user.ageConfirmed || false,
-          termsAgreedAt: user.termsAgreedAt
-        }
+    return success(res, {
+      user: {
+        id: user.id,
+        name: user.name,
+        phoneNumber: user.phoneNumber,
+        phoneVerified: user.phoneVerified || false,
+        phoneVerifiedAt: user.phoneVerifiedAt,
+        hasBank: !!bankAccount,
+        bankInfo: bankAccount ? {
+          bankName: bankAccount.bankName,
+          accountHolder: bankAccount.accountHolder,
+          isVerified: bankAccount.isVerified
+        } : null
+      },
+      terms: {
+        serviceTermsAgreed: user.serviceTermsAgreed || false,
+        privacyPolicyAgreed: user.privacyPolicyAgreed || false,
+        marketingConsent: user.marketingConsent || false,
+        ageConfirmed: user.ageConfirmed || false,
+        termsAgreedAt: user.termsAgreedAt
       }
     });
 
-  } catch (error) {
-    console.error('인증 상태 조회 오류:', error);
-    res.status(500).json({
-      success: false,
-      message: '인증 상태 조회 중 오류가 발생했습니다.'
-    });
+  } catch (err) {
+    console.error('인증 상태 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 

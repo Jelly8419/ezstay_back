@@ -1,4 +1,5 @@
 const { Room, RoomPhoto, RoomAmenity, RoomFreeService, sequelize } = require('../models');
+const { ErrorCodes, success, error, created, updated } = require('../utils/responseHelper');
 
 // 1. 기본 정보 등록
 const createRoom = async (req, res) => {
@@ -26,10 +27,7 @@ const createRoom = async (req, res) => {
 
     // 필수 필드 검증
     if (!roomName || !address || !detailAddress || !area || !buildingType) {
-      return res.status(400).json({
-        success: false,
-        message: '필수 정보를 모두 입력해주세요.'
-      });
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
     const room = await Room.create({
@@ -54,22 +52,14 @@ const createRoom = async (req, res) => {
 
     await transaction.commit();
 
-    res.status(201).json({
-      success: true,
-      message: '방 기본 정보가 등록되었습니다.',
-      data: {
-        roomId: room.id,
-        status: room.status
-      }
-    });
-  } catch (error) {
+    return created(res, {
+      roomId: room.id,
+      status: room.status
+    }, '방 기본 정보가 등록되었습니다.');
+  } catch (err) {
     await transaction.rollback();
-    console.error('Room creation error:', error);
-    res.status(500).json({
-      success: false,
-      message: '방 등록 중 오류가 발생했습니다.',
-      error: error.message
-    });
+    console.error('Room creation error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 
@@ -100,10 +90,7 @@ const updatePricing = async (req, res) => {
     });
 
     if (!room) {
-      return res.status(404).json({
-        success: false,
-        message: '방을 찾을 수 없습니다.'
-      });
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
     await room.update({
@@ -123,20 +110,10 @@ const updatePricing = async (req, res) => {
       refundPolicy
     });
 
-    res.status(200).json({
-      success: true,
-      message: '요금 정보가 저장되었습니다.',
-      data: {
-        roomId: room.id
-      }
-    });
-  } catch (error) {
-    console.error('Pricing update error:', error);
-    res.status(500).json({
-      success: false,
-      message: '요금 설정 중 오류가 발생했습니다.',
-      error: error.message
-    });
+    return updated(res, { roomId: room.id }, '요금 정보가 저장되었습니다.');
+  } catch (err) {
+    console.error('Pricing update error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 
@@ -153,25 +130,16 @@ const uploadPhotos = async (req, res) => {
     });
 
     if (!room) {
-      return res.status(404).json({
-        success: false,
-        message: '방을 찾을 수 없습니다.'
-      });
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
     // multer로 업로드된 파일들 처리 (실제 파일 업로드 미들웨어 필요)
     if (!req.files || req.files.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: '최소 6장의 사진을 업로드해주세요.'
-      });
+      return error(res, ErrorCodes.MIN_PHOTOS_REQUIRED, 400);
     }
 
     if (req.files.length < 6 || req.files.length > 20) {
-      return res.status(400).json({
-        success: false,
-        message: '사진은 최소 6장, 최대 20장까지 업로드 가능합니다.'
-      });
+      return error(res, ErrorCodes.MAX_PHOTOS_EXCEEDED, 400);
     }
 
     const photoUrls = [];
@@ -194,21 +162,11 @@ const uploadPhotos = async (req, res) => {
 
     await transaction.commit();
 
-    res.status(200).json({
-      success: true,
-      message: '사진이 업로드되었습니다.',
-      data: {
-        photoUrls
-      }
-    });
-  } catch (error) {
+    return success(res, { photoUrls }, '사진이 업로드되었습니다.');
+  } catch (err) {
     await transaction.rollback();
-    console.error('Photo upload error:', error);
-    res.status(500).json({
-      success: false,
-      message: '사진 업로드 중 오류가 발생했습니다.',
-      error: error.message
-    });
+    console.error('Photo upload error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 
@@ -231,10 +189,7 @@ const updateAmenities = async (req, res) => {
     });
 
     if (!room) {
-      return res.status(404).json({
-        success: false,
-        message: '방을 찾을 수 없습니다.'
-      });
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
     // RoomAmenity 생성 또는 업데이트
@@ -248,21 +203,11 @@ const updateAmenities = async (req, res) => {
 
     await transaction.commit();
 
-    res.status(200).json({
-      success: true,
-      message: '편의시설 정보가 저장되었습니다.',
-      data: {
-        roomId: room.id
-      }
-    });
-  } catch (error) {
+    return updated(res, { roomId: room.id }, '편의시설 정보가 저장되었습니다.');
+  } catch (err) {
     await transaction.rollback();
-    console.error('Amenities update error:', error);
-    res.status(500).json({
-      success: false,
-      message: '편의시설 설정 중 오류가 발생했습니다.',
-      error: error.message
-    });
+    console.error('Amenities update error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 
@@ -289,10 +234,7 @@ const updateFreeServices = async (req, res) => {
     });
 
     if (!room) {
-      return res.status(404).json({
-        success: false,
-        message: '방을 찾을 수 없습니다.'
-      });
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
     await RoomFreeService.upsert({
@@ -311,21 +253,11 @@ const updateFreeServices = async (req, res) => {
 
     await transaction.commit();
 
-    res.status(200).json({
-      success: true,
-      message: '무료 부가서비스 정보가 저장되었습니다.',
-      data: {
-        roomId: room.id
-      }
-    });
-  } catch (error) {
+    return updated(res, { roomId: room.id }, '무료 부가서비스 정보가 저장되었습니다.');
+  } catch (err) {
     await transaction.rollback();
-    console.error('Free services update error:', error);
-    res.status(500).json({
-      success: false,
-      message: '무료 부가서비스 설정 중 오류가 발생했습니다.',
-      error: error.message
-    });
+    console.error('Free services update error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 
@@ -340,17 +272,11 @@ const uploadCleaningToolImage = async (req, res) => {
     });
 
     if (!room) {
-      return res.status(404).json({
-        success: false,
-        message: '방을 찾을 수 없습니다.'
-      });
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
     if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        message: '이미지를 업로드해주세요.'
-      });
+      return error(res, ErrorCodes.NO_FILE_UPLOADED, 400);
     }
 
     const imageUrl = `/uploads/rooms/${req.file.filename}`;
@@ -363,20 +289,10 @@ const uploadCleaningToolImage = async (req, res) => {
       await freeService.update({ cleaningToolImageUrl: imageUrl });
     }
 
-    res.status(200).json({
-      success: true,
-      message: '청소도구 이미지가 업로드되었습니다.',
-      data: {
-        imageUrl
-      }
-    });
-  } catch (error) {
-    console.error('Cleaning tool image upload error:', error);
-    res.status(500).json({
-      success: false,
-      message: '이미지 업로드 중 오류가 발생했습니다.',
-      error: error.message
-    });
+    return success(res, { imageUrl }, '청소도구 이미지가 업로드되었습니다.');
+  } catch (err) {
+    console.error('Cleaning tool image upload error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 
@@ -392,10 +308,7 @@ const updateDescription = async (req, res) => {
     });
 
     if (!room) {
-      return res.status(404).json({
-        success: false,
-        message: '방을 찾을 수 없습니다.'
-      });
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
     await room.update({
@@ -404,20 +317,10 @@ const updateDescription = async (req, res) => {
       houseRules
     });
 
-    res.status(200).json({
-      success: true,
-      message: '방 소개가 저장되었습니다.',
-      data: {
-        roomId: room.id
-      }
-    });
-  } catch (error) {
-    console.error('Description update error:', error);
-    res.status(500).json({
-      success: false,
-      message: '방 소개 저장 중 오류가 발생했습니다.',
-      error: error.message
-    });
+    return updated(res, { roomId: room.id }, '방 소개가 저장되었습니다.');
+  } catch (err) {
+    console.error('Description update error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 
@@ -437,25 +340,16 @@ const submitReview = async (req, res) => {
     });
 
     if (!room) {
-      return res.status(404).json({
-        success: false,
-        message: '방을 찾을 수 없습니다.'
-      });
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
     // 필수 정보 검증
     if (!room.photos || room.photos.length < 6) {
-      return res.status(400).json({
-        success: false,
-        message: '최소 6장의 사진이 필요합니다.'
-      });
+      return error(res, ErrorCodes.MIN_PHOTOS_REQUIRED, 400);
     }
 
     if (!room.weeklyRent || !room.description) {
-      return res.status(400).json({
-        success: false,
-        message: '요금 정보와 방 소개를 모두 입력해주세요.'
-      });
+      return error(res, ErrorCodes.ROOM_INFO_INCOMPLETE, 400);
     }
 
     await room.update({
@@ -463,22 +357,14 @@ const submitReview = async (req, res) => {
       submittedAt: new Date()
     });
 
-    res.status(200).json({
-      success: true,
-      message: '심사 요청이 완료되었습니다.',
-      data: {
-        roomId: room.id,
-        status: room.status,
-        submittedAt: room.submittedAt
-      }
-    });
-  } catch (error) {
-    console.error('Submit review error:', error);
-    res.status(500).json({
-      success: false,
-      message: '심사 요청 중 오류가 발생했습니다.',
-      error: error.message
-    });
+    return success(res, {
+      roomId: room.id,
+      status: room.status,
+      submittedAt: room.submittedAt
+    }, '심사 요청이 완료되었습니다.');
+  } catch (err) {
+    console.error('Submit review error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 
@@ -496,17 +382,11 @@ const reorderPhotos = async (req, res) => {
     });
 
     if (!room) {
-      return res.status(404).json({
-        success: false,
-        message: '방을 찾을 수 없습니다.'
-      });
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
     if (!Array.isArray(photoIds) || photoIds.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: '사진 ID 배열이 필요합니다.'
-      });
+      return error(res, ErrorCodes.PHOTO_IDS_REQUIRED, 400);
     }
 
     // 각 사진의 순서 업데이트
@@ -522,18 +402,11 @@ const reorderPhotos = async (req, res) => {
 
     await transaction.commit();
 
-    res.status(200).json({
-      success: true,
-      message: '사진 순서가 변경되었습니다.'
-    });
-  } catch (error) {
+    return success(res, null, '사진 순서가 변경되었습니다.');
+  } catch (err) {
     await transaction.rollback();
-    console.error('Photo reorder error:', error);
-    res.status(500).json({
-      success: false,
-      message: '사진 순서 변경 중 오류가 발생했습니다.',
-      error: error.message
-    });
+    console.error('Photo reorder error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 
@@ -548,10 +421,7 @@ const deletePhoto = async (req, res) => {
     });
 
     if (!room) {
-      return res.status(404).json({
-        success: false,
-        message: '방을 찾을 수 없습니다.'
-      });
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
     const photo = await RoomPhoto.findOne({
@@ -559,25 +429,15 @@ const deletePhoto = async (req, res) => {
     });
 
     if (!photo) {
-      return res.status(404).json({
-        success: false,
-        message: '사진을 찾을 수 없습니다.'
-      });
+      return error(res, ErrorCodes.PHOTO_NOT_FOUND, 404);
     }
 
     await photo.destroy();
 
-    res.status(200).json({
-      success: true,
-      message: '사진이 삭제되었습니다.'
-    });
-  } catch (error) {
-    console.error('Photo delete error:', error);
-    res.status(500).json({
-      success: false,
-      message: '사진 삭제 중 오류가 발생했습니다.',
-      error: error.message
-    });
+    return success(res, null, '사진이 삭제되었습니다.');
+  } catch (err) {
+    console.error('Photo delete error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 
@@ -697,25 +557,18 @@ const getMyRooms = async (req, res) => {
       };
     });
 
-    res.status(200).json({
-      success: true,
-      data: {
-        rooms,
-        pagination: {
-          total: count,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          totalPages: Math.ceil(count / limit)
-        }
+    return success(res, {
+      rooms,
+      pagination: {
+        total: count,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(count / limit)
       }
     });
-  } catch (error) {
-    console.error('Get my rooms error:', error);
-    res.status(500).json({
-      success: false,
-      message: '방 목록 조회 중 오류가 발생했습니다.',
-      error: error.message
-    });
+  } catch (err) {
+    console.error('Get my rooms error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 
@@ -745,10 +598,7 @@ const getRoom = async (req, res) => {
     });
 
     if (!room) {
-      return res.status(404).json({
-        success: false,
-        message: '방을 찾을 수 없습니다.'
-      });
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
     // 진행 단계 계산
@@ -835,17 +685,10 @@ const getRoom = async (req, res) => {
       registrationProgress
     };
 
-    res.status(200).json({
-      success: true,
-      data: responseData
-    });
-  } catch (error) {
-    console.error('Get room error:', error);
-    res.status(500).json({
-      success: false,
-      message: '방 정보 조회 중 오류가 발생했습니다.',
-      error: error.message
-    });
+    return success(res, responseData);
+  } catch (err) {
+    console.error('Get room error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 

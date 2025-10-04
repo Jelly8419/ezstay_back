@@ -3,6 +3,7 @@ const { Sequelize } = require('sequelize');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -15,7 +16,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // 정적 파일 제공 (업로드된 이미지)
-app.use('/uploads', express.static('uploads'));
+app.use('/uploads', express.static(path.join('C:', 'study', 'uploads')));
 
 const { User, LocalUser, SocialUser, Room, RoomPhoto, RoomAmenity, RoomFreeService, sequelize } = require('./models');
 
