@@ -3,10 +3,11 @@ const router = express.Router();
 const { register, login, refreshToken, logout, getProfile } = require('../controllers/authController');
 const { kakaoLogin } = require('../controllers/oauthController');
 const { authenticateToken } = require('../middleware/auth');
+const { authLimiter } = require('../middleware/rateLimiter');
 
-// 일반 회원가입/로그인
-router.post('/register', register);
-router.post('/login', login);
+// 일반 회원가입/로그인 (Rate Limiting 적용)
+router.post('/register', authLimiter, register);
+router.post('/login', authLimiter, login);
 router.post('/refresh', refreshToken);
 router.post('/logout', authenticateToken, logout);
 

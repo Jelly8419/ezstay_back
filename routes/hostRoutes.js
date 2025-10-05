@@ -16,6 +16,7 @@ const {
 } = require('../controllers/hostController');
 const { authenticateToken } = require('../middleware/auth');
 const { uploadRoomPhotos, uploadSingleImage } = require('../middleware/upload');
+const { uploadLimiter } = require('../middleware/rateLimiter');
 
 // 인증 필요한 모든 라우트에 미들웨어 적용
 router.use(authenticateToken);
@@ -29,8 +30,8 @@ router.post('/rooms', createRoom);
 // 2. 요금 설정
 router.patch('/rooms/:roomId/pricing', updatePricing);
 
-// 3. 사진 업로드 (6~20장)
-router.post('/rooms/:roomId/photos', uploadRoomPhotos, uploadPhotos);
+// 3. 사진 업로드 (6~20장) - Rate Limiting 적용
+router.post('/rooms/:roomId/photos', uploadLimiter, uploadRoomPhotos, uploadPhotos);
 
 // 4. 편의시설 설정
 router.patch('/rooms/:roomId/amenities', updateAmenities);
@@ -38,8 +39,8 @@ router.patch('/rooms/:roomId/amenities', updateAmenities);
 // 5. 무료 부가서비스 설정
 router.patch('/rooms/:roomId/free-services', updateFreeServices);
 
-// 6. 청소도구 이미지 업로드 (단일 이미지)
-router.post('/rooms/:roomId/cleaning-tool-image', uploadSingleImage, uploadCleaningToolImage);
+// 6. 청소도구 이미지 업로드 (단일 이미지) - Rate Limiting 적용
+router.post('/rooms/:roomId/cleaning-tool-image', uploadLimiter, uploadSingleImage, uploadCleaningToolImage);
 
 // 7. 방 소개
 router.patch('/rooms/:roomId/description', updateDescription);

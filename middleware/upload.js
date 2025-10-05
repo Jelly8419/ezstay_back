@@ -22,16 +22,21 @@ const storage = multer.diskStorage({
   }
 });
 
-// 파일 필터 (이미지만 허용)
+// 파일 필터 (이미지만 허용 - MIME 타입과 확장자 둘 다 검증)
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = /jpeg|jpg|png|webp/;
-  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  // 허용된 MIME 타입
+  const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+  // 허용된 확장자
+  const allowedExtensions = /jpeg|jpg|png|webp/;
 
-  // 확장자가 이미지 파일이면 허용 (mimetype이 'application/octet-stream'으로 오는 경우 대비)
-  if (extname) {
+  const mimeTypeValid = allowedMimeTypes.includes(file.mimetype);
+  const extname = allowedExtensions.test(path.extname(file.originalname).toLowerCase());
+
+  // MIME 타입과 확장자 둘 다 검증
+  if (mimeTypeValid && extname) {
     cb(null, true);
   } else {
-    cb(new Error('이미지 파일만 업로드 가능합니다. (jpeg, jpg, png, gif, webp)'));
+    cb(new Error('이미지 파일만 업로드 가능합니다. (jpeg, jpg, png, webp)'));
   }
 };
 

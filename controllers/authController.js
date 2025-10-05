@@ -1,6 +1,7 @@
 const { User, LocalUser, SocialUser, UserBankAccount, sequelize } = require('../models');
-const { generateTokens, hashPassword, comparePassword } = require('../utils/auth');
+const { generateTokens, hashPassword, comparePassword, verifyToken } = require('../utils/auth');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
+const { validateEmail, validatePassword } = require('../utils/validator');
 const { Op } = require('sequelize');
 
 const register = async (req, res) => {
@@ -9,8 +10,17 @@ const register = async (req, res) => {
   try {
     const { email, password, user_mode } = req.body;
 
-    if (!email || !password) {
-      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    // 입력값 검증
+    const emailValidation = validateEmail(email);
+    if (!emailValidation.valid) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.INVALID_EMAIL, 400);
+    }
+
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.valid) {
+      await transaction.rollback();
+      return error(res, { code: 4004, message: passwordValidation.message }, 400);
     }
 
     const existingUser = await User.findOne({
@@ -18,6 +28,7 @@ const register = async (req, res) => {
     });
 
     if (existingUser) {
+      await transaction.rollback();
       return error(res, ErrorCodes.DUPLICATE_EMAIL, 400);
     }
 
@@ -69,7 +80,13 @@ const login = async (req, res) => {
   try {
     const { email, password, user_mode } = req.body;
 
-    if (!email || !password) {
+    // 입력값 검증
+    const emailValidation = validateEmail(email);
+    if (!emailValidation.valid) {
+      return error(res, ErrorCodes.INVALID_EMAIL, 400);
+    }
+
+    if (!password) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
@@ -171,29 +188,36 @@ const refreshToken = async (req, res) => {
       return error(res, ErrorCodes.INVALID_TOKEN, 401);
     }
 
+    // Refresh Token 검증 (서명 및 만료 확인)
+    let decoded;
+    try {
+      decoded = verifyToken(token, true); // isRefreshToken = true
+    } catch (err) {
+      if (err.message === 'Token expired') {
+        return error(res, ErrorCodes.TOKEN_EXPIRED, 401);
+      }
+      return error(res, ErrorCodes.INVALID_TOKEN, 401);
+    }
+
+    // DB에서 사용자 및 토큰 일치 확인
     const user = await User.findOne({
-      where: { refreshToken: token }
+      where: {
+        id: decoded.userId,
+        refreshToken: token,
+        isActive: true
+      }
     });
 
     if (!user) {
       return error(res, ErrorCodes.INVALID_TOKEN, 403);
     }
 
-    // 최신 사용자 정보 조회 (계좌 정보 포함)
-    const updatedUser = await User.findByPk(user.id);
+    // 계좌 정보 조회
     const bankAccount = await UserBankAccount.findOne({
       where: { userId: user.id }
     });
 
-    // 기존 토큰에서 userMode 추출 (없으면 기본값 설정)
-    const decoded = require('jsonwebtoken').decode(token);
-    let userMode = decoded?.userMode || 'guest';
-
-    // 계좌 상태에 따라 userMode 재검증
-    if (!bankAccount && userMode === 'host') {
-      userMode = 'guest';
-    }
-
+    // 새 토큰 생성
     const { accessToken, refreshToken: newRefreshToken } = generateTokens({
       userId: user.id,
       email: user.email
