@@ -1,4 +1,147 @@
-# 호스트 방 등록 API 문서
+# LiveMoment API 문서
+
+## 목차
+- [게스트용 API](#게스트용-api)
+  - [지도 영역 내 방 조회](#지도-영역-내-방-조회)
+- [호스트 방 등록 API](#호스트-방-등록-api)
+
+---
+
+# 게스트용 API
+
+## 지도 영역 내 방 조회
+**GET** `/api/rooms/map`
+
+카카오맵 클러스터링을 위한 지도 영역 내 방 목록 조회 API입니다.
+
+### 인증
+인증 불필요 (공개 API)
+
+### Query Parameters
+| 파라미터 | 타입 | 필수 | 설명 |
+|---------|------|------|------|
+| swLat | number | O | 남서쪽 위도 (Southwest Latitude) |
+| swLng | number | O | 남서쪽 경도 (Southwest Longitude) |
+| neLat | number | O | 북동쪽 위도 (Northeast Latitude) |
+| neLng | number | O | 북동쪽 경도 (Northeast Longitude) |
+| limit | number | X | 최대 조회 개수 (기본값: 500) |
+
+### 좌표 범위
+- 위도(latitude): -90 ~ 90
+- 경도(longitude): -180 ~ 180
+
+### Request Example
+```
+GET /api/rooms/map?swLat=37.4&swLng=126.9&neLat=37.6&neLng=127.1
+```
+
+### Response
+```json
+{
+  "success": true,
+  "message": "지도 영역 내 방 목록을 조회했습니다.",
+  "data": {
+    "count": 15,
+    "rooms": [
+      {
+        "id": 1,
+        "roomName": "홍대 넓은 원룸",
+        "address": "서울특별시 마포구 서교동 123-45",
+        "latitude": 37.5563,
+        "longitude": 126.9236,
+        "weeklyRent": 350000,
+        "area": 33.5,
+        "roomCount": 1,
+        "bathroomCount": 1,
+        "buildingType": "오피스텔",
+        "thumbnail": "/uploads/rooms/room-1234567890-123456789.jpg"  // 또는 null (사진이 없는 경우)
+      }
+    ]
+  }
+}
+```
+
+### Error Responses
+
+#### 필수 파라미터 누락 (400)
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4001,
+    "message": "지도 영역 좌표가 필요합니다. (swLat, swLng, neLat, neLng)"
+  }
+}
+```
+
+#### 잘못된 좌표 형식 (400)
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4002,
+    "message": "좌표는 숫자 형식이어야 합니다."
+  }
+}
+```
+
+#### 위도 범위 초과 (400)
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4003,
+    "message": "위도는 -90 ~ 90 범위여야 합니다."
+  }
+}
+```
+
+#### 경도 범위 초과 (400)
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4004,
+    "message": "경도는 -180 ~ 180 범위여야 합니다."
+  }
+}
+```
+
+### 사용 예시 (프론트엔드)
+```javascript
+// 카카오맵 지도 이동 이벤트
+kakao.maps.event.addListener(map, 'bounds_changed', async function() {
+  const bounds = map.getBounds();
+  const swLatLng = bounds.getSouthWest();
+  const neLatLng = bounds.getNorthEast();
+
+  const response = await fetch(
+    `/api/rooms/map?swLat=${swLatLng.getLat()}&swLng=${swLatLng.getLng()}&neLat=${neLatLng.getLat()}&neLng=${neLatLng.getLng()}`
+  );
+
+  const { data } = await response.json();
+
+  // 마커 생성
+  const markers = data.rooms.map(room =>
+    new kakao.maps.Marker({
+      position: new kakao.maps.LatLng(room.latitude, room.longitude),
+      title: room.roomName
+    })
+  );
+
+  // 클러스터러에 마커 추가
+  clusterer.addMarkers(markers);
+});
+```
+
+### 성능 최적화 권장사항
+1. **Debounce 적용**: 지도 이동 시 0.3~0.5초 지연 후 API 호출
+2. **캐싱**: 이미 조회한 영역은 로컬에 캐시
+3. **줌 레벨 제한**: 너무 넓은 영역 조회 방지 (최소 줌 레벨 설정)
+
+---
+
+# 호스트 방 등록 API
 
 ## 인증
 모든 API는 JWT 토큰 인증이 필요합니다.

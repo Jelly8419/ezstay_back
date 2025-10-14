@@ -34,6 +34,16 @@ const Room = sequelize.define('Room', {
     type: DataTypes.STRING(500),
     allowNull: false
   },
+  latitude: {
+    type: DataTypes.DECIMAL(10, 8),
+    allowNull: true,
+    comment: '위도 (WGS84)'
+  },
+  longitude: {
+    type: DataTypes.DECIMAL(11, 8),
+    allowNull: true,
+    comment: '경도 (WGS84)'
+  },
   area: {
     type: DataTypes.DECIMAL(10, 2),
     allowNull: false,

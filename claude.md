@@ -63,6 +63,7 @@ User (공통 사용자 테이블)
 └─ 1:N → UserBankAccount (계좌정보)
 
 Room (방)
+├─ latitude, longitude (위도/경도, WGS84 좌표계)
 ├─ 1:N → RoomPhoto (사진, 순서 있음)
 ├─ 1:1 → RoomAmenity (편의시설)
 └─ 1:1 → RoomFreeService (무료 부가서비스)
@@ -89,6 +90,8 @@ Room (방)
 방 등록은 다단계로 진행되며, 각 단계별로 정보를 저장합니다:
 
 1. **기본 정보** (`POST /api/host/rooms`) - status: `draft`
+   - 주소 입력 시 카카오 로컬 API로 자동 위도/경도 변환
+   - 좌표 변환 실패 시에도 등록은 계속 진행됨 (좌표는 선택사항)
 2. **요금 설정** (`PATCH /api/host/rooms/:roomId/pricing`)
 3. **사진 업로드** (`POST /api/host/rooms/:roomId/photos`) - 최소 6장, 최대 20장
 4. **편의시설** (`PATCH /api/host/rooms/:roomId/amenities`)
@@ -98,6 +101,11 @@ Room (방)
 
 **방 상태(status) 흐름**:
 `draft` → `pending_review` → `approved` → `published` (또는 `rejected`)
+
+**주소-좌표 변환**:
+- `utils/geocoding.js`를 통해 카카오 로컬 API 활용
+- 도로명 주소를 WGS84 좌표계 위도/경도로 자동 변환
+- 지도 표시, 거리 계산 등에 활용 가능
 
 ### 4. 호스트 방 관리
 - 등록한 방 목록 조회 (`GET /api/host/rooms`)
@@ -184,7 +192,7 @@ DB_USER=root
 DB_PASSWORD=your_password
 JWT_SECRET=your_jwt_secret
 JWT_REFRESH_SECRET=your_refresh_secret
-KAKAO_CLIENT_ID=your_kakao_client_id
+KAKAO_CLIENT_ID=your_kakao_rest_api_key  # 카카오 REST API 키 (OAuth + 로컬 API 공통 사용)
 KAKAO_CLIENT_SECRET=your_kakao_client_secret
 KAKAO_CALLBACK_URL=http://localhost:3000/api/auth/oauth/kakao/callback
 ```

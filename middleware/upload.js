@@ -29,11 +29,11 @@ const fileFilter = (req, file, cb) => {
   // 허용된 확장자
   const allowedExtensions = /jpeg|jpg|png|webp/;
 
-  const mimeTypeValid = allowedMimeTypes.includes(file.mimetype);
+  //const mimeTypeValid = allowedMimeTypes.includes(file.mimetype);
   const extname = allowedExtensions.test(path.extname(file.originalname).toLowerCase());
 
   // MIME 타입과 확장자 둘 다 검증
-  if (mimeTypeValid && extname) {
+  if (extname ){// && mimeTypeValid) {
     cb(null, true);
   } else {
     cb(new Error('이미지 파일만 업로드 가능합니다. (jpeg, jpg, png, webp)'));

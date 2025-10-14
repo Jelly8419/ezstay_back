@@ -17,7 +17,8 @@ const corsOptions = {
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  exposedHeaders: ['Content-Length', 'Content-Type']
 };
 app.use(cors(corsOptions));
 
@@ -27,14 +28,35 @@ app.use(express.urlencoded({ extended: true }));
 
 // Rate Limiting
 const { generalLimiter } = require('./middleware/rateLimiter');
-app.use('/api/', generalLimiter);
+// 지도 API는 Rate Limiting 제외 (빈번한 요청 필요)
+app.use('/api/', (req, res, next) => {
+  if (req.path.startsWith('/rooms/map')) {
+    return next(); // Rate Limiter 건너뛰기
+  }
+  generalLimiter(req, res, next);
+});
 
 // 정적 파일 제공 (업로드된 이미지)
-const uploadsPublicPath = process.env.UPLOADS_PUBLIC_PATH || path.join(__dirname, 'uploads');
-app.use('/uploads', express.static(uploadsPublicPath));
+// placeholder 이미지 미들웨어 먼저 적용
+const placeholderImageMiddleware = require('./middleware/placeholderImage');
+app.use('/uploads', (req, res, next) => {
+  console.log('[Server] /uploads 미들웨어 실행, req.path:', req.path);
+  // 정적 파일에도 CORS 헤더 명시적으로 설정
+  res.header('Access-Control-Allow-Origin', req.headers.origin || 'http://localhost:3000');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+}, placeholderImageMiddleware);
 
 const { User, LocalUser, SocialUser, Room, RoomPhoto, RoomAmenity, RoomFreeService, sequelize } = require('./models');
+const { connectRedis } = require('./config/redis');
 
+// MySQL 연결
 sequelize.authenticate()
   .then(async () => {
     console.log('Connected to MySQL');
@@ -46,6 +68,9 @@ sequelize.authenticate()
   .catch(err => {
     console.error('MySQL connection error:', err);
   });
+
+// Redis 연결 (비동기, 실패해도 서버는 계속 실행)
+connectRedis();
 
 const roomRoutes = require('./routes/roomRoutes');
 const authRoutes = require('./routes/authRoutes');

@@ -1,5 +1,6 @@
 const { Room, RoomPhoto, RoomAmenity, RoomFreeService, sequelize } = require('../models');
 const { ErrorCodes, success, error, created, updated } = require('../utils/responseHelper');
+const { convertRoadAddressToCoordinates } = require('../utils/geocoding');
 
 // 1. 기본 정보 등록
 const createRoom = async (req, res) => {
@@ -30,11 +31,25 @@ const createRoom = async (req, res) => {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
+    // 주소를 좌표로 변환
+    let latitude = null;
+    let longitude = null;
+    try {
+      const coordinates = await convertRoadAddressToCoordinates(address, detailAddress);
+      latitude = coordinates.lat;
+      longitude = coordinates.lng;
+    } catch (geoError) {
+      // 좌표 변환 실패 시 경고 로그만 남기고 계속 진행 (좌표는 필수가 아님)
+      console.warn('주소 좌표 변환 실패:', geoError.message);
+    }
+
     const room = await Room.create({
       hostId,
       roomName,
       address,
       detailAddress,
+      latitude,
+      longitude,
       area,
       floor,
       buildingType,
@@ -63,7 +78,86 @@ const createRoom = async (req, res) => {
   }
 };
 
-// 2. 요금 설정
+// 2. 기본 정보 수정
+const updateBasicInfo = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { roomId } = req.params;
+    const hostId = req.user.id;
+    const {
+      roomName,
+      address,
+      detailAddress,
+      area,
+      floor,
+      buildingType,
+      parkingAvailable,
+      parkingInfo,
+      elevatorAvailable,
+      roomCount,
+      bathroomCount,
+      livingRoomCount,
+      kitchenCount,
+      isDuplex,
+      entrancePassword
+    } = req.body;
+
+    const room = await Room.findOne({
+      where: { id: roomId, hostId }
+    });
+
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 주소(address)가 변경된 경우에만 좌표 재변환
+    let latitude = room.latitude;
+    let longitude = room.longitude;
+    if (address && address !== room.address) {
+      try {
+        const coordinates = await convertRoadAddressToCoordinates(address, detailAddress || room.detailAddress);
+        latitude = coordinates.lat;
+        longitude = coordinates.lng;
+      } catch (geoError) {
+        console.warn('주소 좌표 변환 실패:', geoError.message);
+      }
+    }
+
+    await room.update({
+      roomName: roomName ?? room.roomName,
+      address: address ?? room.address,
+      detailAddress: detailAddress ?? room.detailAddress,
+      latitude,
+      longitude,
+      area: area ?? room.area,
+      floor: floor ?? room.floor,
+      buildingType: buildingType ?? room.buildingType,
+      parkingAvailable: parkingAvailable ?? room.parkingAvailable,
+      parkingInfo: parkingInfo ?? room.parkingInfo,
+      elevatorAvailable: elevatorAvailable ?? room.elevatorAvailable,
+      roomCount: roomCount ?? room.roomCount,
+      bathroomCount: bathroomCount ?? room.bathroomCount,
+      livingRoomCount: livingRoomCount ?? room.livingRoomCount,
+      kitchenCount: kitchenCount ?? room.kitchenCount,
+      isDuplex: isDuplex ?? room.isDuplex,
+      entrancePassword: entrancePassword ?? room.entrancePassword
+    }, { transaction });
+
+    await transaction.commit();
+
+    return updated(res, {
+      roomId: room.id,
+      status: room.status
+    }, '방 기본 정보가 수정되었습니다.');
+  } catch (err) {
+    await transaction.rollback();
+    console.error('Basic info update error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+// 3. 요금 설정
 const updatePricing = async (req, res) => {
   try {
     const { roomId } = req.params;
@@ -117,7 +211,7 @@ const updatePricing = async (req, res) => {
   }
 };
 
-// 3. 사진 업로드
+// 4. 사진 업로드
 const uploadPhotos = async (req, res) => {
   const transaction = await sequelize.transaction();
 
@@ -170,7 +264,7 @@ const uploadPhotos = async (req, res) => {
   }
 };
 
-// 4. 편의시설 설정
+// 5. 편의시설 설정
 const updateAmenities = async (req, res) => {
   const transaction = await sequelize.transaction();
 
@@ -211,7 +305,7 @@ const updateAmenities = async (req, res) => {
   }
 };
 
-// 5. 무료 부가서비스 설정
+// 6. 무료 부가서비스 설정
 const updateFreeServices = async (req, res) => {
   const transaction = await sequelize.transaction();
 
@@ -261,7 +355,7 @@ const updateFreeServices = async (req, res) => {
   }
 };
 
-// 6. 청소도구 이미지 업로드
+// 7. 청소도구 이미지 업로드
 const uploadCleaningToolImage = async (req, res) => {
   try {
     const { roomId } = req.params;
@@ -296,7 +390,7 @@ const uploadCleaningToolImage = async (req, res) => {
   }
 };
 
-// 7. 방 소개 및 설명
+// 8. 방 소개 및 설명
 const updateDescription = async (req, res) => {
   try {
     const { roomId } = req.params;
@@ -324,7 +418,7 @@ const updateDescription = async (req, res) => {
   }
 };
 
-// 8. 심사 요청
+// 9. 심사 요청
 const submitReview = async (req, res) => {
   try {
     const { roomId } = req.params;
@@ -368,7 +462,7 @@ const submitReview = async (req, res) => {
   }
 };
 
-// 9. 사진 순서 변경
+// 10. 사진 순서 변경
 const reorderPhotos = async (req, res) => {
   const transaction = await sequelize.transaction();
 
@@ -410,7 +504,7 @@ const reorderPhotos = async (req, res) => {
   }
 };
 
-// 10. 사진 삭제
+// 11. 사진 삭제
 const deletePhoto = async (req, res) => {
   try {
     const { roomId, photoId } = req.params;
@@ -498,7 +592,7 @@ const calculateProgress = (room) => {
   };
 };
 
-// 11. 내 방 목록 조회
+// 12. 내 방 목록 조회
 const getMyRooms = async (req, res) => {
   try {
     const hostId = req.user.id;
@@ -572,7 +666,7 @@ const getMyRooms = async (req, res) => {
   }
 };
 
-// 12. 방 정보 조회
+// 13. 방 정보 조회
 const getRoom = async (req, res) => {
   try {
     const { roomId } = req.params;
@@ -610,6 +704,8 @@ const getRoom = async (req, res) => {
       roomName: room.roomName,
       address: room.address,
       detailAddress: room.detailAddress,
+      latitude: room.latitude,
+      longitude: room.longitude,
       area: room.area,
       floor: room.floor,
       buildingType: room.buildingType,
@@ -694,6 +790,7 @@ const getRoom = async (req, res) => {
 
 module.exports = {
   createRoom,
+  updateBasicInfo,
   updatePricing,
   uploadPhotos,
   updateAmenities,

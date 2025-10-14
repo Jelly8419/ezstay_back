@@ -3,7 +3,22 @@
     "allow": [
       "Bash(git rm:*)",
       "Bash(npm install:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(npm run dev)",
+      "Bash(curl -X GET \"http://localhost:8080/api/rooms/map?swLat=37.4&swLng=126.9&neLat=37.6&neLng=127.1\")",
+      "Bash(curl -X GET \"http://localhost:8080/api/rooms/map\")",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(tasklist)",
+      "Bash(if not exist config mkdir config)",
+      "Bash(redis-cli:*)",
+      "Bash(curl -X GET \"http://localhost:8080/api/rooms/map?swLat=37.5&swLng=127.0&neLat=37.6&neLng=127.1\")",
+      "Bash(taskkill:*)",
+      "Bash(node:*)",
+      "Bash(if not exist uploads mkdir uploads)",
+      "Bash(if not exist uploadsdummy mkdir uploadsdummy)",
+      "Bash(curl:*)",
+      "Read(//c/study/uploads/rooms/**)"
     ],
     "deny": [],
     "ask": []
