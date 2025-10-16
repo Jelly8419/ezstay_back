@@ -56,6 +56,17 @@ const RoomFreeService = sequelize.define('RoomFreeService', {
     allowNull: false,
     defaultValue: 0
   },
+  amenityKit: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
+  towelSetRental: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    field: 'towel_set_rental'
+  },
   autoPasswordChange: {
     type: DataTypes.BOOLEAN,
     allowNull: false,

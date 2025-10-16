@@ -1,4 +1,4 @@
-const { Room, RoomPhoto } = require('../models');
+const { Room, RoomPhoto, RoomAmenity, RoomFreeService, User, RentalItem } = require('../models');
 const { Op } = require('sequelize');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
 const { safeRedisOperation } = require('../config/redis');
@@ -65,13 +65,134 @@ const getRoomById = async (req, res) => {
         status: 'published' // 게시된 방만 조회
       },
       attributes: {
-        exclude: ['entrancePassword', 'hostId', 'detailAddress', 'status'] // 민감정보 제외
-      }
+        exclude: ['entrancePassword', 'detailAddress', 'status'] // 민감정보 제외 (hostId는 포함)
+      },
+      include: [
+        {
+          model: RoomPhoto,
+          as: 'photos',
+          attributes: ['id', 'url', 'order'],
+          required: false
+        },
+        {
+          model: RoomAmenity,
+          as: 'amenity',
+          required: false
+        },
+        {
+          model: RoomFreeService,
+          as: 'freeService',
+          required: false
+        },
+        {
+          model: User,
+          as: 'host',
+          attributes: ['id', 'name', 'profileImageUrl'],
+          required: false
+        }
+      ],
+      order: [
+        [{ model: RoomPhoto, as: 'photos' }, 'order', 'ASC']
+      ]
     });
     if (!room) {
       return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
-    return success(res, room);
+
+    // photos URL에 BASE_URL 추가
+    const baseUrl = process.env.BASE_URL || 'http://localhost:8080';
+    const roomData = room.toJSON();
+    if (roomData.photos && roomData.photos.length > 0) {
+      roomData.photos = roomData.photos.map(photo => ({
+        ...photo,
+        url: `${baseUrl}${photo.url}`
+      }));
+    }
+
+    // 호스트 프로필 이미지 URL에 BASE_URL 추가
+    if (roomData.host && roomData.host.profileImageUrl) {
+      roomData.host.profileImageUrl = `${baseUrl}${roomData.host.profileImageUrl}`;
+    }
+
+    // hostId는 응답에서 제외 (host 객체로 대체)
+    delete roomData.hostId;
+
+    // === 대여 물품 재고 정보 추가 ===
+    // freeService에서 true인 항목에 대해서만 해당 카테고리의 물품 목록 조회
+    const availableRentalItems = {};
+
+    if (roomData.freeService) {
+      const freeService = roomData.freeService;
+
+      // RentalItem.FREE_SERVICE_MAPPING을 참조하여 해당하는 물품 조회
+      // hair_dryer_rental: true → 'hair_dryer' 카테고리 물품 조회
+      if (freeService.hairDryerRental) {
+        const hairDryers = await RentalItem.getAvailableItemsByType('hair_dryer');
+        if (hairDryers.length > 0) {
+          availableRentalItems.hairDryers = hairDryers.map(item => ({
+            id: item.id,
+            name: item.name,
+            description: item.description,
+            price: parseFloat(item.price),
+            availableStock: item.availableStock,
+            imageUrl: item.imageUrl
+          }));
+        }
+      }
+
+      // bedding_service: true → 'bedding_set' 카테고리 물품 조회
+      if (freeService.beddingService) {
+        const beddingSets = await RentalItem.getAvailableItemsByType('bedding_set');
+        if (beddingSets.length > 0) {
+          availableRentalItems.beddingSets = beddingSets.map(item => ({
+            id: item.id,
+            name: item.name,
+            description: item.description,
+            price: parseFloat(item.price),
+            availableStock: item.availableStock,
+            imageUrl: item.imageUrl
+          }));
+        }
+      }
+
+      // amenity_kit: true → 'amenity_kit' 카테고리 물품 조회
+      if (freeService.amenityKit) {
+        const amenityKits = await RentalItem.getAvailableItemsByType('amenity_kit');
+        if (amenityKits.length > 0) {
+          availableRentalItems.amenityKits = amenityKits.map(item => ({
+            id: item.id,
+            name: item.name,
+            description: item.description,
+            price: parseFloat(item.price),
+            availableStock: item.availableStock,
+            imageUrl: item.imageUrl
+          }));
+        }
+      }
+
+      // towel_set_rental: true → 'towel_set' 카테고리 물품 조회
+      if (freeService.towelSetRental) {
+        const towelSets = await RentalItem.getAvailableItemsByType('towel_set');
+        if (towelSets.length > 0) {
+          availableRentalItems.towelSets = towelSets.map(item => ({
+            id: item.id,
+            name: item.name,
+            description: item.description,
+            price: parseFloat(item.price),
+            availableStock: item.availableStock,
+            imageUrl: item.imageUrl
+          }));
+        }
+      }
+    }
+
+    // 대여 가능한 물품이 있을 경우에만 추가
+    if (Object.keys(availableRentalItems).length > 0) {
+      roomData.availableRentalItems = availableRentalItems;
+    }
+    // === 대여 물품 재고 정보 추가 끝 ===
+
+    return success(res, roomData);
   } catch (err) {
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
@@ -201,7 +322,7 @@ const getRoomsForMap = async (req, res) => {
         'address',
         'latitude',
         'longitude',
-        'weeklyRent',
+        'dailyRent',
         'area',
         'roomCount',
         'bathroomCount',
@@ -227,7 +348,7 @@ const getRoomsForMap = async (req, res) => {
       address: room.address,
       latitude: parseFloat(room.latitude),
       longitude: parseFloat(room.longitude),
-      weeklyRent: room.weeklyRent,
+      dailyRent: room.dailyRent,
       area: parseFloat(room.area),
       roomCount: room.roomCount,
       bathroomCount: room.bathroomCount,

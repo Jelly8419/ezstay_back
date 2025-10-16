@@ -7,6 +7,7 @@ const { RoomPhoto } = require('./RoomPhoto');
 const { RoomAmenity } = require('./RoomAmenity');
 const { RoomFreeService } = require('./RoomFreeService');
 const { UserBankAccount } = require('./UserBankAccount');
+const RentalItem = require('./RentalItem');
 
 const sequelize = new Sequelize('livemoment', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -100,5 +101,6 @@ module.exports = {
   RoomPhoto,
   RoomAmenity,
   RoomFreeService,
-  UserBankAccount
+  UserBankAccount,
+  RentalItem
 };

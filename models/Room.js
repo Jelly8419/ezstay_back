@@ -110,18 +110,51 @@ const Room = sequelize.define('Room', {
     type: DataTypes.STRING(100),
     allowNull: true
   },
-  // 요금 정보
-  weeklyRent: {
+  // 요금 정보 (1일 기준)
+  dailyRent: {
     type: DataTypes.INTEGER,
+    allowNull: true,
+    field: 'daily_rent',
+    comment: '1일 임대료',
+    validate: {
+      min: 1000,
+      max: 10000000,
+      isMultipleOf1000(value) {
+        if (value && value % 1000 !== 0) {
+          throw new Error('임대료는 1,000원 단위로만 입력 가능합니다.');
+        }
+      }
+    }
+  },
+  dailyMaintenanceFee: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    field: 'daily_maintenance_fee',
+    comment: '1일 관리비',
+    validate: {
+      min: 0,
+      max: 10000000,
+      isMultipleOf1000(value) {
+        if (value && value % 1000 !== 0) {
+          throw new Error('관리비는 1,000원 단위로만 입력 가능합니다.');
+        }
+      }
+    }
+  },
+  maintenanceDetail: {
+    type: DataTypes.STRING(500),
     allowNull: true
   },
   longTermWeeks: {
     type: DataTypes.INTEGER,
-    allowNull: true
+    allowNull: true,
+    field: 'long_term_weeks',
+    comment: '장기 할인 기준 주수'
   },
   longTermDiscount: {
     type: DataTypes.INTEGER,
-    allowNull: true
+    allowNull: true,
+    comment: '장기 할인율 (%)'
   },
   quickMoveIn: {
     type: DataTypes.STRING(100),
@@ -129,15 +162,8 @@ const Room = sequelize.define('Room', {
   },
   quickMoveInDiscount: {
     type: DataTypes.INTEGER,
-    allowNull: true
-  },
-  maintenanceFee: {
-    type: DataTypes.INTEGER,
-    allowNull: true
-  },
-  maintenanceDetail: {
-    type: DataTypes.STRING(500),
-    allowNull: true
+    allowNull: true,
+    comment: '빠른 입주 할인율 (%)'
   },
   includeElectricity: {
     type: DataTypes.BOOLEAN,
@@ -161,11 +187,14 @@ const Room = sequelize.define('Room', {
   },
   cleaningFee: {
     type: DataTypes.INTEGER,
-    allowNull: true
+    allowNull: true,
+    comment: '청소비 (1회)'
   },
   minContractWeeks: {
     type: DataTypes.INTEGER,
-    allowNull: true
+    allowNull: true,
+    field: 'min_contract_weeks',
+    comment: '최소 계약 주수'
   },
   refundPolicy: {
     type: DataTypes.STRING(50),

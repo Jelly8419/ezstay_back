@@ -13,7 +13,22 @@ app.use(helmet());
 
 // CORS 설정
 const corsOptions = {
-  origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:3000'],
+  origin: (origin, callback) => {
+    // 개발 환경: 모든 localhost 허용
+    if (process.env.NODE_ENV === 'development') {
+      if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
+        return callback(null, true);
+      }
+    }
+
+    // 프로덕션 환경: 환경변수로 지정된 도메인만 허용
+    const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [];
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
@@ -42,7 +57,21 @@ const placeholderImageMiddleware = require('./middleware/placeholderImage');
 app.use('/uploads', (req, res, next) => {
   console.log('[Server] /uploads 미들웨어 실행, req.path:', req.path);
   // 정적 파일에도 CORS 헤더 명시적으로 설정
-  res.header('Access-Control-Allow-Origin', req.headers.origin || 'http://localhost:3000');
+  const origin = req.headers.origin;
+
+  // 개발 환경: 모든 localhost 허용
+  if (process.env.NODE_ENV === 'development') {
+    if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
+      res.header('Access-Control-Allow-Origin', origin || '*');
+    }
+  } else {
+    // 프로덕션: 환경변수로 지정된 도메인만 허용
+    const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [];
+    if (origin && allowedOrigins.includes(origin)) {
+      res.header('Access-Control-Allow-Origin', origin);
+    }
+  }
+
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
@@ -77,12 +106,14 @@ const authRoutes = require('./routes/authRoutes');
 const accountRoutes = require('./routes/accountRoutes');
 const userRoutes = require('./routes/userRoutes');
 const hostRoutes = require('./routes/hostRoutes');
+// const rentalItemRoutes = require('./routes/rentalItemRoutes'); // TODO: 관리자 프로젝트로 이동 예정
 
 app.use('/api/rooms', roomRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/account', accountRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/host', hostRoutes);
+// app.use('/api/admin/rental-items', rentalItemRoutes); // TODO: 관리자 프로젝트로 이동 예정
 
 app.get('/', (req, res) => {
   res.json({ message: 'Rental API Server is running!' });

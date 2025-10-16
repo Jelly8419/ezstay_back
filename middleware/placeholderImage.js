@@ -14,9 +14,14 @@ function placeholderImageMiddleware(req, res, next) {
     console.log('[PlaceholderImage] 업로드 경로:', uploadsPath);
 
     // 요청된 파일 경로 생성
-    // /dummy/room1_photo1.jpg -> C:\study\uploads\rooms\dummy\room1_photo1.jpg
-    const requestedFile = path.join(uploadsPath, req.path);
+    // server.js에서 app.use('/uploads', ...)로 설정되어 있으므로
+    // req.path에는 /uploads가 이미 제거되어 있음
+    // 예: /rooms/room-xxx.png -> C:\study\uploads\rooms\room-xxx.png
+    // /rooms 부분만 제거하면 됨
+    const relativePath = req.path.replace(/^\/rooms\/?/, '');
+    const requestedFile = path.join(uploadsPath, relativePath);
 
+    console.log('[PlaceholderImage] 상대 경로:', relativePath);
     console.log('[PlaceholderImage] 요청된 파일:', requestedFile);
 
     // 파일이 존재하면 정상적으로 처리

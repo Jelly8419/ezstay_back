@@ -157,18 +157,18 @@ const updateBasicInfo = async (req, res) => {
   }
 };
 
-// 3. 요금 설정
+// 3. 요금 설정 (1일 기준)
 const updatePricing = async (req, res) => {
   try {
     const { roomId } = req.params;
     const hostId = req.user.id;
     const {
-      weeklyRent,
+      dailyRent,
+      dailyMaintenanceFee,
       longTermWeeks,
       longTermDiscount,
       quickMoveIn,
       quickMoveInDiscount,
-      maintenanceFee,
       maintenanceDetail,
       includeElectricity,
       includeWater,
@@ -188,12 +188,12 @@ const updatePricing = async (req, res) => {
     }
 
     await room.update({
-      weeklyRent,
+      dailyRent,
+      dailyMaintenanceFee,
       longTermWeeks,
       longTermDiscount,
       quickMoveIn,
       quickMoveInDiscount,
-      maintenanceFee,
       maintenanceDetail,
       includeElectricity: includeElectricity || false,
       includeWater: includeWater || false,
@@ -319,6 +319,7 @@ const updateFreeServices = async (req, res) => {
       hairDryerRental,
       beddingService,
       bedSizes,
+      amenityKit,
       autoPasswordChange,
       roomPassword
     } = req.body;
@@ -341,6 +342,7 @@ const updateFreeServices = async (req, res) => {
       bedSizeSuperSingle: bedSizes?.['슈퍼싱글'] || 0,
       bedSizeQueen: bedSizes?.['퀸'] || 0,
       bedSizeKing: bedSizes?.['킹'] || 0,
+      amenityKit: amenityKit || false,
       autoPasswordChange: autoPasswordChange || false,
       roomPassword
     }, { transaction });
@@ -442,7 +444,7 @@ const submitReview = async (req, res) => {
       return error(res, ErrorCodes.MIN_PHOTOS_REQUIRED, 400);
     }
 
-    if (!room.weeklyRent || !room.description) {
+    if (!room.dailyRent || !room.description) {
       return error(res, ErrorCodes.ROOM_INFO_INCOMPLETE, 400);
     }
 
@@ -552,7 +554,7 @@ const calculateProgress = (room) => {
   }
 
   // 2단계: 요금 설정 체크
-  if (room.weeklyRent && room.minContractWeeks && room.refundPolicy) {
+  if (room.dailyRent && room.minContractWeeks && room.refundPolicy) {
     steps.pricing = true;
   }
 
@@ -639,7 +641,7 @@ const getMyRooms = async (req, res) => {
         address: room.address,
         area: room.area,
         buildingType: room.buildingType,
-        weeklyRent: room.weeklyRent,
+        dailyRent: room.dailyRent,
         status: room.status,
         thumbnail: room.photos[0]?.url || null,
         registrationProgress,
@@ -719,13 +721,13 @@ const getRoom = async (req, res) => {
       isDuplex: room.isDuplex,
       entrancePassword: room.entrancePassword,
 
-      // 요금 정보
-      weeklyRent: room.weeklyRent,
+      // 요금 정보 (1일 기준, 할인 기준은 주 단위)
+      dailyRent: room.dailyRent,
+      dailyMaintenanceFee: room.dailyMaintenanceFee,
       longTermWeeks: room.longTermWeeks,
       longTermDiscount: room.longTermDiscount,
       quickMoveIn: room.quickMoveIn,
       quickMoveInDiscount: room.quickMoveInDiscount,
-      maintenanceFee: room.maintenanceFee,
       maintenanceDetail: room.maintenanceDetail,
       includeElectricity: room.includeElectricity,
       includeWater: room.includeWater,
@@ -762,6 +764,7 @@ const getRoom = async (req, res) => {
           '퀸': room.freeService.bedSizeQueen,
           '킹': room.freeService.bedSizeKing
         },
+        amenityKit: room.freeService.amenityKit,
         autoPasswordChange: room.freeService.autoPasswordChange,
         roomPassword: room.freeService.roomPassword
       } : null,
