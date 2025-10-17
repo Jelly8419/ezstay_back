@@ -18,7 +18,8 @@
       "Bash(if not exist uploads mkdir uploads)",
       "Bash(if not exist uploadsdummy mkdir uploadsdummy)",
       "Bash(curl:*)",
-      "Read(//c/study/uploads/rooms/**)"
+      "Read(//c/study/uploads/rooms/**)",
+      "Bash(timeout /t 5 /nobreak)"
     ],
     "deny": [],
     "ask": []

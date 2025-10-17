@@ -8,6 +8,8 @@ const { RoomAmenity } = require('./RoomAmenity');
 const { RoomFreeService } = require('./RoomFreeService');
 const { UserBankAccount } = require('./UserBankAccount');
 const RentalItem = require('./RentalItem');
+const Contract = require('./Contract');
+const RentalItemReservation = require('./RentalItemReservation');
 
 const sequelize = new Sequelize('livemoment', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -92,6 +94,53 @@ UserBankAccount.belongsTo(User, {
   as: 'user'
 });
 
+// Contract 관계 설정
+Contract.belongsTo(Room, {
+  foreignKey: 'roomId',
+  as: 'room'
+});
+Room.hasMany(Contract, {
+  foreignKey: 'roomId',
+  as: 'contracts'
+});
+
+Contract.belongsTo(User, {
+  foreignKey: 'hostId',
+  as: 'host'
+});
+User.hasMany(Contract, {
+  foreignKey: 'hostId',
+  as: 'hostedContracts'
+});
+
+Contract.belongsTo(User, {
+  foreignKey: 'guestId',
+  as: 'guest'
+});
+User.hasMany(Contract, {
+  foreignKey: 'guestId',
+  as: 'guestContracts'
+});
+
+// RentalItemReservation 관계 설정
+RentalItemReservation.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract'
+});
+Contract.hasMany(RentalItemReservation, {
+  foreignKey: 'contractId',
+  as: 'rentalItemReservations'
+});
+
+RentalItemReservation.belongsTo(RentalItem, {
+  foreignKey: 'rentalItemId',
+  as: 'rentalItem'
+});
+RentalItem.hasMany(RentalItemReservation, {
+  foreignKey: 'rentalItemId',
+  as: 'reservations'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -102,5 +151,7 @@ module.exports = {
   RoomAmenity,
   RoomFreeService,
   UserBankAccount,
-  RentalItem
+  RentalItem,
+  Contract,
+  RentalItemReservation
 };
