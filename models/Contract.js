@@ -3,7 +3,11 @@ const { DataTypes, Sequelize } = require('sequelize');
 const sequelize = new Sequelize('livemoment', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT || 3306,
-  dialect: 'mysql'
+  dialect: 'mysql',
+  timezone: '+09:00',
+  dialectOptions: {
+    timezone: '+09:00'
+  }
 });
 
 /**
@@ -229,13 +233,19 @@ const Contract = sequelize.define('Contract', {
     type: DataTypes.TEXT,
     allowNull: true,
     field: 'guest_message',
-    comment: '게스트 메시지'
+    comment: '게스트 메시지 (계약 요청 시 전달 메시지)'
   },
   hostMessage: {
     type: DataTypes.TEXT,
     allowNull: true,
     field: 'host_message',
-    comment: '호스트 응답 메시지 (거절 사유 등)'
+    comment: '호스트 응답 메시지'
+  },
+  cancellationReason: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    field: 'cancellation_reason',
+    comment: '취소/거절 사유'
   },
 
   // 특별 요청사항 (JSON 저장)
@@ -294,7 +304,9 @@ const Contract = sequelize.define('Contract', {
       'COMPLETED',           // 계약 완료 (체크아웃 완료)
       'CANCELLED_BY_GUEST',  // 게스트 취소
       'CANCELLED_BY_HOST',   // 호스트 취소
-      'REFUNDED'             // 환불 완료
+      'REFUNDED',            // 환불 완료
+      'APPROVAL_EXPIRED',    // 미승인 만료
+      'PAYMENT_EXPIRED'      // 미결제 만료
     ),
     allowNull: false,
     defaultValue: 'PENDING_APPROVAL',
@@ -399,7 +411,9 @@ Contract.STATUS_LABELS = {
   COMPLETED: '계약 완료',
   CANCELLED_BY_GUEST: '게스트 취소',
   CANCELLED_BY_HOST: '호스트 취소',
-  REFUNDED: '환불 완료'
+  REFUNDED: '환불 완료',
+  APPROVAL_EXPIRED: '미승인 만료',
+  PAYMENT_EXPIRED: '미결제 만료'
 };
 
 /**

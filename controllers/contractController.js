@@ -5,6 +5,7 @@ const {
   calculateDiscount,
   validateRentalItemsStock,
   reserveRentalItems,
+  cancelRentalItemReservations,
   validateDates
 } = require('../utils/contractHelper');
 
@@ -340,16 +341,16 @@ const getGuestContracts = async (req, res) => {
             {
               model: RoomPhoto,
               as: 'photos',
-              attributes: ['id', 'photoUrl'],
+              attributes: ['id', 'url'],
               limit: 1,
-              order: [['displayOrder', 'ASC']]
+              order: [['order', 'ASC']]
             }
           ]
         },
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'phone']
+          attributes: ['id', 'name', 'phoneNumber']
         }
       ],
       order: [['createdAt', 'DESC']]
@@ -362,23 +363,47 @@ const getGuestContracts = async (req, res) => {
           id: contract.id,
           status: contract.status,
           statusLabel: Contract.STATUS_LABELS[contract.status],
+
+          // 날짜 정보
           checkInDate: contract.checkInDate,
           checkOutDate: contract.checkOutDate,
           totalDays: contract.totalDays,
+          totalWeeks: contract.totalWeeks,
+
+          // 금액 정보
+          rentalFee: contract.rentalFee,
+          maintenanceFee: contract.maintenanceFee,
+          cleaningFee: contract.cleaningFee,
+          rentalItemsFee: contract.rentalItemsFee,
+          platformFee: contract.platformFee,
+          discountAmount: contract.discountAmount,
+          discountType: contract.discountType,
+          discountCode: contract.discountCode,
+          subtotal: contract.subtotal,
+          totalUsageFee: contract.totalUsageFee,
+          deposit: contract.deposit,
           finalTotalAmount: contract.finalTotalAmount,
+
+          // 렌탈 아이템
+          rentalItems: contract.rentalItems,
+
+          // 방 정보
           room: {
             id: contract.room.id,
             roomName: contract.room.roomName,
             address: contract.room.address,
             area: contract.room.area,
             buildingType: contract.room.buildingType,
-            thumbnailUrl: contract.room.photos[0]?.photoUrl || null
+            thumbnailUrl: contract.room.photos[0]?.url || null
           },
+
+          // 호스트 정보
           host: {
             id: contract.host.id,
             name: contract.host.name,
-            phone: contract.host.phone
+            phoneNumber: contract.host.phoneNumber
           },
+
           createdAt: contract.createdAt
         }))
       },
@@ -415,16 +440,16 @@ const getHostContracts = async (req, res) => {
             {
               model: RoomPhoto,
               as: 'photos',
-              attributes: ['id', 'photoUrl'],
+              attributes: ['id', 'url'],
               limit: 1,
-              order: [['displayOrder', 'ASC']]
+              order: [['order', 'ASC']]
             }
           ]
         },
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'phone', 'email']
+          attributes: ['id', 'name', 'phoneNumber', 'email']
         }
       ],
       order: [['createdAt', 'DESC']]
@@ -437,25 +462,51 @@ const getHostContracts = async (req, res) => {
           id: contract.id,
           status: contract.status,
           statusLabel: Contract.STATUS_LABELS[contract.status],
+
+          // 날짜 정보
           checkInDate: contract.checkInDate,
           checkOutDate: contract.checkOutDate,
           totalDays: contract.totalDays,
+          totalWeeks: contract.totalWeeks,
+
+          // 금액 정보
+          rentalFee: contract.rentalFee,
+          maintenanceFee: contract.maintenanceFee,
+          cleaningFee: contract.cleaningFee,
+          rentalItemsFee: contract.rentalItemsFee,
+          platformFee: contract.platformFee,
+          discountAmount: contract.discountAmount,
+          discountType: contract.discountType,
+          discountCode: contract.discountCode,
+          subtotal: contract.subtotal,
+          totalUsageFee: contract.totalUsageFee,
+          deposit: contract.deposit,
           finalTotalAmount: contract.finalTotalAmount,
+
+          // 렌탈 아이템
+          rentalItems: contract.rentalItems,
+
+          // 메시지
           guestMessage: contract.guestMessage,
+
+          // 방 정보
           room: {
             id: contract.room.id,
             roomName: contract.room.roomName,
             address: contract.room.address,
             area: contract.room.area,
             buildingType: contract.room.buildingType,
-            thumbnailUrl: contract.room.photos[0]?.photoUrl || null
+            thumbnailUrl: contract.room.photos[0]?.url || null
           },
+
+          // 게스트 정보
           guest: {
             id: contract.guest.id,
             name: contract.guest.name,
-            phone: contract.guest.phone,
+            phoneNumber: contract.guest.phoneNumber,
             email: contract.guest.email
           },
+
           createdAt: contract.createdAt
         }))
       },
@@ -485,19 +536,19 @@ const getContractDetail = async (req, res) => {
             {
               model: RoomPhoto,
               as: 'photos',
-              order: [['displayOrder', 'ASC']]
+              order: [['order', 'ASC']]
             }
           ]
         },
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'phone', 'email']
+          attributes: ['id', 'name', 'phoneNumber', 'email']
         },
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'phone', 'email']
+          attributes: ['id', 'name', 'phoneNumber', 'email']
         }
       ]
     });
@@ -549,6 +600,7 @@ const getContractDetail = async (req, res) => {
           // 메시지
           guestMessage: contract.guestMessage,
           hostMessage: contract.hostMessage,
+          cancellationReason: contract.cancellationReason,
 
           // 특별 요청
           specialRequests: contract.specialRequests,
@@ -566,8 +618,8 @@ const getContractDetail = async (req, res) => {
             buildingType: contract.room.buildingType,
             photos: contract.room.photos.map(photo => ({
               id: photo.id,
-              photoUrl: photo.photoUrl,
-              displayOrder: photo.displayOrder
+              url: photo.url,
+              order: photo.order
             }))
           },
 
@@ -575,7 +627,7 @@ const getContractDetail = async (req, res) => {
           host: {
             id: contract.host.id,
             name: contract.host.name,
-            phone: contract.host.phone,
+            phoneNumber: contract.host.phoneNumber,
             email: contract.host.email
           },
 
@@ -583,7 +635,7 @@ const getContractDetail = async (req, res) => {
           guest: {
             id: contract.guest.id,
             name: contract.guest.name,
-            phone: contract.guest.phone,
+            phoneNumber: contract.guest.phoneNumber,
             email: contract.guest.email
           },
 
@@ -605,9 +657,233 @@ const getContractDetail = async (req, res) => {
   }
 };
 
+/**
+ * 호스트가 계약 승인
+ * PATCH /api/contracts/:contractId/approve
+ */
+const approveContract = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { contractId } = req.params;
+    const hostId = req.user.id;
+
+    // 계약 조회
+    const contract = await Contract.findByPk(contractId, { transaction });
+
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, { code: 3005, message: '계약을 찾을 수 없습니다' }, 404);
+    }
+
+    // 호스트 본인 확인
+    if (contract.hostId !== hostId) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    // 승인 대기 상태인지 확인
+    if (contract.status !== 'PENDING_APPROVAL') {
+      await transaction.rollback();
+      return error(
+        res,
+        { code: 4401, message: '승인 대기 상태의 계약만 승인할 수 있습니다' },
+        400
+      );
+    }
+
+    // 계약 승인 처리
+    await contract.update(
+      {
+        status: 'APPROVED',
+        approvedAt: new Date()
+      },
+      { transaction }
+    );
+
+    // TODO: 게스트에게 승인 알림 전송 (추후 구현)
+    // await sendNotificationToGuest(contract.guestId, { ... });
+
+    await transaction.commit();
+
+    return updated(
+      res,
+      {
+        contractId: contract.id,
+        status: contract.status,
+        statusLabel: Contract.STATUS_LABELS[contract.status],
+        approvedAt: contract.approvedAt
+      },
+      '계약이 승인되었습니다'
+    );
+  } catch (err) {
+    await transaction.rollback();
+    console.error('계약 승인 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 호스트가 계약 거절
+ * PATCH /api/contracts/:contractId/reject
+ */
+const rejectContract = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { contractId } = req.params;
+    const { hostMessage } = req.body;
+    const hostId = req.user.id;
+
+    // 거절 사유 확인
+    if (!hostMessage || hostMessage.trim() === '') {
+      await transaction.rollback();
+      return error(
+        res,
+        { code: 4402, message: '거절 사유를 입력해주세요' },
+        400
+      );
+    }
+
+    // 계약 조회
+    const contract = await Contract.findByPk(contractId, { transaction });
+
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, { code: 3005, message: '계약을 찾을 수 없습니다' }, 404);
+    }
+
+    // 호스트 본인 확인
+    if (contract.hostId !== hostId) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    // 승인 대기 상태인지 확인
+    if (contract.status !== 'PENDING_APPROVAL') {
+      await transaction.rollback();
+      return error(
+        res,
+        { code: 4403, message: '승인 대기 상태의 계약만 거절할 수 있습니다' },
+        400
+      );
+    }
+
+    // 계약 거절 처리
+    await contract.update(
+      {
+        status: 'REJECTED',
+        cancellationReason: hostMessage,
+        rejectedAt: new Date()
+      },
+      { transaction }
+    );
+
+    // TODO: 렌탈 아이템 예약 해제 (재고 복구)
+    // TODO: 게스트에게 거절 알림 전송 (추후 구현)
+
+    await transaction.commit();
+
+    return updated(
+      res,
+      {
+        contractId: contract.id,
+        status: contract.status,
+        statusLabel: Contract.STATUS_LABELS[contract.status],
+        cancellationReason: contract.cancellationReason,
+        rejectedAt: contract.rejectedAt
+      },
+      '계약이 거절되었습니다'
+    );
+  } catch (err) {
+    await transaction.rollback();
+    console.error('계약 거절 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 게스트가 계약 요청 취소 (승인 대기 중일 때만 가능)
+ * PATCH /api/contracts/:contractId/cancel
+ */
+const cancelContractByGuest = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { contractId } = req.params;
+    const { cancellationReason } = req.body;
+    const guestId = req.user.id;
+
+    // 계약 조회
+    const contract = await Contract.findByPk(contractId, { transaction });
+
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, { code: 3005, message: '계약을 찾을 수 없습니다' }, 404);
+    }
+
+    // 게스트 본인 확인
+    if (contract.guestId !== guestId) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    // 승인 대기 상태인지 확인 (승인 대기 중일 때만 취소 가능)
+    if (contract.status !== 'PENDING_APPROVAL') {
+      await transaction.rollback();
+      return error(
+        res,
+        {
+          code: 4404,
+          message: '승인 대기 상태의 계약만 취소할 수 있습니다',
+          currentStatus: contract.status
+        },
+        400
+      );
+    }
+
+    // 렌탈 아이템 예약 취소 (재고 복구)
+    await cancelRentalItemReservations(contractId, transaction);
+
+    // 계약 취소 처리
+    await contract.update(
+      {
+        status: 'CANCELLED_BY_GUEST',
+        cancellationReason: cancellationReason || null,
+        cancelledAt: new Date()
+      },
+      { transaction }
+    );
+
+    // TODO: 호스트에게 취소 알림 전송 (추후 구현)
+    // await sendNotificationToHost(contract.hostId, { ... });
+
+    await transaction.commit();
+
+    return updated(
+      res,
+      {
+        contractId: contract.id,
+        status: contract.status,
+        statusLabel: Contract.STATUS_LABELS[contract.status],
+        cancellationReason: contract.cancellationReason,
+        cancelledAt: contract.cancelledAt
+      },
+      '계약 요청이 취소되었습니다'
+    );
+  } catch (err) {
+    await transaction.rollback();
+    console.error('게스트 계약 취소 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   createContractRequest,
   getGuestContracts,
   getHostContracts,
-  getContractDetail
+  getContractDetail,
+  approveContract,
+  rejectContract,
+  cancelContractByGuest
 };

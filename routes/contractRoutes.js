@@ -5,7 +5,10 @@ const {
   createContractRequest,
   getGuestContracts,
   getHostContracts,
-  getContractDetail
+  getContractDetail,
+  approveContract,
+  rejectContract,
+  cancelContractByGuest
 } = require('../controllers/contractController');
 
 /**
@@ -67,5 +70,33 @@ router.get('/host', authenticateToken, getHostContracts);
  * GET /api/contracts/:contractId
  */
 router.get('/:contractId', authenticateToken, getContractDetail);
+
+/**
+ * 호스트가 계약 승인
+ * PATCH /api/contracts/:contractId/approve
+ */
+router.patch('/:contractId/approve', authenticateToken, approveContract);
+
+/**
+ * 호스트가 계약 거절
+ * PATCH /api/contracts/:contractId/reject
+ *
+ * Request Body:
+ * {
+ *   "hostMessage": "죄송합니다. 해당 기간에는 다른 예약이 있습니다."
+ * }
+ */
+router.patch('/:contractId/reject', authenticateToken, rejectContract);
+
+/**
+ * 게스트가 계약 요청 취소 (승인 대기 중일 때만 가능)
+ * PATCH /api/contracts/:contractId/cancel
+ *
+ * Request Body:
+ * {
+ *   "cancellationReason": "계획이 변경되어 취소합니다." (선택사항)
+ * }
+ */
+router.patch('/:contractId/cancel', authenticateToken, cancelContractByGuest);
 
 module.exports = router;
