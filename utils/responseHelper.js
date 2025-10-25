@@ -1,0 +1,122 @@
+/**
+ * 표준화된 API 응답 헬퍼
+ * 일관된 에러 코드와 응답 형식을 제공합니다.
+ */
+
+// 에러 코드 정의
+const ErrorCodes = {
+  // 인증 관련 (1xxx)
+  UNAUTHORIZED: { code: 1001, message: '인증이 필요합니다.' },
+  INVALID_TOKEN: { code: 1002, message: '유효하지 않은 토큰입니다.' },
+  TOKEN_EXPIRED: { code: 1003, message: '토큰이 만료되었습니다.' },
+
+  // 권한 관련 (2xxx)
+  FORBIDDEN: { code: 2001, message: '권한이 없습니다.' },
+  NOT_OWNER: { code: 2002, message: '소유자만 접근 가능합니다.' },
+  NOT_HOST: { code: 2003, message: '호스트만 접근 가능합니다.' },
+
+  // 리소스 관련 (3xxx)
+  NOT_FOUND: { code: 3001, message: '리소스를 찾을 수 없습니다.' },
+  ROOM_NOT_FOUND: { code: 3002, message: '방을 찾을 수 없습니다.' },
+  USER_NOT_FOUND: { code: 3003, message: '사용자를 찾을 수 없습니다.' },
+  PHOTO_NOT_FOUND: { code: 3004, message: '사진을 찾을 수 없습니다.' },
+
+  // 검증 관련 (4xxx)
+  VALIDATION_ERROR: { code: 4001, message: '입력값이 유효하지 않습니다.' },
+  MISSING_REQUIRED_FIELDS: { code: 4002, message: '필수 정보를 모두 입력해주세요.' },
+  INVALID_EMAIL: { code: 4003, message: '유효하지 않은 이메일 형식입니다.' },
+  INVALID_PASSWORD: { code: 4004, message: '비밀번호 형식이 올바르지 않습니다.' },
+  PASSWORD_MISMATCH: { code: 4005, message: '비밀번호가 일치하지 않습니다.' },
+  DUPLICATE_EMAIL: { code: 4006, message: '이미 사용 중인 이메일입니다.' },
+  INVALID_PHONE: { code: 4007, message: '유효하지 않은 전화번호입니다.' },
+
+  // 파일 업로드 관련 (4xxx)
+  NO_FILE_UPLOADED: { code: 4101, message: '파일을 업로드해주세요.' },
+  INVALID_FILE_TYPE: { code: 4102, message: '지원하지 않는 파일 형식입니다.' },
+  FILE_TOO_LARGE: { code: 4103, message: '파일 크기가 너무 큽니다.' },
+  MIN_PHOTOS_REQUIRED: { code: 4104, message: '최소 6장의 사진을 업로드해주세요.' },
+  MAX_PHOTOS_EXCEEDED: { code: 4105, message: '사진은 최대 20장까지 업로드 가능합니다.' },
+
+  // 방 등록 관련 (4xxx)
+  ROOM_INFO_INCOMPLETE: { code: 4201, message: '방 정보가 완전하지 않습니다.' },
+  PRICING_INFO_REQUIRED: { code: 4202, message: '요금 정보를 입력해주세요.' },
+  DESCRIPTION_REQUIRED: { code: 4203, message: '방 소개를 입력해주세요.' },
+  AMENITIES_REQUIRED: { code: 4204, message: '편의시설 정보를 입력해주세요.' },
+  PHOTO_IDS_REQUIRED: { code: 4205, message: '사진 ID 배열이 필요합니다.' },
+
+  // 서버 관련 (5xxx)
+  INTERNAL_ERROR: { code: 5001, message: '서버 오류가 발생했습니다.' },
+  DATABASE_ERROR: { code: 5002, message: '데이터베이스 오류가 발생했습니다.' },
+  TRANSACTION_ERROR: { code: 5003, message: '트랜잭션 처리 중 오류가 발생했습니다.' }
+};
+
+/**
+ * 성공 응답
+ * @param {Object} res - Express response 객체
+ * @param {*} data - 응답 데이터
+ * @param {String} message - 성공 메시지
+ * @param {Number} statusCode - HTTP 상태 코드 (기본: 200)
+ */
+const success = (res, data = null, message = '성공', statusCode = 200) => {
+  const response = {
+    success: true,
+    message
+  };
+
+  if (data !== null) {
+    response.data = data;
+  }
+
+  return res.status(statusCode).json(response);
+};
+
+/**
+ * 에러 응답
+ * @param {Object} res - Express response 객체
+ * @param {Object} errorCode - ErrorCodes 객체의 에러 코드
+ * @param {Number} statusCode - HTTP 상태 코드
+ * @param {*} details - 추가 에러 상세 정보 (선택)
+ */
+const error = (res, errorCode, statusCode = 400, details = null) => {
+  const response = {
+    success: false,
+    code: errorCode.code,
+    message: errorCode.message
+  };
+
+  if (details !== null) {
+    response.details = details;
+  }
+
+  return res.status(statusCode).json(response);
+};
+
+/**
+ * 생성 성공 응답 (201)
+ */
+const created = (res, data = null, message = '생성되었습니다.') => {
+  return success(res, data, message, 201);
+};
+
+/**
+ * 삭제 성공 응답 (200)
+ */
+const deleted = (res, message = '삭제되었습니다.') => {
+  return success(res, null, message, 200);
+};
+
+/**
+ * 업데이트 성공 응답 (200)
+ */
+const updated = (res, data = null, message = '업데이트되었습니다.') => {
+  return success(res, data, message, 200);
+};
+
+module.exports = {
+  ErrorCodes,
+  success,
+  error,
+  created,
+  deleted,
+  updated
+};

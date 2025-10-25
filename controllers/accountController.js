@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { UserBankAccount } = require('../models');
+const { ErrorCodes, success, error, deleted } = require('../utils/responseHelper');
 
 // 아임포트 API 은행 코드 매핑
 const BANK_CODES = {
@@ -138,10 +139,7 @@ const verifyAccount = async (req, res) => {
 
     // 입력값 검증
     if (!bank_code || !account_num || !account_holder_name) {
-      return res.status(400).json({
-        success: false,
-        message: '은행코드, 계좌번호, 예금주명을 모두 입력해주세요.'
-      });
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
     // 계좌번호 형식 정리 (하이픈 제거)
@@ -150,46 +148,30 @@ const verifyAccount = async (req, res) => {
     // 은행 코드 확인
     const bankCode = BANK_CODES[bank_code] || bank_code;
     if (!bankCode) {
-      return res.status(400).json({
-        success: false,
-        message: '지원하지 않는 은행입니다.'
-      });
+      return error(res, { code: 4301, message: '지원하지 않는 은행입니다.' }, 400);
     }
 
     // 아임포트 API로 계좌 실명 확인
     const verificationResult = await verifyAccountWithIamport(bankCode, cleanAccountNum);
 
     if (!verificationResult.success) {
-      return res.status(400).json({
-        success: false,
-        message: verificationResult.error || '계좌 확인에 실패했습니다.',
-        verified: false
-      });
+      return error(res, { code: 4302, message: verificationResult.error || '계좌 확인에 실패했습니다.' }, 400);
     }
 
     // 예금주명 비교
     const verified = verificationResult.accountHolderName === account_holder_name;
 
     // 실명 확인만 하고 저장은 하지 않음
-    res.status(200).json({
-      success: true,
-      message: verified ? '계좌 확인이 완료되었습니다.' : '계좌 정보가 일치하지 않습니다.',
+    return success(res, {
       verified: verified,
-      data: {
-        accountHolderName: verificationResult.accountHolderName,
-        bankName: getBankNameByCode(bankCode),
-        inputName: account_holder_name
-      }
-    });
+      accountHolderName: verificationResult.accountHolderName,
+      bankName: getBankNameByCode(bankCode),
+      inputName: account_holder_name
+    }, verified ? '계좌 확인이 완료되었습니다.' : '계좌 정보가 일치하지 않습니다.');
 
-  } catch (error) {
-    console.error('계좌 확인 오류:', error);
-    res.status(500).json({
-      success: false,
-      message: '계좌 확인 중 오류가 발생했습니다.',
-      verified: false,
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+  } catch (err) {
+    console.error('계좌 확인 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, process.env.NODE_ENV === 'development' ? err.message : undefined);
   }
 };
 
@@ -204,29 +186,20 @@ const getUserAccount = async (req, res) => {
     });
 
     if (!account) {
-      return res.status(404).json({
-        success: false,
-        message: '등록된 계좌가 없습니다.'
-      });
+      return error(res, { code: 3005, message: '등록된 계좌가 없습니다.' }, 404);
     }
 
-    res.status(200).json({
-      success: true,
-      data: {
-        account: {
-          ...account.toJSON(),
-          // 계좌번호 마스킹 (보안)
-          accountNumber: account.accountNumber.replace(/(\d{4})\d{4,}(\d{4})/, '$1****$2')
-        }
+    return success(res, {
+      account: {
+        ...account.toJSON(),
+        // 계좌번호 마스킹 (보안)
+        accountNumber: account.accountNumber.replace(/(\d{4})\d{4,}(\d{4})/, '$1****$2')
       }
     });
 
-  } catch (error) {
-    console.error('계좌 정보 조회 오류:', error);
-    res.status(500).json({
-      success: false,
-      message: '계좌 정보 조회 중 오류가 발생했습니다.'
-    });
+  } catch (err) {
+    console.error('계좌 정보 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 
@@ -240,23 +213,14 @@ const deleteAccount = async (req, res) => {
     });
 
     if (deleted === 0) {
-      return res.status(404).json({
-        success: false,
-        message: '삭제할 계좌가 없습니다.'
-      });
+      return error(res, { code: 3005, message: '삭제할 계좌가 없습니다.' }, 404);
     }
 
-    res.status(200).json({
-      success: true,
-      message: '계좌 정보가 삭제되었습니다.'
-    });
+    return deleted(res, '계좌 정보가 삭제되었습니다.');
 
-  } catch (error) {
-    console.error('계좌 삭제 오류:', error);
-    res.status(500).json({
-      success: false,
-      message: '계좌 삭제 중 오류가 발생했습니다.'
-    });
+  } catch (err) {
+    console.error('계좌 삭제 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
 
