@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { register, login, refreshToken, logout, getProfile } = require('../controllers/authController');
+const { register, login, refreshToken, logout, getProfile, devBypassLogin } = require('../controllers/authController');
 const { kakaoLogin } = require('../controllers/oauthController');
 const { authenticateToken } = require('../middleware/auth');
 const { authLimiter } = require('../middleware/rateLimiter');
@@ -44,5 +44,8 @@ router.get('/kakao', async (req, res) => {
 
 // 사용자 프로필
 router.get('/profile', authenticateToken, getProfile);
+
+// 개발 환경 전용 로그인 우회 (프로덕션에서 자동 차단됨)
+router.get('/dev-bypass/:userid', devBypassLogin);
 
 module.exports = router;

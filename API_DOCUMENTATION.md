@@ -1,4 +1,4 @@
-# LiveMoment API 문서
+# Ezstay API 문서
 
 ## 목차
 - [게스트용 API](#게스트용-api)

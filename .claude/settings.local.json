@@ -19,7 +19,16 @@
       "Bash(if not exist uploadsdummy mkdir uploadsdummy)",
       "Bash(curl:*)",
       "Read(//c/study/uploads/rooms/**)",
-      "Bash(timeout /t 5 /nobreak)"
+      "Bash(timeout /t 5 /nobreak)",
+      "Read(//c/study/**)",
+      "Bash(mysql:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(echo:*)",
+      "Read(//c/Users/user/AppData/Roaming/Claude/**)",
+      "Bash(dir:*)",
+      "Bash(move:*)",
+      "Bash(ren livemoment_back ezstay_back)"
     ],
     "deny": [],
     "ask": []

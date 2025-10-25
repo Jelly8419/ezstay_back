@@ -11,15 +11,17 @@ const RentalItem = require('./RentalItem');
 const Contract = require('./Contract');
 const RentalItemReservation = require('./RentalItemReservation');
 
-const sequelize = new Sequelize('livemoment', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
+const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT || 3306,
   dialect: 'mysql',
+  timezone: '+09:00', // 한국 시간대 (Asia/Seoul)
   dialectOptions: {
     // MariaDB 인증 플러그인 문제 해결
     authPlugins: {
       mysql_native_password: () => () => Buffer.alloc(0)
-    }
+    },
+    timezone: '+09:00' // MySQL 연결 시 타임존 설정
   },
   pool: {
     max: 10,

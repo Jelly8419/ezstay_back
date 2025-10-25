@@ -101,6 +101,10 @@ sequelize.authenticate()
 // Redis 연결 (비동기, 실패해도 서버는 계속 실행)
 connectRedis();
 
+// 계약 상태 자동 업데이트 스케줄러 시작
+const { startContractScheduler } = require('./schedulers/contractScheduler');
+startContractScheduler();
+
 const roomRoutes = require('./routes/roomRoutes');
 const authRoutes = require('./routes/authRoutes');
 const accountRoutes = require('./routes/accountRoutes');

@@ -264,10 +264,93 @@ const getProfile = async (req, res) => {
   }
 };
 
+/**
+ * 개발 환경 전용 로그인 우회 (테스트 목적)
+ * 프로덕션 환경에서는 절대 사용 불가
+ */
+const devBypassLogin = async (req, res) => {
+  // 프로덕션 환경 차단
+  if (process.env.NODE_ENV === 'production') {
+    return error(res, {
+      code: 2001,
+      message: 'This endpoint is only available in development environment'
+    }, 403);
+  }
+
+  try {
+    const { userid } = req.params;
+    const { user_mode } = req.query;
+
+    if (!userid) {
+      return error(res, {
+        code: 4000,
+        message: 'userId는 필수입니다.'
+      }, 400);
+    }
+
+    // 사용자 조회
+    const user = await User.findOne({
+      where: { id: userid }
+    });
+
+    if (!user) {
+      return error(res, ErrorCodes.USER_NOT_FOUND, 404);
+    }
+
+    if (!user.isActive) {
+      return error(res, {
+        code: 1005,
+        message: '비활성화된 계정입니다.'
+      }, 401);
+    }
+
+    // 계좌 등록 여부 확인
+    const bankAccount = await UserBankAccount.findOne({
+      where: { userId: user.id }
+    });
+
+    // user_mode 결정
+    let userMode = 'guest';
+    if (bankAccount) {
+      userMode = user_mode === 'host' ? 'host' : 'guest';
+    }
+
+    // 토큰 생성
+    const { accessToken, refreshToken } = generateTokens({
+      userId: user.id,
+      email: user.email
+    });
+
+    // refreshToken 저장
+    await user.update({
+      refreshToken,
+      lastLoginAt: new Date()
+    });
+
+    return success(res, {
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        profileImageUrl: user.profileImageUrl,
+        userType: user.userType,
+        userMode: userMode,
+        phoneVerified: user.phoneVerified || false,
+        hasBank: !!bankAccount
+      },
+      accessToken,
+      refreshToken
+    }, '[DEV] 개발 환경 로그인 우회 성공');
+  } catch (err) {
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
 module.exports = {
   register,
   login,
   refreshToken,
   logout,
-  getProfile
+  getProfile,
+  devBypassLogin
 };

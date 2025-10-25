@@ -1,7 +1,7 @@
-# LiveMoment Backend - Claude Code 가이드
+# Ezstay Backend - Claude Code 가이드
 
 ## 프로젝트 개요
-부동산 단기 임대 플랫폼(LiveMoment)의 백엔드 API 서버입니다. 호스트가 숙소를 등록하고 게스트가 단기 임대할 수 있는 서비스를 제공합니다.
+부동산 단기 임대 플랫폼(Ezstay)의 백엔드 API 서버입니다. 호스트가 숙소를 등록하고 게스트가 단기 임대할 수 있는 서비스를 제공합니다.
 
 ## 기술 스택
 - **Runtime**: Node.js
@@ -14,7 +14,7 @@
 
 ## 프로젝트 구조
 ```
-livemoment_back/
+ezstay_back/
 ├── controllers/          # 비즈니스 로직 처리
 │   ├── authController.js       # 이메일 회원가입/로그인
 │   ├── oauthController.js      # 소셜 로그인 (카카오)
