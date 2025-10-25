@@ -10,6 +10,7 @@ const { UserBankAccount } = require('./UserBankAccount');
 const RentalItem = require('./RentalItem');
 const Contract = require('./Contract');
 const RentalItemReservation = require('./RentalItemReservation');
+const ChatRoom = require('./ChatRoom');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -143,6 +144,31 @@ RentalItem.hasMany(RentalItemReservation, {
   as: 'reservations'
 });
 
+// ChatRoom 관계 설정
+ChatRoom.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract'
+});
+Contract.hasOne(ChatRoom, {
+  foreignKey: 'contractId',
+  as: 'chatRoom'
+});
+
+ChatRoom.belongsTo(User, {
+  foreignKey: 'hostId',
+  as: 'host'
+});
+
+ChatRoom.belongsTo(User, {
+  foreignKey: 'guestId',
+  as: 'guest'
+});
+
+ChatRoom.belongsTo(Room, {
+  foreignKey: 'roomId',
+  as: 'room'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -155,5 +181,6 @@ module.exports = {
   UserBankAccount,
   RentalItem,
   Contract,
-  RentalItemReservation
+  RentalItemReservation,
+  ChatRoom
 };

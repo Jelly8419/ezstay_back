@@ -1,4 +1,4 @@
-const { sequelize, Contract, Room, User, RoomPhoto } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom } = require('../models');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const {
   calculateRentalItemsFee,
@@ -8,6 +8,7 @@ const {
   cancelRentalItemReservations,
   validateDates
 } = require('../utils/contractHelper');
+const { createChatRoomMetadata } = require('../config/firebaseAdmin');
 
 /**
  * 계약 요청 생성 (게스트 -> 호스트)
@@ -700,6 +701,71 @@ const approveContract = async (req, res) => {
       },
       { transaction }
     );
+
+    // 채팅방 자동 생성
+    try {
+      // Firebase 채팅방 ID 생성
+      const firebaseChatRoomId = ChatRoom.generateFirebaseChatRoomId(contract.id);
+
+      // 방 정보 조회
+      const room = await Room.findByPk(contract.roomId, {
+        attributes: ['id', 'roomName', 'address'],
+        transaction
+      });
+
+      // 호스트/게스트 정보 조회
+      const host = await User.findByPk(contract.hostId, {
+        attributes: ['id', 'name', 'profileImageUrl'],
+        transaction
+      });
+
+      const guest = await User.findByPk(contract.guestId, {
+        attributes: ['id', 'name', 'profileImageUrl'],
+        transaction
+      });
+
+      // MySQL에 채팅방 정보 저장
+      const chatRoom = await ChatRoom.create({
+        contractId: contract.id,
+        firebaseChatRoomId,
+        hostId: contract.hostId,
+        guestId: contract.guestId,
+        roomId: contract.roomId,
+        isActive: true
+      }, { transaction });
+
+      // Firestore에 채팅방 메타데이터 저장 (비동기, 실패해도 계약 승인은 유지)
+      createChatRoomMetadata(firebaseChatRoomId, {
+        contractId: contract.id,
+        hostId: contract.hostId,
+        guestId: contract.guestId,
+        roomId: contract.roomId,
+        roomInfo: {
+          name: room.roomName,
+          address: room.address
+        },
+        hostInfo: {
+          id: host.id,
+          name: host.name,
+          profileImageUrl: host.profileImageUrl
+        },
+        guestInfo: {
+          id: guest.id,
+          name: guest.name,
+          profileImageUrl: guest.profileImageUrl
+        },
+        checkInDate: contract.checkInDate,
+        checkOutDate: contract.checkOutDate,
+        isActive: true
+      }).catch(err => {
+        console.error('Firestore 채팅방 메타데이터 생성 실패 (계약 승인은 완료됨):', err);
+      });
+
+      console.log(`✅ 채팅방 생성 완료: ${firebaseChatRoomId}`);
+    } catch (chatRoomError) {
+      console.error('채팅방 생성 실패 (계약 승인은 완료됨):', chatRoomError);
+      // 채팅방 생성 실패해도 계약 승인은 계속 진행
+    }
 
     // TODO: 게스트에게 승인 알림 전송 (추후 구현)
     // await sendNotificationToGuest(contract.guestId, { ... });

@@ -105,12 +105,17 @@ connectRedis();
 const { startContractScheduler } = require('./schedulers/contractScheduler');
 startContractScheduler();
 
+// Firebase Admin SDK 초기화
+const { initializeFirebase } = require('./config/firebaseAdmin');
+initializeFirebase();
+
 const roomRoutes = require('./routes/roomRoutes');
 const authRoutes = require('./routes/authRoutes');
 const accountRoutes = require('./routes/accountRoutes');
 const userRoutes = require('./routes/userRoutes');
 const hostRoutes = require('./routes/hostRoutes');
 const contractRoutes = require('./routes/contractRoutes');
+const chatRoutes = require('./routes/chatRoutes');
 // const rentalItemRoutes = require('./routes/rentalItemRoutes'); // TODO: 관리자 프로젝트로 이동 예정
 
 app.use('/api/rooms', roomRoutes);
@@ -119,6 +124,7 @@ app.use('/api/account', accountRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/host', hostRoutes);
 app.use('/api/contracts', contractRoutes);
+app.use('/api/chats', chatRoutes);
 // app.use('/api/admin/rental-items', rentalItemRoutes); // TODO: 관리자 프로젝트로 이동 예정
 
 app.get('/', (req, res) => {

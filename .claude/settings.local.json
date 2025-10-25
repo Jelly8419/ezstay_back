@@ -28,7 +28,11 @@
       "Read(//c/Users/user/AppData/Roaming/Claude/**)",
       "Bash(dir:*)",
       "Bash(move:*)",
-      "Bash(ren livemoment_back ezstay_back)"
+      "Bash(ren livemoment_back ezstay_back)",
+      "Read(//c/Users/user/AppData/Roaming/**)",
+      "Read(//c/Users/user/AppData/**)",
+      "Bash(code --version)",
+      "Bash(git checkout:*)"
     ],
     "deny": [],
     "ask": []
