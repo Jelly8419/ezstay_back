@@ -2,6 +2,7 @@ const { Sequelize } = require('sequelize');
 const { User } = require('./User');
 const { LocalUser } = require('./LocalUser');
 const { SocialUser } = require('./SocialUser');
+const AdminModel = require('./Admin');
 const { Room } = require('./Room');
 const { RoomPhoto } = require('./RoomPhoto');
 const { RoomAmenity } = require('./RoomAmenity');
@@ -31,6 +32,9 @@ const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process
     idle: 10000
   }
 });
+
+// Admin 모델 초기화
+const Admin = AdminModel(sequelize);
 
 // 모델 관계 설정
 User.hasOne(LocalUser, {
@@ -174,6 +178,7 @@ module.exports = {
   User,
   LocalUser,
   SocialUser,
+  Admin,
   Room,
   RoomPhoto,
   RoomAmenity,

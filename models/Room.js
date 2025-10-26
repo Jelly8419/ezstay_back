@@ -230,6 +230,11 @@ const Room = sequelize.define('Room', {
   publishedAt: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+  rejectionReason: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    comment: '매물 반려 사유'
   }
 }, {
   tableName: 'rooms',

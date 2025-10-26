@@ -116,6 +116,7 @@ const userRoutes = require('./routes/userRoutes');
 const hostRoutes = require('./routes/hostRoutes');
 const contractRoutes = require('./routes/contractRoutes');
 const chatRoutes = require('./routes/chatRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 // const rentalItemRoutes = require('./routes/rentalItemRoutes'); // TODO: 관리자 프로젝트로 이동 예정
 
 app.use('/api/rooms', roomRoutes);
@@ -125,6 +126,7 @@ app.use('/api/user', userRoutes);
 app.use('/api/host', hostRoutes);
 app.use('/api/contracts', contractRoutes);
 app.use('/api/chats', chatRoutes);
+app.use('/api/admin', adminRoutes);
 // app.use('/api/admin/rental-items', rentalItemRoutes); // TODO: 관리자 프로젝트로 이동 예정
 
 app.get('/', (req, res) => {
