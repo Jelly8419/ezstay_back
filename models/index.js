@@ -2,6 +2,7 @@ const { Sequelize } = require('sequelize');
 const { User } = require('./User');
 const { LocalUser } = require('./LocalUser');
 const { SocialUser } = require('./SocialUser');
+const AdminModel = require('./Admin');
 const { Room } = require('./Room');
 const { RoomPhoto } = require('./RoomPhoto');
 const { RoomAmenity } = require('./RoomAmenity');
@@ -10,6 +11,7 @@ const { UserBankAccount } = require('./UserBankAccount');
 const RentalItem = require('./RentalItem');
 const Contract = require('./Contract');
 const RentalItemReservation = require('./RentalItemReservation');
+const ChatRoom = require('./ChatRoom');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -30,6 +32,9 @@ const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process
     idle: 10000
   }
 });
+
+// Admin 모델 초기화
+const Admin = AdminModel(sequelize);
 
 // 모델 관계 설정
 User.hasOne(LocalUser, {
@@ -143,11 +148,37 @@ RentalItem.hasMany(RentalItemReservation, {
   as: 'reservations'
 });
 
+// ChatRoom 관계 설정
+ChatRoom.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract'
+});
+Contract.hasOne(ChatRoom, {
+  foreignKey: 'contractId',
+  as: 'chatRoom'
+});
+
+ChatRoom.belongsTo(User, {
+  foreignKey: 'hostId',
+  as: 'host'
+});
+
+ChatRoom.belongsTo(User, {
+  foreignKey: 'guestId',
+  as: 'guest'
+});
+
+ChatRoom.belongsTo(Room, {
+  foreignKey: 'roomId',
+  as: 'room'
+});
+
 module.exports = {
   sequelize,
   User,
   LocalUser,
   SocialUser,
+  Admin,
   Room,
   RoomPhoto,
   RoomAmenity,
@@ -155,5 +186,6 @@ module.exports = {
   UserBankAccount,
   RentalItem,
   Contract,
-  RentalItemReservation
+  RentalItemReservation,
+  ChatRoom
 };

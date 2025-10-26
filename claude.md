@@ -21,7 +21,10 @@ ezstay_back/
 │   ├── userController.js       # 사용자 정보 관리
 │   ├── accountController.js    # 본인인증, 계좌정보, 약관동의
 │   ├── hostController.js       # 호스트 방 목록 조회
-│   └── roomController.js       # 방 등록 및 관리 (CRUD)
+│   ├── roomController.js       # 방 등록 및 관리 (CRUD)
+│   ├── contractController.js   # 계약/예약 관리
+│   ├── chatController.js       # Firebase 실시간 채팅
+│   └── adminController.js      # 관리자 기능 (대시보드, 유저/매물/예약 관리)
 ├── models/              # Sequelize 데이터 모델
 │   ├── User.js                # 공통 사용자 정보
 │   ├── LocalUser.js           # 이메일 회원
@@ -37,9 +40,12 @@ ezstay_back/
 │   ├── userRoutes.js          # /api/user
 │   ├── accountRoutes.js       # /api/account
 │   ├── hostRoutes.js          # /api/host
-│   └── roomRoutes.js          # /api/rooms
+│   ├── roomRoutes.js          # /api/rooms
+│   ├── contractRoutes.js      # /api/contracts
+│   ├── chatRoutes.js          # /api/chats
+│   └── adminRoutes.js         # /api/admin
 ├── middleware/          # 미들웨어
-│   ├── auth.js                # JWT 인증 미들웨어
+│   ├── auth.js                # JWT 인증 + 관리자 권한 미들웨어
 │   ├── validation.js          # 요청 데이터 검증
 │   ├── upload.js              # 파일 업로드 설정 (MIME 타입 검증)
 │   ├── errorHandler.js        # 전역 에러 핸들러
@@ -304,4 +310,101 @@ if (!passwordValidation.valid) {
    - 민감정보 제외: `entrancePassword`, `hostId`, `detailAddress`, `status`
 
 ## API 문서
-상세한 API 명세는 `API_DOCUMENTATION.md` 파일을 참조하세요.
+- **일반 API**: `API_DOCUMENTATION.md` 파일 참조
+- **관리자 API**: `ADMIN_API_DOCUMENTATION.md` 파일 참조
+
+## 관리자 기능 (2025-10-27 추가, v2.0.0 업데이트)
+
+### 중요 변경사항 (v2.0.0)
+관리자는 일반 유저(User)와 **완전히 분리된 Admin 테이블**에서 관리됩니다.
+
+### Admin 모델 (별도 테이블)
+```javascript
+Admin {
+  id: number,
+  email: string (UNIQUE),
+  password: string (bcrypt 해싱),
+  name: string,
+  phoneNumber: string | null,
+  role: 'super_admin' | 'admin' | 'cs_admin',
+  isActive: boolean,
+  lastLoginAt: Date | null,
+  refreshToken: string | null
+}
+```
+
+**권한 레벨**:
+- **super_admin**: 최고관리자 (모든 권한)
+- **admin**: 일반관리자 (대부분의 관리 권한)
+- **cs_admin**: 고객센터 관리자 (제한적 권한)
+
+### 관리자 인증 시스템
+```javascript
+const { authenticateAdmin, requireAdminRole } = require('../middleware/auth');
+
+// 모든 관리자가 접근 가능
+router.get('/dashboard/stats', authenticateAdmin, controller);
+
+// 특정 역할만 접근 가능
+router.patch('/users/:id/status',
+  authenticateAdmin,
+  requireAdminRole(['super_admin', 'admin']),
+  controller
+);
+```
+
+### 관리자 전용 로그인
+- **일반 유저 로그인**: `POST /api/auth/login`
+- **관리자 로그인**: `POST /api/admin/auth/login` (별도 엔드포인트)
+
+### 주요 관리자 API
+#### 인증
+- `POST /api/admin/auth/login` - 관리자 로그인
+- `POST /api/admin/auth/logout` - 로그아웃
+- `GET /api/admin/auth/me` - 내 정보 조회
+
+#### 대시보드
+- `GET /api/admin/dashboard/stats` - 통계 조회
+- `GET /api/admin/dashboard/recent-activities` - 최근 활동
+
+#### 유저 관리
+- `GET /api/admin/users` - 유저 목록 (검색, 필터링, 페이지네이션)
+- `GET /api/admin/users/:userId` - 유저 상세
+- `PATCH /api/admin/users/:userId/status` - 유저 활성/비활성
+
+#### 매물 관리
+- `GET /api/admin/properties` - 매물 목록
+- `GET /api/admin/properties/pending-review` - 심사 대기 매물
+- `POST /api/admin/properties/:roomId/approve` - 매물 승인
+- `POST /api/admin/properties/:roomId/reject` - 매물 반려
+
+#### 예약 관리
+- `GET /api/admin/reservations` - 예약 목록
+- `GET /api/admin/reservations/:contractId` - 예약 상세
+
+### 관리자 계정 생성
+Admin 테이블에 직접 생성합니다:
+```javascript
+// scripts/createAdmin.js
+const bcrypt = require('bcryptjs');
+const { Admin } = require('./models');
+
+async function createAdmin() {
+  const hashedPassword = await bcrypt.hash('admin1234!', 10);
+
+  await Admin.create({
+    username: 'admin',
+    password: hashedPassword,
+    name: '관리자',
+    phoneNumber: '010-1234-5678',
+    role: 'super_admin',
+    isActive: true
+  });
+
+  console.log('관리자 계정 생성 완료');
+}
+
+createAdmin();
+```
+
+상세한 관리자 API 문서는 `ADMIN_API_DOCUMENTATION.md` 파일을 참조하세요.

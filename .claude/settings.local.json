@@ -28,7 +28,14 @@
       "Read(//c/Users/user/AppData/Roaming/Claude/**)",
       "Bash(dir:*)",
       "Bash(move:*)",
-      "Bash(ren livemoment_back ezstay_back)"
+      "Bash(ren livemoment_back ezstay_back)",
+      "Read(//c/Users/user/AppData/Roaming/**)",
+      "Read(//c/Users/user/AppData/**)",
+      "Bash(code --version)",
+      "Bash(git checkout:*)",
+      "Bash(git push:*)",
+      "Read(//c/Users/user/.claude/**)",
+      "Bash(if not exist c:studyezstay_backscripts mkdir c:studyezstay_backscripts)"
     ],
     "deny": [],
     "ask": []
