@@ -163,6 +163,36 @@ app.get('/', (req, res) => {
   res.json({ message: 'Rental API Server is running!' });
 });
 
+// 헬스체크 엔드포인트 (배포 스크립트용)
+app.get('/health', async (req, res) => {
+  try {
+    // MySQL 연결 확인
+    await sequelize.authenticate();
+
+    // Redis 연결 확인 (선택적)
+    const { redisClient } = require('./config/redis');
+    const redisStatus = redisClient?.isReady ? 'connected' : 'disconnected';
+
+    res.status(200).json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      mysql: 'connected',
+      redis: redisStatus,
+      memory: {
+        used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
+        total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + 'MB'
+      }
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: 'error',
+      message: 'Service unavailable',
+      error: error.message
+    });
+  }
+});
+
 // 전역 에러 핸들러 (모든 라우트 뒤에 위치)
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 app.use(notFoundHandler); // 404 처리
