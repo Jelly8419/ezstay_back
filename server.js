@@ -72,36 +72,45 @@ app.use('/api/', (req, res, next) => {
   generalLimiter(req, res, next);
 });
 
+// ========================================
 // 정적 파일 제공 (업로드된 이미지)
-// placeholder 이미지 미들웨어 먼저 적용
-const placeholderImageMiddleware = require('./middleware/placeholderImage');
-app.use('/uploads', (req, res, next) => {
-  console.log('[Server] /uploads 미들웨어 실행, req.path:', req.path);
-  // 정적 파일에도 CORS 헤더 명시적으로 설정
-  const origin = req.headers.origin;
+// ========================================
+if (process.env.NODE_ENV === 'development') {
+  // 로컬 개발 환경: Express가 직접 정적 파일 제공
+  console.log('[Server] Development mode: Express handles /uploads');
 
-  // 개발 환경: 모든 localhost 허용
-  if (process.env.NODE_ENV === 'development') {
+  const placeholderImageMiddleware = require('./middleware/placeholderImage');
+
+  app.use('/uploads', (req, res, next) => {
+    console.log('[Server] /uploads 요청:', req.path);
+
+    // CORS 헤더 설정
+    const origin = req.headers.origin;
     if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
       res.header('Access-Control-Allow-Origin', origin || '*');
     }
-  } else {
-    // 프로덕션: 환경변수로 지정된 도메인만 허용
-    const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [];
-    if (origin && allowedOrigins.includes(origin)) {
-      res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
+
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(200);
     }
-  }
+    next();
+  });
 
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
+  // express.static으로 실제 파일 제공
+  app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+    fallthrough: true,
+    maxAge: '1d'
+  }));
 
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
-  next();
-}, placeholderImageMiddleware);
+  // fallback: 파일 없으면 placeholder 제공
+  app.use('/uploads', placeholderImageMiddleware);
+} else {
+  // 프로덕션: Nginx가 /uploads 처리하므로 Express는 처리 안 함
+  console.log('[Server] Production mode: Nginx handles /uploads');
+}
 
 const { User, LocalUser, SocialUser, Room, RoomPhoto, RoomAmenity, RoomFreeService, sequelize } = require('./models');
 const { connectRedis } = require('./config/redis');
@@ -152,6 +161,36 @@ app.use('/api/admin', adminRoutes);
 
 app.get('/', (req, res) => {
   res.json({ message: 'Rental API Server is running!' });
+});
+
+// 헬스체크 엔드포인트 (배포 스크립트용)
+app.get('/health', async (req, res) => {
+  try {
+    // MySQL 연결 확인
+    await sequelize.authenticate();
+
+    // Redis 연결 확인 (선택적)
+    const { redisClient } = require('./config/redis');
+    const redisStatus = redisClient?.isReady ? 'connected' : 'disconnected';
+
+    res.status(200).json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      mysql: 'connected',
+      redis: redisStatus,
+      memory: {
+        used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
+        total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + 'MB'
+      }
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: 'error',
+      message: 'Service unavailable',
+      error: error.message
+    });
+  }
 });
 
 // 전역 에러 핸들러 (모든 라우트 뒤에 위치)

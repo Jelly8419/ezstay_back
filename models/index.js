@@ -30,7 +30,17 @@ const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process
     min: 0,
     acquire: 30000,
     idle: 10000
-  }
+  },
+  // 환경별 로깅 설정
+  // false: 로그 끄기 | console.log: 모든 쿼리 | 커스텀 함수: 필터링
+  logging: process.env.DB_LOGGING === 'true'
+    ? (msg) => {
+        // ALTER, SHOW INDEX 등 DDL 쿼리 제외
+        if (!msg.includes('ALTER TABLE') && !msg.includes('SHOW INDEX')) {
+          console.log(msg);
+        }
+      }
+    : false
 });
 
 // Admin 모델 초기화

@@ -192,16 +192,22 @@ router.post('/image', uploadSingleImage, controller);
 ## 환경 변수 (.env)
 ```
 PORT=3000
+NODE_ENV=development  # production으로 설정 권장
 DB_HOST=localhost
 DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=your_password
+DB_LOGGING=false  # true: SQL 쿼리 로그 출력 (DDL 제외) | false: 모든 DB 로그 끄기
 JWT_SECRET=your_jwt_secret
 JWT_REFRESH_SECRET=your_refresh_secret
 KAKAO_CLIENT_ID=your_kakao_rest_api_key  # 카카오 REST API 키 (OAuth + 로컬 API 공통 사용)
 KAKAO_CLIENT_SECRET=your_kakao_client_secret
 KAKAO_CALLBACK_URL=http://localhost:3000/api/auth/oauth/kakao/callback
 ```
+
+### DB 로깅 제어
+- **개발 환경**: `DB_LOGGING=true`로 설정하여 필요한 쿼리만 확인 (ALTER, SHOW INDEX 자동 필터링)
+- **프로덕션 환경**: `DB_LOGGING=false`로 설정하여 성능 최적화 및 로그 정리
 
 ## 주요 명령어
 ```bash

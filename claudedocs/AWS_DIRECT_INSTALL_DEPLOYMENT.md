@@ -1141,6 +1141,8 @@ sudo certbot renew --webroot -w /var/www/certbot --dry-run
 
 ### 1. 배포 스크립트 생성
 
+> **중요**: 백엔드에 `/health` 엔드포인트가 추가되어야 합니다 (server.js 참조)
+
 ```bash
 # /opt/ezstay/deploy.sh 생성
 cat > /opt/ezstay/deploy.sh << 'EOF'
@@ -1167,14 +1169,22 @@ BACKEND_DIR="/opt/ezstay/backend"
 BACKUP_DIR="/opt/ezstay/backups"
 mkdir -p $BACKUP_DIR
 
+# 환경변수 로드 (.env 파일에서 DB 비밀번호 가져오기)
+if [ -f "$BACKEND_DIR/.env" ]; then
+    export $(grep -v '^#' "$BACKEND_DIR/.env" | xargs)
+fi
+
 # 데이터베이스 백업
 print_info "데이터베이스 백업 중..."
-mysqldump -u ezstay_user -p'Your_Strong_Password_123!' ezstay_db \
-  | gzip > $BACKUP_DIR/db_backup_$(date +%Y%m%d_%H%M%S).sql.gz
+if mysqldump -u "$DB_USER" -p"$DB_PASSWORD" ezstay_db | gzip > "$BACKUP_DIR/db_backup_$(date +%Y%m%d_%H%M%S).sql.gz"; then
+    print_info "✅ DB 백업 완료"
+else
+    print_warn "DB 백업 실패 (계속 진행)"
+fi
 
 # Git Pull
 print_info "최신 코드 가져오기..."
-cd $BACKEND_DIR
+cd "$BACKEND_DIR"
 git pull origin main
 
 # 의존성 업데이트 확인
@@ -1192,18 +1202,39 @@ fi
 print_info "백엔드 서비스 재시작..."
 pm2 reload ezstay-api
 
-# 헬스체크
+# 헬스체크 (개선된 버전: 재시도 로직 + 타임아웃)
 print_info "서비스 헬스체크 중..."
-sleep 5
+HEALTH_CHECK_URL="http://localhost:${PORT:-8080}/health"
+MAX_RETRIES=12  # 최대 12번 시도 (60초)
+RETRY_INTERVAL=5  # 5초 간격
 
-if curl -f http://localhost:8080/health > /dev/null 2>&1; then
-    print_info "✅ 백엔드 서비스 정상"
-else
-    print_error "백엔드 서비스 실패"
+success=false
+for i in $(seq 1 $MAX_RETRIES); do
+    print_info "헬스체크 시도 $i/$MAX_RETRIES..."
+
+    if curl -f -s --connect-timeout 3 --max-time 5 "$HEALTH_CHECK_URL" > /dev/null 2>&1; then
+        print_info "✅ 백엔드 서비스 정상 (시도 $i/$MAX_RETRIES)"
+        success=true
+        break
+    else
+        if [ $i -lt $MAX_RETRIES ]; then
+            print_warn "서비스 응답 없음, ${RETRY_INTERVAL}초 후 재시도..."
+            sleep $RETRY_INTERVAL
+        fi
+    fi
+done
+
+if [ "$success" = false ]; then
+    print_error "백엔드 서비스 헬스체크 실패"
+    print_warn "PM2 로그 확인:"
+    pm2 logs ezstay-api --nostream --lines 20
+
     print_warn "이전 버전으로 롤백 중..."
-    cd $BACKEND_DIR
+    cd "$BACKEND_DIR"
     git reset --hard HEAD@{1}
     pm2 reload ezstay-api
+
+    print_error "롤백 완료 - 배포 실패"
     exit 1
 fi
 
@@ -1213,6 +1244,7 @@ if sudo nginx -t > /dev/null 2>&1; then
     sudo systemctl reload nginx
 else
     print_error "Nginx 설정 오류"
+    sudo nginx -t  # 에러 메시지 출력
     exit 1
 fi
 
@@ -1221,17 +1253,27 @@ print_info "PM2 프로세스 상태:"
 pm2 status
 
 # 7일 이상 된 백업 삭제
-find $BACKUP_DIR -type f -name "*.sql.gz" -mtime +7 -delete
+find "$BACKUP_DIR" -type f -name "*.sql.gz" -mtime +7 -delete
 
 print_info "🎉 배포 완료!"
 print_info "접속 주소:"
 print_info "  - API: https://ezstay-api.duckdns.org/api"
 print_info "  - App: https://ezstay-api.duckdns.org/app"
 print_info "  - Admin: https://ezstay-api.duckdns.org/admin"
+print_info ""
+print_info "헬스체크 응답:"
+curl -s "$HEALTH_CHECK_URL" | jq '.' 2>/dev/null || curl -s "$HEALTH_CHECK_URL"
 EOF
 
 chmod +x /opt/ezstay/deploy.sh
 ```
+
+**개선 사항**:
+- ✅ 환경변수에서 DB 비밀번호 자동 로드 (하드코딩 제거)
+- ✅ 헬스체크 재시도 로직 (최대 12회, 5초 간격)
+- ✅ curl 타임아웃 설정 (연결: 3초, 전체: 5초)
+- ✅ 실패 시 PM2 로그 자동 출력
+- ✅ 배포 완료 시 헬스체크 응답 출력
 
 ### 2. 프론트엔드 배포 스크립트
 
