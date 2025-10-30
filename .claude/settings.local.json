@@ -35,7 +35,10 @@
       "Bash(git checkout:*)",
       "Bash(git push:*)",
       "Read(//c/Users/user/.claude/**)",
-      "Bash(if not exist c:studyezstay_backscripts mkdir c:studyezstay_backscripts)"
+      "Bash(if not exist c:studyezstay_backscripts mkdir c:studyezstay_backscripts)",
+      "Bash(git log:*)",
+      "SlashCommand(/sc:design \"Ezstay 프로젝트 AWS 프리티어 테스트 서버 배포 전체 아키텍처\n\n## 프로젝트 구성\n1. **백엔드 API**: Node.js/Express (c:\\study\\ezstay_back)\n   - 포트: 3000\n   - 의존성: MySQL, Redis, Firebase\n   - 환경변수: JWT, Kakao OAuth, Portone 결제\n   \n2. **플러터 웹앱**: Flutter Web (c:\\study\\ezstay_front\\building_map_app)\n   - 카카오맵, 카카오 로그인\n   - Firebase Auth/Firestore\n   - 백엔드 API 연동\n   \n3. **관리자 대시보드**: React + Vite (c:\\study\\admin-dashboard)\n   - TypeScript, Tailwind CSS\n   - 백엔드 API 연동\n\n## 서버 환경\n- AWS 프리티어 (EC2 t2.micro, 아마존 리눅스 2)\n- 1 vCPU, 1GB RAM 제약\n- 12개월 무료 기간\n\n## 설계 요구사항\n1. 3개 프로젝트를 단일 EC2 인스턴스에 배포\n2. Nginx 리버스 프록시 설정\n3. 도메인/서브도메인 전략\n4. SSL/HTTPS 설정 (Let's Encrypt)\n5. MySQL, Redis 설치 방법\n6. 메모리 최적화 (1GB RAM 내에서 운영)\n7. 배포 자동화 스크립트\n8. 모니터링 및 로그 관리\n9. Docker Compose vs 직접 설치 비교 및 추천\n10. CI/CD 파이프라인 (GitHub Actions 선택사항)\")",
+      "SlashCommand(/sc:design:*)"
     ],
     "deny": [],
     "ask": []

@@ -526,7 +526,163 @@ GET /api/admin/properties?page=1&limit=20&status=pending_review
 
 ---
 
-### 3. 매물 승인
+### 3. 매물 상세 조회
+
+**엔드포인트**: `GET /api/admin/properties/:roomId`
+
+**권한**: 모든 관리자
+
+**URL 파라미터**:
+- `roomId` (number): 방 ID
+
+**설명**:
+- 심사를 위해 특정 매물의 **모든 상세 정보**를 조회합니다.
+- 게스트용 API와 달리 **민감정보를 포함**합니다 (`entrancePassword`, `detailAddress`).
+- 모든 상태(`draft`, `pending_review`, `approved`, `rejected`, `published`)의 매물을 조회할 수 있습니다.
+
+**포함 데이터**:
+- ✅ 방 기본 정보 (모든 필드)
+- ✅ 요금 정보 (임대료, 관리비, 청소비, 할인율 등)
+- ✅ 호스트 정보 (이름, 이메일, 전화번호)
+- ✅ 모든 사진 (displayOrder 순)
+- ✅ 편의시설 (RoomAmenity)
+- ✅ 무료 부가서비스 (RoomFreeService)
+- ✅ 방 소개 (description, transportation, houseRules)
+- ✅ 민감정보 (entrancePassword, detailAddress)
+
+**사용 예시**:
+```http
+GET /api/admin/properties/78
+Authorization: Bearer {accessToken}
+```
+
+**응답 예시**:
+```json
+{
+  "success": true,
+  "message": "매물 상세 조회 성공",
+  "data": {
+    "id": 78,
+    "hostId": 1,
+    "roomName": "강남 신축 원룸",
+    "address": "서울 강남구 테헤란로 123",
+    "detailAddress": "101호",
+    "latitude": 37.5012345,
+    "longitude": 127.0398765,
+    "area": 25.5,
+    "floor": "4층",
+    "buildingType": "오피스텔",
+    "parkingAvailable": true,
+    "parkingInfo": "1대 가능",
+    "elevatorAvailable": true,
+    "roomCount": 1,
+    "bathroomCount": 1,
+    "livingRoomCount": 0,
+    "kitchenCount": 1,
+    "isDuplex": false,
+    "entrancePassword": "1234*",
+
+    "dailyRent": 50000,
+    "dailyMaintenanceFee": 5000,
+    "maintenanceDetail": "전기, 수도, 가스 포함",
+    "longTermWeeks": 4,
+    "longTermDiscount": 10,
+    "quickMoveIn": "3일 이내",
+    "quickMoveInDiscount": 5,
+    "includeElectricity": true,
+    "includeWater": true,
+    "includeGas": true,
+    "includeInternet": true,
+    "cleaningFee": 30000,
+    "minContractWeeks": 1,
+    "refundPolicy": "전액 환불",
+
+    "description": "깔끔하게 리모델링한 신축 원룸입니다.",
+    "transportation": "지하철 2호선 강남역 도보 5분, 버스 정류장 바로 앞",
+    "houseRules": "금연, 반려동물 불가",
+
+    "status": "pending_review",
+    "submittedAt": "2025-10-25T10:00:00.000Z",
+    "approvedAt": null,
+    "publishedAt": null,
+    "rejectionReason": null,
+
+    "createdAt": "2025-10-20T14:00:00.000Z",
+    "updatedAt": "2025-10-25T10:00:00.000Z",
+
+    "host": {
+      "id": 1,
+      "name": "홍길동",
+      "email": "hong@example.com",
+      "phoneNumber": "010-1234-5678",
+      "profileImageUrl": "/uploads/profiles/user1.jpg"
+    },
+
+    "photos": [
+      {
+        "id": 201,
+        "photoUrl": "http://localhost:3000/uploads/rooms/123/photo1.jpg",
+        "displayOrder": 1
+      },
+      {
+        "id": 202,
+        "photoUrl": "http://localhost:3000/uploads/rooms/123/photo2.jpg",
+        "displayOrder": 2
+      },
+      {
+        "id": 203,
+        "photoUrl": "http://localhost:3000/uploads/rooms/123/photo3.jpg",
+        "displayOrder": 3
+      }
+    ],
+
+    "amenity": {
+      "id": 45,
+      "roomId": 78,
+      "airConditioner": true,
+      "refrigerator": true,
+      "washingMachine": true,
+      "tv": true,
+      "wifi": true,
+      "microwave": true,
+      "gasStove": false,
+      "inductionStove": true,
+      "desk": true,
+      "closet": true,
+      "bed": true,
+      "shoeRack": true,
+      "createdAt": "2025-10-20T14:30:00.000Z",
+      "updatedAt": "2025-10-20T14:30:00.000Z"
+    },
+
+    "freeService": {
+      "id": 45,
+      "roomId": 78,
+      "bedding": true,
+      "toiletries": true,
+      "cookingUtensils": true,
+      "cleaningTools": false,
+      "cleaningToolImageUrl": null,
+      "amenityKit": true,
+      "createdAt": "2025-10-20T14:35:00.000Z",
+      "updatedAt": "2025-10-20T14:35:00.000Z"
+    }
+  }
+}
+```
+
+**에러 응답**:
+```json
+{
+  "success": false,
+  "code": 3003,
+  "message": "방을 찾을 수 없습니다."
+}
+```
+
+---
+
+### 4. 매물 승인
 
 **엔드포인트**: `POST /api/admin/properties/:roomId/approve`
 
@@ -565,7 +721,7 @@ GET /api/admin/properties?page=1&limit=20&status=pending_review
 
 ---
 
-### 4. 매물 반려
+### 5. 매물 반려
 
 **엔드포인트**: `POST /api/admin/properties/:roomId/reject`
 

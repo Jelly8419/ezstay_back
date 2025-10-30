@@ -310,8 +310,8 @@ if (!passwordValidation.valid) {
    - 민감정보 제외: `entrancePassword`, `hostId`, `detailAddress`, `status`
 
 ## API 문서
-- **일반 API**: `API_DOCUMENTATION.md` 파일 참조
-- **관리자 API**: `ADMIN_API_DOCUMENTATION.md` 파일 참조
+- **일반 API**: `docs\API_DOCUMENTATION.md` 파일 참조
+- **관리자 API**: `docs\ADMIN_API_DOCUMENTATION.md` 파일 참조
 
 ## 관리자 기능 (2025-10-27 추가, v2.0.0 업데이트)
 
@@ -407,4 +407,4 @@ async function createAdmin() {
 createAdmin();
 ```
 
-상세한 관리자 API 문서는 `ADMIN_API_DOCUMENTATION.md` 파일을 참조하세요.
+상세한 관리자 API 문서는 `docs\ADMIN_API_DOCUMENTATION.md` 파일을 참조하세요.
