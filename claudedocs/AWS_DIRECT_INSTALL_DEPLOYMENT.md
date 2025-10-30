@@ -3,7 +3,7 @@
 > **환경**: 개발 및 기능 테스트용 테스트 서버
 > **인스턴스**: AWS EC2 t2.small (1 vCPU, 2GB RAM, 월 $17)
 > **용도**: 개발 중인 기능 테스트 및 버그 디버깅
-> **도메인**: api-test.ezstay.com, app-test.ezstay.com, admin-test.ezstay.com
+> **도메인**: ezstay-api.duckdns.org (무료 DuckDNS, 경로 기반 라우팅)
 
 ## 📋 목차
 1. [시스템 아키텍처](#시스템-아키텍처)
@@ -47,7 +47,10 @@
 환경: 테스트 서버 (Test)
 설정: NODE_ENV=development
 이유: 상세한 에러 로그로 디버깅 편의성 극대화
-도메인: api-test.ezstay.com (테스트 전용)
+도메인: ezstay-api.duckdns.org (무료 DuckDNS, 경로 기반 라우팅)
+백엔드: https://ezstay-api.duckdns.org/api
+프론트(Flutter): https://ezstay-api.duckdns.org/app
+관리자(React): https://ezstay-api.duckdns.org/admin
 ```
 
 ---
@@ -58,18 +61,20 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                    AWS EC2 Instance                         │
 │              t2.small (1 vCPU, 2GB RAM)                     │
-│                   Amazon Linux 2                             │
+│                 Amazon Linux 2023                            │
+│              Elastic IP: 98.94.160.132                       │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │         Nginx (Port 80, 443)                         │  │
 │  │     SSL Termination + Reverse Proxy                  │  │
+│  │     Domain: ezstay-api.duckdns.org                   │  │
 │  └──────────┬────────────────┬───────────────┬──────────┘  │
 │             │                │               │              │
 │  ┌──────────▼─────┐ ┌───────▼──────┐ ┌─────▼──────────┐  │
 │  │  Flutter Web   │ │ React Admin  │ │  Node.js API   │  │
-│  │app-test.ezstay │ │admin-test.ez │ │api-test.ezstay │  │
-│  │  (Static)      │ │   (Static)   │ │  PM2 (3000)    │  │
+│  │   /app/*       │ │  /admin/*    │ │    /api/*      │  │
+│  │  (Static)      │ │   (Static)   │ │  PM2 (8080)    │  │
 │  └────────────────┘ └──────────────┘ └────────┬────────┘  │
 │                                                │            │
 │  ┌─────────────────┐  ┌──────────────────────▼─────────┐  │
@@ -85,10 +90,11 @@
 │  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 
-외부 연결:
-  HTTPS (443) → Nginx → app-test.ezstay.com (Flutter)
-  HTTPS (443) → Nginx → admin-test.ezstay.com (React)
-  HTTPS (443) → Nginx → api-test.ezstay.com (Node.js:3000)
+외부 연결 (경로 기반 라우팅):
+  https://ezstay-api.duckdns.org/app   → Flutter Web (Static)
+  https://ezstay-api.duckdns.org/admin → React Admin (Static)
+  https://ezstay-api.duckdns.org/api   → Node.js API (8080)
+  https://ezstay-api.duckdns.org/uploads → Static Files
   HTTP (80) → Redirect to HTTPS
 ```
 
@@ -587,7 +593,7 @@ sudo vim /etc/nginx/sites-available/ezstay.conf
 
 server {
     listen 80;
-    server_name api-test.ezstay.com app-test.ezstay.com admin-test.ezstay.com;
+    server_name ezstay-api.duckdns.org;
 
     # Let's Encrypt ACME Challenge
     location /.well-known/acme-challenge/ {
@@ -684,7 +690,7 @@ JWT_REFRESH_SECRET=your_super_secret_refresh_key_minimum_32_characters_long_rand
 # Kakao OAuth (테스트용 콜백 URL)
 KAKAO_CLIENT_ID=your_kakao_rest_api_key
 KAKAO_CLIENT_SECRET=your_kakao_client_secret
-KAKAO_CALLBACK_URL=https://api-test.ezstay.com/api/auth/oauth/kakao/callback
+KAKAO_CALLBACK_URL=https://ezstay-api.duckdns.org/api/auth/oauth/kakao/callback
 
 # Uploads
 UPLOADS_PUBLIC_PATH=/uploads
@@ -754,11 +760,11 @@ class EnvConfig {
 ```bash
 # 💡 환경별 빌드/실행 명령어:
 # - 로컬 실행: flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:8080
-# - 테스트 빌드: flutter build web --release --dart-define=API_BASE_URL=https://api-test.ezstay.com
+# - 테스트 빌드: flutter build web --release --dart-define=API_BASE_URL=https://ezstay-api.duckdns.org
 # - 프로덕션 빌드: flutter build web --release --dart-define=API_BASE_URL=https://api.ezstay.com
 
 # 테스트 환경 빌드
-flutter build web --release --dart-define=API_BASE_URL=https://api-test.ezstay.com
+flutter build web --release --dart-define=API_BASE_URL=https://ezstay-api.duckdns.org
 
 # 빌드 결과물을 서버로 업로드 (SCP 사용)
 scp -i C:\Users\user\Downloads\ezstay-key.pem -r build\web ec2-user@54.180.123.45:/opt/ezstay/frontend/flutter/
@@ -803,7 +809,7 @@ vim .env.test
 
 ```.env.test
 # 테스트 서버 환경
-VITE_API_BASE_URL=https://api-test.ezstay.com
+VITE_API_BASE_URL=https://ezstay-api.duckdns.org
 ```
 
 ```bash
@@ -858,78 +864,94 @@ sudo chown -R nginx:nginx /var/www/admin
 
 ## SSL 인증서 설정
 
-### 1단계: 도메인 DNS 설정
+### 1단계: DuckDNS 무료 도메인 설정
 
-```bash
-# 도메인 등록 서비스 (가비아, Route53 등)에서 A 레코드 추가
+**DuckDNS란?**
+- 무료 동적 DNS 서비스 (https://www.duckdns.org)
+- 회원가입 불필요 (소셜 로그인만으로 사용)
+- Let's Encrypt SSL 인증서 완벽 지원
+- 테스트 서버에 이상적
 
-레코드 타입: A
-호스트명: api-test
-값: <EC2_Public_IP> (예: 54.180.123.45)
-TTL: 3600
+**DuckDNS 설정 방법**:
 
-레코드 타입: A
-호스트명: app-test
-값: <EC2_Public_IP>
-TTL: 3600
+1. **DuckDNS 웹사이트 접속**: https://www.duckdns.org
+2. **소셜 로그인** (Google, GitHub 등)
+3. **도메인 이름 등록**:
+   - 원하는 도메인 입력 (예: ezstay-api)
+   - 최종 도메인: `ezstay-api.duckdns.org`
+4. **IP 주소 입력**:
+   - EC2 Elastic IP 입력: `98.94.160.132`
+   - "update ip" 버튼 클릭
+5. **토큰 저장**: DuckDNS 토큰을 안전한 곳에 저장 (갱신용)
 
-레코드 타입: A
-호스트명: admin-test
-값: <EC2_Public_IP>
-TTL: 3600
-```
-
-**DNS 전파 확인 (5-10분 소요)**:
+**DNS 전파 확인 (즉시 반영)**:
 ```bash
 # 로컬 PC에서 확인
-nslookup api-test.ezstay.com
-nslookup app-test.ezstay.com
-nslookup admin-test.ezstay.com
+nslookup ezstay-api.duckdns.org
+
+# 출력 예시:
+# Server:  8.8.8.8
+# Address:  8.8.8.8
+#
+# Non-authoritative answer:
+# Name:    ezstay-api.duckdns.org
+# Address: 98.94.160.132
+
+# 서버에서도 확인
+curl -I http://ezstay-api.duckdns.org
+# HTTP/1.1 200 OK (Nginx 응답 확인)
 ```
 
-### 2단계: Certbot 설치
+### 2단계: Certbot 설치 (Amazon Linux 2023)
 
 ```bash
-# EPEL 리포지토리 추가
-sudo amazon-linux-extras install epel -y
+# ⚠️ Amazon Linux 2023은 amazon-linux-extras가 없음!
+# dnf 패키지 매니저 사용
 
 # Certbot 설치
-sudo yum install -y certbot python3-certbot-nginx
+sudo dnf install -y certbot python3-certbot-nginx
 
 # 버전 확인
 certbot --version
+# certbot 2.x.x
 ```
 
-### 3단계: SSL 인증서 발급
+### 3단계: SSL 인증서 발급 (단일 도메인)
 
 ```bash
-# 각 도메인별로 인증서 발급
+# DuckDNS 도메인에 대한 SSL 인증서 발급
 sudo certbot certonly --webroot \
   -w /var/www/certbot \
-  -d api-test.ezstay.com \
+  -d ezstay-api.duckdns.org \
   --email your-email@example.com \
   --agree-tos \
   --no-eff-email
 
-sudo certbot certonly --webroot \
-  -w /var/www/certbot \
-  -d app-test.ezstay.com \
-  --email your-email@example.com \
-  --agree-tos \
-  --no-eff-email
+# 💡 설명:
+# - --webroot: 웹루트 인증 방식 (Nginx가 80포트에서 실행 중)
+# - -w /var/www/certbot: ACME Challenge 파일 저장 위치
+# - -d ezstay-api.duckdns.org: 인증서를 발급받을 도메인
+# - --email: Let's Encrypt 알림 수신 이메일
+# - --agree-tos: 서비스 약관 동의
+# - --no-eff-email: EFF 이메일 수신 거부
 
-sudo certbot certonly --webroot \
-  -w /var/www/certbot \
-  -d admin-test.ezstay.com \
-  --email your-email@example.com \
-  --agree-tos \
-  --no-eff-email
+# 인증서 발급 성공 메시지:
+# Successfully received certificate.
+# Certificate is saved at: /etc/letsencrypt/live/ezstay-api.duckdns.org/fullchain.pem
+# Key is saved at:         /etc/letsencrypt/live/ezstay-api.duckdns.org/privkey.pem
 
 # 인증서 확인
 sudo ls -la /etc/letsencrypt/live/
+# total 4
+# drwx------ 3 root root  41 Oct 30 12:34 .
+# drwxr-xr-x 9 root root 108 Oct 30 12:34 ..
+# drwxr-xr-x 2 root root  93 Oct 30 12:34 ezstay-api.duckdns.org
+
+sudo ls -la /etc/letsencrypt/live/ezstay-api.duckdns.org/
+# cert.pem  chain.pem  fullchain.pem  privkey.pem  README
 ```
 
-### 4단계: 전체 Nginx 설정 (SSL 적용)
+### 4단계: 전체 Nginx 설정 (경로 기반 라우팅 + SSL)
 
 ```bash
 # 기존 임시 설정 백업
@@ -941,30 +963,32 @@ sudo vim /etc/nginx/sites-available/ezstay.conf
 
 ```nginx
 # /etc/nginx/sites-available/ezstay.conf
+# 경로 기반 라우팅: 단일 도메인에 모든 서비스 통합
 
 # HTTP → HTTPS 리다이렉트
 server {
     listen 80;
-    server_name api-test.ezstay.com app-test.ezstay.com admin-test.ezstay.com;
+    server_name ezstay-api.duckdns.org;
 
-    # Let's Encrypt ACME Challenge
+    # Let's Encrypt ACME Challenge (SSL 갱신용)
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }
 
+    # 나머지 모든 요청은 HTTPS로 리다이렉트
     location / {
         return 301 https://$host$request_uri;
     }
 }
 
-# HTTPS - Backend API
+# HTTPS - 모든 서비스 통합 (경로 기반)
 server {
     listen 443 ssl http2;
-    server_name api-test.ezstay.com;
+    server_name ezstay-api.duckdns.org;
 
-    # SSL 인증서
-    ssl_certificate /etc/letsencrypt/live/api-test.ezstay.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/api-test.ezstay.com/privkey.pem;
+    # SSL 인증서 (단일 인증서로 모든 서비스 보호)
+    ssl_certificate /etc/letsencrypt/live/ezstay-api.duckdns.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/ezstay-api.duckdns.org/privkey.pem;
 
     # SSL 설정
     ssl_protocols TLSv1.2 TLSv1.3;
@@ -972,41 +996,27 @@ server {
     ssl_prefer_server_ciphers on;
 
     # 보안 헤더
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header X-Frame-Options "DENY" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
     add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
 
     # 업로드 파일 크기 제한
     client_max_body_size 10M;
 
-    # Rate Limiting - 인증 API
-    location /api/auth {
-        limit_req zone=auth_limit burst=3 nodelay;
-
-        proxy_pass http://localhost:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_cache_bypass $http_upgrade;
-    }
-
-    # Rate Limiting - 일반 API
+    # ===========================
+    # Backend API (Node.js)
+    # ===========================
     location /api {
-        limit_req zone=api_limit burst=20 nodelay;
-
         proxy_pass http://localhost:8080;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket 지원 (채팅용)
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
         proxy_cache_bypass $http_upgrade;
 
         # 타임아웃 설정
@@ -1015,87 +1025,51 @@ server {
         proxy_read_timeout 60s;
     }
 
+    # ===========================
     # 업로드 파일 서빙
+    # ===========================
     location /uploads {
         alias /opt/ezstay/backend/uploads;
         expires 1y;
         add_header Cache-Control "public, immutable";
     }
 
-    # 헬스체크
-    location /health {
-        proxy_pass http://localhost:8080;
-        access_log off;
-    }
-}
+    # ===========================
+    # Flutter Web (SPA)
+    # ===========================
+    location /app {
+        alias /var/www/flutter;
+        index index.html;
+        try_files $uri $uri/ /app/index.html;
 
-# HTTPS - Flutter Web App
-server {
-    listen 443 ssl http2;
-    server_name app-test.ezstay.com;
-
-    # SSL 인증서
-    ssl_certificate /etc/letsencrypt/live/app-test.ezstay.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/app-test.ezstay.com/privkey.pem;
-
-    # SSL 설정
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-
-    # 보안 헤더
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-
-    # 루트 디렉토리
-    root /var/www/flutter;
-    index index.html;
-
-    # SPA 라우팅 지원
-    location / {
-        try_files $uri $uri/ /index.html;
+        # 정적 파일 캐싱
+        location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
     }
 
-    # 정적 파일 캐싱
-    location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
-    }
-}
+    # ===========================
+    # React Admin (SPA)
+    # ===========================
+    location /admin {
+        alias /var/www/admin;
+        index index.html;
+        try_files $uri $uri/ /admin/index.html;
 
-# HTTPS - React Admin Dashboard
-server {
-    listen 443 ssl http2;
-    server_name admin-test.ezstay.com;
-
-    # SSL 인증서
-    ssl_certificate /etc/letsencrypt/live/admin-test.ezstay.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/admin-test.ezstay.com/privkey.pem;
-
-    # SSL 설정
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-
-    # 보안 헤더
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header X-Frame-Options "DENY" always;
-    add_header X-Content-Type-Options "nosniff" always;
-
-    # 루트 디렉토리
-    root /var/www/admin;
-    index index.html;
-
-    # SPA 라우팅 지원
-    location / {
-        try_files $uri $uri/ /index.html;
+        # 정적 파일 캐싱
+        location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
     }
 
-    # 정적 파일 캐싱
-    location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
+    # ===========================
+    # 루트 경로 (기본 페이지)
+    # ===========================
+    location = / {
+        return 200 'Ezstay API Server\nAvailable paths:\n- /api (Backend API)\n- /app (Flutter Web)\n- /admin (React Admin)';
+        add_header Content-Type text/plain;
     }
 }
 ```
@@ -1108,19 +1082,57 @@ sudo nginx -t
 sudo systemctl restart nginx
 ```
 
-### 5단계: SSL 자동 갱신 설정
+### 5단계: SSL 자동 갱신 설정 (Webroot 방식)
+
+**중요**: Certbot 갱신 시 webroot 인증 방식을 사용해야 Nginx와 포트 충돌이 발생하지 않습니다.
 
 ```bash
-# Certbot 자동 갱신 테스트
-sudo certbot renew --dry-run
+# 갱신 설정 파일 편집
+sudo vim /etc/letsencrypt/renewal/ezstay-api.duckdns.org.conf
+```
+
+```ini
+# /etc/letsencrypt/renewal/ezstay-api.duckdns.org.conf
+# 아래 내용이 있는지 확인 (없으면 추가)
+
+[renewalparams]
+account = YOUR_ACCOUNT_ID
+authenticator = webroot
+webroot_path = /var/www/certbot
+server = https://acme-v02.api.letsencrypt.org/directory
+
+[[webroot_map]]
+ezstay-api.duckdns.org = /var/www/certbot
+```
+
+```bash
+# Certbot 자동 갱신 테스트 (webroot 방식)
+sudo certbot renew --dry-run --webroot -w /var/www/certbot
+
+# 성공 메시지:
+# Congratulations, all simulated renewals succeeded:
+#   /etc/letsencrypt/live/ezstay-api.duckdns.org/fullchain.pem (success)
 
 # Cron 작업 추가 (매일 새벽 3시)
 sudo crontab -e
 ```
 
 ```cron
-# 매일 새벽 3시에 SSL 인증서 자동 갱신
-0 3 * * * /usr/bin/certbot renew --quiet --post-hook "systemctl reload nginx"
+# 매일 새벽 3시에 SSL 인증서 자동 갱신 (webroot 방식)
+0 3 * * * /usr/bin/certbot renew --webroot -w /var/www/certbot --post-hook "systemctl reload nginx" --quiet
+```
+
+**갱신 실패 시 트러블슈팅**:
+```bash
+# 에러: "Could not bind TCP port 80 because it is already in use"
+# 원인: Certbot이 standalone 모드로 실행되어 Nginx와 포트 충돌
+
+# 해결: renewal 설정에 webroot 명시
+sudo vim /etc/letsencrypt/renewal/ezstay-api.duckdns.org.conf
+# authenticator = webroot 확인
+
+# 수동 갱신 테스트
+sudo certbot renew --webroot -w /var/www/certbot --dry-run
 ```
 
 ---
@@ -1213,9 +1225,9 @@ find $BACKUP_DIR -type f -name "*.sql.gz" -mtime +7 -delete
 
 print_info "🎉 배포 완료!"
 print_info "접속 주소:"
-print_info "  - API: https://api-test.ezstay.com"
-print_info "  - App: https://app-test.ezstay.com"
-print_info "  - Admin: https://admin-test.ezstay.com"
+print_info "  - API: https://ezstay-api.duckdns.org/api"
+print_info "  - App: https://ezstay-api.duckdns.org/app"
+print_info "  - Admin: https://ezstay-api.duckdns.org/admin"
 EOF
 
 chmod +x /opt/ezstay/deploy.sh
@@ -1440,10 +1452,10 @@ echo "========================================"
 # 로컬 확인
 check_service "http://localhost:8080/health" "Backend API (Local)"
 
-# HTTPS 확인
-check_service "https://api-test.ezstay.com/health" "Backend API (HTTPS)"
-check_service "https://app-test.ezstay.com" "Flutter Web"
-check_service "https://admin-test.ezstay.com" "React Admin"
+# HTTPS 확인 (경로 기반)
+check_service "https://ezstay-api.duckdns.org/api/health" "Backend API (HTTPS)"
+check_service "https://ezstay-api.duckdns.org/app" "Flutter Web"
+check_service "https://ezstay-api.duckdns.org/admin" "React Admin"
 
 # MySQL 연결
 if mysql -u ezstay_user -p'Your_Strong_Password_123!' -e "SELECT 1;" > /dev/null 2>&1; then
@@ -1857,17 +1869,18 @@ AWS 비용:
 - [ ] 백엔드 코드 배포
 - [ ] 환경변수 설정 (.env, NODE_ENV=development)
 - [ ] PM2로 백엔드 시작
-- [ ] Flutter Web 빌드 및 배포 (dart-define: API_BASE_URL=https://api-test.ezstay.com)
+- [ ] Flutter Web 빌드 및 배포 (dart-define: API_BASE_URL=https://ezstay-api.duckdns.org)
 - [ ] React Admin 환경변수 설정 (.env.test, build:test 스크립트)
-- [ ] React Admin 빌드 및 배포 (npm run build:test)
-- [ ] 도메인 DNS A 레코드 설정 (*-test.ezstay.com)
-- [ ] Let's Encrypt SSL 인증서 발급
-- [ ] Nginx SSL 설정 완료
+- [ ] React Admin 빌드 및 배포 (npm run build:test, VITE_API_BASE_URL=https://ezstay-api.duckdns.org)
+- [ ] DuckDNS 도메인 등록 (ezstay-api.duckdns.org → Elastic IP)
+- [ ] Let's Encrypt SSL 인증서 발급 (단일 도메인)
+- [ ] Nginx 경로 기반 라우팅 설정 (/api, /app, /admin)
+- [ ] SSL 갱신 webroot 설정 확인
 - [ ] 헬스체크 확인 (./healthcheck.sh)
 - [ ] 자동 백업 Cron 등록 (선택사항)
 - [ ] Fail2Ban 설치 (선택사항)
 - [ ] 모니터링 스크립트 설정
-- [ ] 카카오 개발자 콘솔에서 테스트 도메인 콜백 URL 등록
+- [ ] 카카오 개발자 콘솔에서 DuckDNS 콜백 URL 등록 (https://ezstay-api.duckdns.org/api/auth/oauth/kakao/callback)
 
 ---
 
@@ -1885,12 +1898,12 @@ AWS 비용:
    - [ ] 별도 스테이징 서버 구축 (이 가이드 재사용)
    - [ ] NODE_ENV=production으로 변경
    - [ ] npm ci --omit=dev로 프로덕션 의존성만 설치
-   - [ ] 도메인: api-staging.ezstay.com
+   - [ ] 도메인: 독립된 DuckDNS 또는 유료 도메인 (예: staging.ezstay.com)
    - [ ] 프로덕션 배포 전 최종 검증
 
 3. **프로덕션 배포 준비**
    - [ ] 프로덕션 서버 구축 (동일한 가이드 활용)
-   - [ ] 도메인: api.ezstay.com (테스트 없음)
+   - [ ] 도메인: 유료 도메인 (예: api.ezstay.com, app.ezstay.com, admin.ezstay.com)
    - [ ] 고가용성 설정 (RDS, ElastiCache)
    - [ ] 모니터링 설정 (CloudWatch, Sentry)
    - [ ] 백업 자동화 (RDS 스냅샷)
@@ -1930,23 +1943,27 @@ AWS 비용:
 프론트엔드:
   React Admin:
     로컬: npm run dev (.env.development → localhost:8080)
-    테스트: npm run build:test (.env.test → api-test.ezstay.com)
+    테스트: npm run build:test (.env.test → ezstay-api.duckdns.org)
     프로덕션: npm run build:prod (.env.production → api.ezstay.com)
 
   Flutter Web:
     로컬: flutter run --dart-define=API_BASE_URL=http://localhost:8080
-    테스트: flutter build web --dart-define=API_BASE_URL=https://api-test.ezstay.com
+    테스트: flutter build web --dart-define=API_BASE_URL=https://ezstay-api.duckdns.org
     프로덕션: flutter build web --dart-define=API_BASE_URL=https://api.ezstay.com
 
-도메인:
-  - api-test.ezstay.com (백엔드 API)
-  - app-test.ezstay.com (Flutter Web)
-  - admin-test.ezstay.com (React Admin)
+도메인 (경로 기반 라우팅):
+  단일 도메인: ezstay-api.duckdns.org
+  - https://ezstay-api.duckdns.org/api (백엔드 API)
+  - https://ezstay-api.duckdns.org/app (Flutter Web)
+  - https://ezstay-api.duckdns.org/admin (React Admin)
+  - https://ezstay-api.duckdns.org/uploads (정적 파일)
 ```
 
 ---
 
 **작성일**: 2025-10-30
-**버전**: 3.0.0 (테스트 서버)
-**환경**: AWS EC2 t2.small 테스트 서버
+**최종 수정**: 2025-10-31 (DuckDNS + 경로 기반 라우팅 반영)
+**버전**: 4.0.0 (테스트 서버)
+**환경**: AWS EC2 t2.small + Amazon Linux 2023 + DuckDNS
+**아키텍처**: 단일 도메인 경로 기반 라우팅 (ezstay-api.duckdns.org)
 **문의**: ezstay-dev@example.com

@@ -2,6 +2,7 @@ const { Room, RoomPhoto, RoomAmenity, RoomFreeService, User, RentalItem } = requ
 const { Op } = require('sequelize');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
 const { safeRedisOperation } = require('../config/redis');
+const crypto = require('crypto');
 
 const createRoom = async (req, res) => {
   try {
@@ -199,7 +200,7 @@ const getRoomById = async (req, res) => {
 };
 
 /**
- * 지도 영역 내 방 목록 조회 (카카오맵 클러스터링용 + Redis 캐싱)
+ * 지도 영역 내 방 목록 조회 (카카오맵 클러스터링용 + Redis 캐싱 + HTTP 캐싱 + 사전 캐싱)
  * @route GET /api/rooms/map
  * @query {number} swLat - 남서쪽 위도 (Southwest Latitude)
  * @query {number} swLng - 남서쪽 경도 (Southwest Longitude)
@@ -211,6 +212,24 @@ const getRoomById = async (req, res) => {
 const getRoomsForMap = async (req, res) => {
   try {
     const { swLat, swLng, neLat, neLng, zoom } = req.query;
+
+    // === Phase 1: ETag 생성 및 HTTP 캐싱 ===
+    const coordString = `${swLat},${swLng},${neLat},${neLng},${zoom || 'default'}`;
+    const coordHash = crypto.createHash('md5').update(coordString).digest('hex').substring(0, 16);
+
+    // 데이터 버전 조회 (매물 변경 시 증가)
+    const dataVersion = await safeRedisOperation(async (client) => {
+      return await client.get('rooms:data:version');
+    }) || '1';
+
+    const etag = `"${coordHash}-v${dataVersion}"`;
+
+    // 클라이언트 ETag 확인 (브라우저 캐시 검증)
+    if (req.headers['if-none-match'] === etag) {
+      console.log('✅ HTTP 304 Not Modified - 브라우저 캐시 사용');
+      return res.status(304).end(); // 데이터 전송 없음
+    }
+    // === Phase 1 끝 ===
 
     // 줌 레벨 6 이상(너무 축소된 상태)일 때는 매물을 보여주지 않음
     if (zoom) {
@@ -297,6 +316,14 @@ const getRoomsForMap = async (req, res) => {
     if (cachedData) {
       console.log('✅ Cache HIT:', cacheKey);
       const parsedData = JSON.parse(cachedData);
+
+      // HTTP 캐싱 헤더 설정
+      res.set({
+        'ETag': etag,
+        'Cache-Control': 'public, max-age=60, must-revalidate', // 1분 브라우저 캐시
+        'Vary': 'Accept-Encoding'
+      });
+
       return success(res, parsedData, '지도 영역 내 방 목록을 조회했습니다. (캐시)');
     }
 
@@ -369,6 +396,22 @@ const getRoomsForMap = async (req, res) => {
     });
     // === Redis 캐싱 저장 끝 ===
 
+    // === Phase 2: 서버 사이드 사전 캐싱 (비동기) ===
+    // 인접 영역 사전 캐싱 (응답 지연 없음)
+    setImmediate(() => {
+      prefetchAdjacentAreas(swLatNum, swLngNum, neLatNum, neLngNum, zoom).catch(err => {
+        console.error('사전 캐싱 실패:', err.message);
+      });
+    });
+    // === Phase 2 끝 ===
+
+    // HTTP 캐싱 헤더 설정
+    res.set({
+      'ETag': etag,
+      'Cache-Control': 'public, max-age=60, must-revalidate', // 1분 브라우저 캐시
+      'Vary': 'Accept-Encoding'
+    });
+
     return success(res, responseData, '지도 영역 내 방 목록을 조회했습니다.');
 
   } catch (err) {
@@ -376,6 +419,131 @@ const getRoomsForMap = async (req, res) => {
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
+
+/**
+ * 인접 8방향 영역 사전 캐싱
+ * @param {number} swLat - 현재 영역 남서쪽 위도
+ * @param {number} swLng - 현재 영역 남서쪽 경도
+ * @param {number} neLat - 현재 영역 북동쪽 위도
+ * @param {number} neLng - 현재 영역 북동쪽 경도
+ * @param {string} zoom - 줌 레벨
+ */
+async function prefetchAdjacentAreas(swLat, swLng, neLat, neLng, zoom) {
+  const latDiff = neLat - swLat;
+  const lngDiff = neLng - swLng;
+
+  // 인접 8방향 영역 계산
+  const adjacentAreas = [
+    // 북
+    { swLat: swLat + latDiff, swLng, neLat: neLat + latDiff, neLng },
+    // 남
+    { swLat: swLat - latDiff, swLng, neLat: neLat - latDiff, neLng },
+    // 동
+    { swLat, swLng: swLng + lngDiff, neLat, neLng: neLng + lngDiff },
+    // 서
+    { swLat, swLng: swLng - lngDiff, neLat, neLng: neLng - lngDiff },
+    // 북동 (대각선)
+    { swLat: swLat + latDiff, swLng: swLng + lngDiff, neLat: neLat + latDiff, neLng: neLng + lngDiff },
+    // 북서
+    { swLat: swLat + latDiff, swLng: swLng - lngDiff, neLat: neLat + latDiff, neLng: neLng - lngDiff },
+    // 남동
+    { swLat: swLat - latDiff, swLng: swLng + lngDiff, neLat: neLat - latDiff, neLng: neLng + lngDiff },
+    // 남서
+    { swLat: swLat - latDiff, swLng: swLng - lngDiff, neLat: neLat - latDiff, neLng: neLng - lngDiff }
+  ];
+
+  // 병렬로 사전 캐싱 (캐시 없는 경우만 DB 조회)
+  const prefetchPromises = adjacentAreas.map(area =>
+    cacheAreaIfNotExists(area, zoom)
+  );
+
+  await Promise.all(prefetchPromises);
+  console.log(`💾 인접 8방향 사전 캐싱 완료 (zoom: ${zoom})`);
+}
+
+/**
+ * 특정 영역의 캐시가 없으면 DB 조회 후 캐싱
+ * @param {object} area - 영역 좌표 (swLat, swLng, neLat, neLng)
+ * @param {string} zoom - 줌 레벨
+ */
+async function cacheAreaIfNotExists(area, zoom) {
+  const roundedSwLat = area.swLat.toFixed(4);
+  const roundedSwLng = area.swLng.toFixed(4);
+  const roundedNeLat = area.neLat.toFixed(4);
+  const roundedNeLng = area.neLng.toFixed(4);
+
+  const cacheKey = `rooms:map:${roundedSwLat},${roundedSwLng},${roundedNeLat},${roundedNeLng}:zoom${zoom || 'default'}`;
+
+  // 캐시 존재 여부 확인
+  const exists = await safeRedisOperation(async (client) => {
+    return await client.exists(cacheKey);
+  });
+
+  if (exists) {
+    console.log('⏭️  이미 캐시됨:', cacheKey);
+    return; // 이미 캐시되어 있으면 스킵
+  }
+
+  // DB 조회 후 캐싱
+  try {
+    const rooms = await Room.findAll({
+      where: {
+        status: 'published',
+        latitude: {
+          [Op.between]: [parseFloat(area.swLat), parseFloat(area.neLat)],
+          [Op.ne]: null
+        },
+        longitude: {
+          [Op.between]: [parseFloat(area.swLng), parseFloat(area.neLng)],
+          [Op.ne]: null
+        }
+      },
+      attributes: [
+        'id', 'roomName', 'address', 'latitude', 'longitude',
+        'dailyRent', 'area', 'roomCount', 'bathroomCount', 'buildingType'
+      ],
+      include: [{
+        model: RoomPhoto,
+        as: 'photos',
+        attributes: ['id', 'url'],
+        limit: 1,
+        required: false,
+        separate: true,
+        order: [['order', 'ASC']]
+      }],
+      limit: 500,
+      order: [['created_at', 'DESC']]
+    });
+
+    const mapData = rooms.map(room => ({
+      id: room.id,
+      roomName: room.roomName,
+      address: room.address,
+      latitude: parseFloat(room.latitude),
+      longitude: parseFloat(room.longitude),
+      dailyRent: room.dailyRent,
+      area: parseFloat(room.area),
+      roomCount: room.roomCount,
+      bathroomCount: room.bathroomCount,
+      buildingType: room.buildingType,
+      thumbnail: room.photos && room.photos.length > 0 ? room.photos[0].url : null
+    }));
+
+    const responseData = {
+      count: mapData.length,
+      rooms: mapData
+    };
+
+    // 10분 TTL로 캐싱 (인접 영역은 더 길게)
+    await safeRedisOperation(async (client) => {
+      await client.setEx(cacheKey, 600, JSON.stringify(responseData));
+    });
+
+    console.log('✨ 사전 캐싱 완료:', cacheKey, `(${mapData.length}개)`);
+  } catch (err) {
+    console.error('사전 캐싱 실패:', cacheKey, err.message);
+  }
+}
 
 module.exports = {
   createRoom,

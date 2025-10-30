@@ -50,6 +50,9 @@ router.get('/properties', adminController.getProperties);
 // 심사 대기 매물 목록
 router.get('/properties/pending-review', adminController.getPendingReviews);
 
+// 매물 상세 조회 (심사용) - ⚠️ pending-review 다음에 배치해야 함!
+router.get('/properties/:roomId', adminController.getPropertyDetail);
+
 // 매물 승인 (super_admin, admin만 가능)
 router.post(
   '/properties/:roomId/approve',

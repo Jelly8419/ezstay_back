@@ -2,6 +2,7 @@ const { success, error, ErrorCodes } = require('../utils/responseHelper');
 const { User, Room, Contract, RoomPhoto } = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('sequelize');
+const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 
 /**
  * 대시보드 통계 조회
@@ -328,9 +329,9 @@ const getProperties = async (req, res) => {
         {
           model: RoomPhoto,
           as: 'photos',
-          attributes: ['id', 'photoUrl'],
+          attributes: ['id', 'url'],
           limit: 1,
-          order: [['displayOrder', 'ASC']]
+          order: [['order', 'ASC']]
         }
       ]
     });
@@ -373,7 +374,7 @@ const getPendingReviews = async (req, res) => {
         {
           model: RoomPhoto,
           as: 'photos',
-          attributes: ['id', 'photoUrl', 'displayOrder']
+          attributes: ['id', 'url', 'order']
         }
       ]
     });
@@ -417,6 +418,9 @@ const approveProperty = async (req, res) => {
     room.approvedAt = new Date();
     await room.save();
 
+    // 캐시 무효화 (ETag 버전 증가)
+    await invalidateRoomCache();
+
     // TODO: 호스트에게 승인 알림 전송
 
     return success(res, room, '매물 승인 완료');
@@ -455,11 +459,76 @@ const rejectProperty = async (req, res) => {
     room.rejectionReason = rejectionReason;
     await room.save();
 
+    // 캐시 무효화 (ETag 버전 증가)
+    await invalidateRoomCache();
+
     // TODO: 호스트에게 반려 알림 전송
 
     return success(res, room, '매물 반려 완료');
   } catch (err) {
     console.error('매물 반려 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 매물 상세 조회 (관리자용 - 심사용)
+ * GET /api/admin/properties/:roomId
+ */
+const getPropertyDetail = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+
+    const room = await Room.findByPk(roomId, {
+      // 관리자는 모든 정보를 볼 수 있음 (민감정보 포함)
+      include: [
+        {
+          model: User,
+          as: 'host',
+          attributes: ['id', 'name', 'email', 'phoneNumber', 'profileImageUrl'],
+          required: false
+        },
+        {
+          model: RoomPhoto,
+          as: 'photos',
+          attributes: ['id', 'photoUrl', 'displayOrder'],
+          required: false,
+          separate: true, // N+1 방지
+          order: [['displayOrder', 'ASC']]
+        },
+        {
+          model: require('../models').RoomAmenity,
+          as: 'amenity',
+          required: false
+        },
+        {
+          model: require('../models').RoomFreeService,
+          as: 'freeService',
+          required: false
+        }
+      ]
+    });
+
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // BASE_URL 추가 (사진 URL)
+    const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
+    const roomData = room.toJSON();
+
+    if (roomData.photos && roomData.photos.length > 0) {
+      roomData.photos = roomData.photos.map(photo => ({
+        ...photo,
+        photoUrl: photo.photoUrl.startsWith('http')
+          ? photo.photoUrl
+          : `${baseUrl}${photo.photoUrl}`
+      }));
+    }
+
+    return success(res, roomData, '매물 상세 조회 성공');
+  } catch (err) {
+    console.error('매물 상세 조회 실패:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
 };
@@ -574,7 +643,7 @@ const getReservationDetail = async (req, res) => {
             {
               model: RoomPhoto,
               as: 'photos',
-              attributes: ['id', 'photoUrl', 'displayOrder']
+              attributes: ['id', 'url', 'order']
             }
           ]
         }
@@ -608,6 +677,7 @@ module.exports = {
   // 매물 관리
   getProperties,
   getPendingReviews,
+  getPropertyDetail,  // ✅ 추가
   approveProperty,
   rejectProperty,
 

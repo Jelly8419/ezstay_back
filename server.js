@@ -3,6 +3,7 @@ const { Sequelize } = require('sequelize');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const compression = require('compression');
 const path = require('path');
 require('dotenv').config();
 
@@ -11,19 +12,39 @@ const PORT = process.env.PORT || 3000;
 
 app.use(helmet());
 
+// gzip 압축 미들웨어 (모든 응답에 적용)
+app.use(compression({
+  level: 6, // 압축 레벨 (1-9, 기본 6)
+  threshold: 1024, // 1KB 이상만 압축
+  filter: (req, res) => {
+    // 압축 제외 요청 처리
+    if (req.headers['x-no-compression']) {
+      return false;
+    }
+    // compression 기본 필터 사용 (compressible MIME types만 압축)
+    return compression.filter(req, res);
+  }
+}));
+
 // CORS 설정
 const corsOptions = {
   origin: (origin, callback) => {
+    // origin이 없는 경우 (브라우저 직접 접속, Postman, curl 등)
+    // development 모드에서는 허용
+    if (!origin && process.env.NODE_ENV === 'development') {
+      return callback(null, true);
+    }
+
     // 개발 환경: 모든 localhost 허용
     if (process.env.NODE_ENV === 'development') {
-      if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
+      if (origin && (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1'))) {
         return callback(null, true);
       }
     }
 
-    // 프로덕션 환경: 환경변수로 지정된 도메인만 허용
+    // 환경변수로 지정된 도메인 허용 (개발/프로덕션 공통)
     const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [];
-    if (allowedOrigins.includes(origin)) {
+    if (origin && allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
 

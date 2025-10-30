@@ -1,6 +1,7 @@
 const { Room, RoomPhoto, RoomAmenity, RoomFreeService, sequelize } = require('../models');
 const { ErrorCodes, success, error, created, updated } = require('../utils/responseHelper');
 const { convertRoadAddressToCoordinates } = require('../utils/geocoding');
+const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 
 // 1. 기본 정보 등록
 const createRoom = async (req, res) => {
@@ -146,6 +147,9 @@ const updateBasicInfo = async (req, res) => {
 
     await transaction.commit();
 
+    // 지도 캐시 무효화 (roomName, address, area, buildingType, roomCount 등 변경)
+    await invalidateRoomCache();
+
     return updated(res, {
       roomId: room.id,
       status: room.status
@@ -204,6 +208,9 @@ const updatePricing = async (req, res) => {
       refundPolicy
     });
 
+    // 지도 캐시 무효화 (dailyRent 변경)
+    await invalidateRoomCache();
+
     return updated(res, { roomId: room.id }, '요금 정보가 저장되었습니다.');
   } catch (err) {
     console.error('Pricing update error:', err);
@@ -255,6 +262,9 @@ const uploadPhotos = async (req, res) => {
     }
 
     await transaction.commit();
+
+    // 지도 캐시 무효화 (thumbnail 변경)
+    await invalidateRoomCache();
 
     return success(res, { photoUrls }, '사진이 업로드되었습니다.');
   } catch (err) {
@@ -453,6 +463,9 @@ const submitReview = async (req, res) => {
       submittedAt: new Date()
     });
 
+    // 지도 캐시 무효화 (나중에 승인되면 지도에 표시됨)
+    await invalidateRoomCache();
+
     return success(res, {
       roomId: room.id,
       status: room.status,
@@ -498,6 +511,9 @@ const reorderPhotos = async (req, res) => {
 
     await transaction.commit();
 
+    // 지도 캐시 무효화 (thumbnail 순서 변경)
+    await invalidateRoomCache();
+
     return success(res, null, '사진 순서가 변경되었습니다.');
   } catch (err) {
     await transaction.rollback();
@@ -529,6 +545,9 @@ const deletePhoto = async (req, res) => {
     }
 
     await photo.destroy();
+
+    // 지도 캐시 무효화 (thumbnail 변경 가능)
+    await invalidateRoomCache();
 
     return success(res, null, '사진이 삭제되었습니다.');
   } catch (err) {
