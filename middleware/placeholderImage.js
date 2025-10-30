@@ -7,51 +7,37 @@ const path = require('path');
  */
 function placeholderImageMiddleware(req, res, next) {
   try {
-    // 실제 업로드 경로 (C:\study\uploads\rooms)
-    const uploadsPath = process.env.UPLOAD_PATH || 'C:\\study\\uploads\\rooms';
+    // 업로드 루트 경로 (C:\study\uploads)
+    const uploadsRoot = process.env.UPLOAD_PATH ? path.dirname(process.env.UPLOAD_PATH) : 'C:\\study\\uploads';
 
-    console.log('[PlaceholderImage] 요청 경로:', req.path);
-    console.log('[PlaceholderImage] 업로드 경로:', uploadsPath);
+    // 요청된 파일의 전체 경로 생성
+    // /rooms/room-xxx.png -> C:\study\uploads\rooms\room-xxx.png
+    // /dummy/room1.jpg -> C:\study\uploads\dummy\room1.jpg
+    const requestedFile = path.join(uploadsRoot, req.path);
 
-    // 요청된 파일 경로 생성
-    // server.js에서 app.use('/uploads', ...)로 설정되어 있으므로
-    // req.path에는 /uploads가 이미 제거되어 있음
-    // 예: /rooms/room-xxx.png -> C:\study\uploads\rooms\room-xxx.png
-    // /rooms 부분만 제거하면 됨
-    const relativePath = req.path.replace(/^\/rooms\/?/, '');
-    const requestedFile = path.join(uploadsPath, relativePath);
-
-    console.log('[PlaceholderImage] 상대 경로:', relativePath);
-    console.log('[PlaceholderImage] 요청된 파일:', requestedFile);
-
-    // 파일이 존재하면 정상적으로 처리
+    // 파일이 존재하면 정상적으로 전송
     if (fs.existsSync(requestedFile)) {
-      console.log('[PlaceholderImage] 파일 존재, 전송');
       return res.sendFile(requestedFile);
     }
 
-    console.log('[PlaceholderImage] 파일 없음, dummy_room 찾기');
-
-    // 파일이 없으면 dummy_room 이미지 찾기
+    // 파일이 없으면 dummy_room 기본 이미지 찾기
+    const roomsPath = path.join(uploadsRoot, 'rooms');
     const dummyImageExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
     let dummyImagePath = null;
 
     for (const ext of dummyImageExtensions) {
-      const testPath = path.join(uploadsPath, `dummy_room${ext}`);
+      const testPath = path.join(roomsPath, `dummy_room${ext}`);
       if (fs.existsSync(testPath)) {
         dummyImagePath = testPath;
-        console.log('[PlaceholderImage] dummy_room 발견:', dummyImagePath);
         break;
       }
     }
 
     // dummy_room 이미지가 있으면 반환
     if (dummyImagePath) {
-      console.log('[PlaceholderImage] dummy_room 전송');
       return res.sendFile(dummyImagePath);
     }
 
-    console.log('[PlaceholderImage] SVG placeholder 생성');
     // dummy_room 이미지도 없으면 SVG placeholder 생성
     return res.type('svg').send(generatePlaceholderSVG(req.path));
   } catch (error) {
