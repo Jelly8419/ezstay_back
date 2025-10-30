@@ -7,7 +7,8 @@ const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process
   timezone: '+09:00',
   dialectOptions: {
     timezone: '+09:00'
-  }
+  },
+  logging: false
 });
 
 /**
