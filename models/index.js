@@ -31,8 +31,14 @@ const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process
     acquire: 30000,
     idle: 10000
   },
+<<<<<<< HEAD
   // 쿼리 로그 강제 비활성화 (환경변수 무시하고 무조건 끄기)
   logging: false
+=======
+  // 환경별 로깅 설정
+  // false: 로그 끄기 | console.log: 모든 쿼리 | 커스텀 함수: 필터링
+  logging: false  // 강제로 모든 쿼리 로그 비활성화 (개발 중 필요시 true로 변경)
+>>>>>>> 462cebd041445de3be154f18bf05b0f67c39cab9
 });
 
 // Admin 모델 초기화
