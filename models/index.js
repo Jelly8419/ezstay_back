@@ -33,14 +33,7 @@ const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process
   },
   // 환경별 로깅 설정
   // false: 로그 끄기 | console.log: 모든 쿼리 | 커스텀 함수: 필터링
-  logging: process.env.DB_LOGGING === 'true'
-    ? (msg) => {
-        // ALTER, SHOW INDEX 등 DDL 쿼리 제외
-        if (!msg.includes('ALTER TABLE') && !msg.includes('SHOW INDEX')) {
-          console.log(msg);
-        }
-      }
-    : false
+  logging: false  // 강제로 모든 쿼리 로그 비활성화 (개발 중 필요시 true로 변경)
 });
 
 // Admin 모델 초기화
