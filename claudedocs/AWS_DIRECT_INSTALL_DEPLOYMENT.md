@@ -767,7 +767,7 @@ class EnvConfig {
 flutter build web --release --dart-define=API_BASE_URL=https://ezstay-api.duckdns.org
 
 # 빌드 결과물을 서버로 업로드 (SCP 사용)
-scp -i C:\Users\user\Downloads\ezstay-key.pem -r build\web ec2-user@54.180.123.45:/opt/ezstay/frontend/flutter/
+scp -i C:\Users\user\Downloads\ezstay-key.pem -r build\web ec2-user@98.94.160.132:/opt/ezstay/frontend/flutter/
 ```
 
 **서버에서 배포**:
