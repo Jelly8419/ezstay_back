@@ -1,4 +1,4 @@
-const { Room, RoomPhoto, RoomAmenity, RoomFreeService, User, RentalItem } = require('../models');
+const { Room, RoomPhoto, RoomAmenity, RoomFreeService, User, RentalItem, Contract } = require('../models');
 const { Op } = require('sequelize');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
 const { safeRedisOperation } = require('../config/redis');
@@ -211,10 +211,49 @@ const getRoomById = async (req, res) => {
  */
 const getRoomsForMap = async (req, res) => {
   try {
-    const { swLat, swLng, neLat, neLng, zoom } = req.query;
+    const { swLat, swLng, neLat, neLng, zoom, checkIn, checkOut } = req.query;
+
+    // === 날짜 필터 검증 ===
+    if ((checkIn && !checkOut) || (!checkIn && checkOut)) {
+      return error(res, {
+        code: 4005,
+        message: '입실일과 퇴실일을 모두 입력해주세요.'
+      }, 400);
+    }
+
+    if (checkIn && checkOut) {
+      const checkInDate = new Date(checkIn);
+      const checkOutDate = new Date(checkOut);
+
+      if (isNaN(checkInDate.getTime()) || isNaN(checkOutDate.getTime())) {
+        return error(res, {
+          code: 4006,
+          message: '유효하지 않은 날짜 형식입니다. (YYYY-MM-DD)'
+        }, 400);
+      }
+
+      if (checkInDate >= checkOutDate) {
+        return error(res, {
+          code: 4007,
+          message: '퇴실일은 입실일보다 이후여야 합니다.'
+        }, 400);
+      }
+
+      // 과거 날짜 체크 (선택적)
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (checkInDate < today) {
+        return error(res, {
+          code: 4008,
+          message: '과거 날짜로 검색할 수 없습니다.'
+        }, 400);
+      }
+    }
+    // === 날짜 필터 검증 끝 ===
 
     // === Phase 1: ETag 생성 및 HTTP 캐싱 ===
-    const coordString = `${swLat},${swLng},${neLat},${neLng},${zoom || 'default'}`;
+    const dateFilter = checkIn && checkOut ? `${checkIn}_${checkOut}` : 'any';
+    const coordString = `${swLat},${swLng},${neLat},${neLng},${zoom || 'default'},${dateFilter}`;
     const coordHash = crypto.createHash('md5').update(coordString).digest('hex').substring(0, 16);
 
     // 데이터 버전 조회 (매물 변경 시 증가)
@@ -306,7 +345,7 @@ const getRoomsForMap = async (req, res) => {
     const roundedNeLat = neLatNum.toFixed(4);
     const roundedNeLng = neLngNum.toFixed(4);
 
-    const cacheKey = `rooms:map:${roundedSwLat},${roundedSwLng},${roundedNeLat},${roundedNeLng}:zoom${zoom || 'default'}`;
+    const cacheKey = `rooms:map:${roundedSwLat},${roundedSwLng},${roundedNeLat},${roundedNeLng}:zoom${zoom || 'default'}:date${dateFilter}`;
 
     // Redis 캐시 확인
     const cachedData = await safeRedisOperation(async (client) => {
@@ -330,19 +369,49 @@ const getRoomsForMap = async (req, res) => {
     console.log('❌ Cache MISS:', cacheKey, '- DB 조회 중...');
     // === Redis 캐싱 로직 끝 ===
 
-    // 좌표 범위 내 방 조회 (DB)
-    const rooms = await Room.findAll({
-      where: {
-        status: 'published',
-        latitude: {
-          [Op.between]: [swLatNum, neLatNum],
-          [Op.ne]: null // null 값 제외
+    // === 날짜 필터: 예약 불가능한 방 조회 ===
+    let excludeRoomIds = [];
+    if (checkIn && checkOut) {
+      const unavailableRooms = await Contract.findAll({
+        attributes: ['roomId'],
+        where: {
+          status: {
+            [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'APPROVED']
+          },
+          // 기간 겹침 체크: 기존 예약의 체크아웃이 검색 체크인 이후 && 기존 예약의 체크인이 검색 체크아웃 이전
+          [Op.and]: [
+            { checkOutDate: { [Op.gte]: checkIn } },
+            { checkInDate: { [Op.lte]: checkOut } }
+          ]
         },
-        longitude: {
-          [Op.between]: [swLngNum, neLngNum],
-          [Op.ne]: null // null 값 제외
-        }
+        raw: true
+      });
+
+      excludeRoomIds = unavailableRooms.map(r => r.roomId);
+      console.log(`📅 날짜 필터 적용: ${checkIn} ~ ${checkOut} (제외된 방: ${excludeRoomIds.length}개)`);
+    }
+    // === 날짜 필터 끝 ===
+
+    // 좌표 범위 내 방 조회 (DB)
+    const whereClause = {
+      status: 'published',
+      latitude: {
+        [Op.between]: [swLatNum, neLatNum],
+        [Op.ne]: null // null 값 제외
       },
+      longitude: {
+        [Op.between]: [swLngNum, neLngNum],
+        [Op.ne]: null // null 값 제외
+      }
+    };
+
+    // 예약 불가능한 방 제외
+    if (excludeRoomIds.length > 0) {
+      whereClause.id = { [Op.notIn]: excludeRoomIds };
+    }
+
+    const rooms = await Room.findAll({
+      where: whereClause,
       attributes: [
         'id',
         'roomName',
