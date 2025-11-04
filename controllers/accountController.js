@@ -135,7 +135,6 @@ const getBankNameByCode = (bankCode) => {
 const verifyAccount = async (req, res) => {
   try {
     const { bank_code, account_num, account_holder_name } = req.body;
-    const userId = req.user.id;
 
     // 입력값 검증
     if (!bank_code || !account_num || !account_holder_name) {

@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { verifyAccount, getUserAccount, deleteAccount } = require('../controllers/accountController');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, optionalAuth } = require('../middleware/auth');
 
-// 계좌 실명 확인
-router.post('/verify', authenticateToken, verifyAccount);
+// 계좌 실명 확인 (선택적 인증 - 회원가입 전후 모두 사용 가능)
+router.post('/verify', optionalAuth, verifyAccount);
 
 // 사용자 계좌 정보 조회
 router.get('/', authenticateToken, getUserAccount);
