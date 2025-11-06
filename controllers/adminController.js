@@ -228,9 +228,31 @@ const getUserDetail = async (req, res) => {
       attributes: { exclude: ['refreshToken'] },
       include: [
         {
-          model: Room,
-          as: 'rooms',
-          attributes: ['id', 'roomName', 'status', 'createdAt']
+          model: require('../models').LocalUser,
+          as: 'localProfile',
+          attributes: ['emailVerified', 'failedLoginAttempts', 'lockUntil'],
+          required: false
+        },
+        {
+          model: require('../models').SocialUser,
+          as: 'socialProfiles',
+          attributes: ['provider', 'providerEmail', 'createdAt'],
+          required: false
+        },
+        {
+          model: require('../models').UserBankAccount,
+          as: 'bankAccounts',
+          attributes: [
+            'id',
+            'bankName',
+            'accountNumber',
+            'accountHolder',
+            'isPrimary',
+            'isVerified',
+            'verifiedAt'
+          ],
+          required: false,
+          order: [['isPrimary', 'DESC'], ['createdAt', 'DESC']]
         }
       ]
     });
@@ -245,8 +267,35 @@ const getUserDetail = async (req, res) => {
     // 게스트인 경우 예약 횟수
     const guestReservationsCount = await Contract.count({ where: { guestId: userId } });
 
+    // 가입 유형 상세 정보 구성
+    const accountTypeDetail = user.userType === 'local'
+      ? {
+          type: 'email',
+          emailVerified: user.localProfile?.emailVerified || false,
+          failedLoginAttempts: user.localProfile?.failedLoginAttempts || 0,
+          isLocked: user.localProfile?.lockUntil && new Date(user.localProfile.lockUntil) > new Date()
+        }
+      : {
+          type: 'social',
+          providers: user.socialProfiles?.map(sp => ({
+            provider: sp.provider,
+            providerEmail: sp.providerEmail,
+            connectedAt: sp.createdAt
+          })) || []
+        };
+
+    // 계좌 인증 여부 확인
+    const hasVerifiedBankAccount = user.bankAccounts?.some(acc => acc.isVerified) || false;
+
+    // 응답 데이터 구성
+    const userData = user.toJSON();
+    delete userData.localProfile;
+    delete userData.socialProfiles;
+
     return success(res, {
-      ...user.toJSON(),
+      ...userData,
+      accountTypeDetail,
+      hasVerifiedBankAccount,
       hostRoomsCount,
       guestReservationsCount
     }, '유저 상세 조회 성공');
