@@ -2,7 +2,9 @@ const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController');
 const adminAuthController = require('../controllers/adminAuthController');
+const adminLogController = require('../controllers/adminLogController');
 const { authenticateAdmin, requireAdminRole } = require('../middleware/auth');
+const actionLogger = require('../middleware/actionLogger');
 
 /**
  * 관리자 인증 API (인증 불필요)
@@ -11,6 +13,9 @@ router.post('/auth/login', adminAuthController.login);
 
 // 이후 모든 라우트는 관리자 인증 필요
 router.use(authenticateAdmin);
+
+// 액션 로거 미들웨어 적용 (인증 후)
+router.use(actionLogger);
 
 // 관리자 인증 API (인증 필요)
 router.post('/auth/logout', adminAuthController.logout);
@@ -75,5 +80,29 @@ router.get('/reservations', adminController.getReservations);
 
 // 예약 상세
 router.get('/reservations/:contractId', adminController.getReservationDetail);
+
+/**
+ * 액션 로그 관리 (슈퍼 관리자만 접근 가능)
+ */
+// 액션 로그 목록
+router.get(
+  '/action-logs',
+  requireAdminRole(['super_admin']),
+  adminLogController.getActionLogs
+);
+
+// 액션 로그 통계
+router.get(
+  '/action-logs/stats',
+  requireAdminRole(['super_admin']),
+  adminLogController.getActionLogStats
+);
+
+// 액션 로그 상세
+router.get(
+  '/action-logs/:id',
+  requireAdminRole(['super_admin']),
+  adminLogController.getActionLogById
+);
 
 module.exports = router;

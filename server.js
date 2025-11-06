@@ -135,6 +135,10 @@ connectRedis();
 const { startContractScheduler } = require('./schedulers/contractScheduler');
 startContractScheduler();
 
+// 관리자 액션 로그 자동 정리 스케줄러 시작
+const cleanupActionLogs = require('./schedulers/cleanupActionLogs');
+cleanupActionLogs();
+
 // Firebase Admin SDK 초기화
 const { initializeFirebase } = require('./config/firebaseAdmin');
 initializeFirebase();

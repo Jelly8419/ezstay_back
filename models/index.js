@@ -3,6 +3,7 @@ const { User } = require('./User');
 const { LocalUser } = require('./LocalUser');
 const { SocialUser } = require('./SocialUser');
 const AdminModel = require('./Admin');
+const AdminActionLogModel = require('./AdminActionLog');
 const { Room } = require('./Room');
 const { RoomPhoto } = require('./RoomPhoto');
 const { RoomAmenity } = require('./RoomAmenity');
@@ -39,6 +40,7 @@ const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process
 
 // Admin 모델 초기화
 const Admin = AdminModel(sequelize);
+const AdminActionLog = AdminActionLogModel(sequelize);
 
 // 모델 관계 설정
 User.hasOne(LocalUser, {
@@ -177,12 +179,23 @@ ChatRoom.belongsTo(Room, {
   as: 'room'
 });
 
+// AdminActionLog 관계 설정
+AdminActionLog.belongsTo(Admin, {
+  foreignKey: 'adminId',
+  as: 'admin'
+});
+Admin.hasMany(AdminActionLog, {
+  foreignKey: 'adminId',
+  as: 'actionLogs'
+});
+
 module.exports = {
   sequelize,
   User,
   LocalUser,
   SocialUser,
   Admin,
+  AdminActionLog,
   Room,
   RoomPhoto,
   RoomAmenity,
