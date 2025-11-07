@@ -10,7 +10,9 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 
 // gzip 압축 미들웨어 (모든 응답에 적용)
 app.use(compression({
