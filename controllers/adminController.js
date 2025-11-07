@@ -1,8 +1,9 @@
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, RoomFreeService, UserBankAccount } = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
+const { calculateProgress } = require('../utils/roomProgress');
 
 /**
  * 대시보드 통계 조회
@@ -528,32 +529,36 @@ const getPropertyDetail = async (req, res) => {
   try {
     const { roomId } = req.params;
 
+    // Room 정보 조회 (호스트 검증 없음, 관리자는 모든 방 조회 가능)
     const room = await Room.findByPk(roomId, {
-      // 관리자는 모든 정보를 볼 수 있음 (민감정보 포함)
       include: [
-        {
-          model: User,
-          as: 'host',
-          attributes: ['id', 'name', 'email', 'phoneNumber', 'profileImageUrl'],
-          required: false
-        },
         {
           model: RoomPhoto,
           as: 'photos',
-          attributes: ['id', 'photoUrl', 'displayOrder'],
-          required: false,
-          separate: true, // N+1 방지
-          order: [['displayOrder', 'ASC']]
+          attributes: ['id', 'url', 'order'],
+          separate: true,
+          order: [['order', 'ASC']]
         },
         {
-          model: require('../models').RoomAmenity,
-          as: 'amenity',
-          required: false
+          model: RoomAmenity,
+          as: 'amenity'
         },
         {
-          model: require('../models').RoomFreeService,
-          as: 'freeService',
-          required: false
+          model: RoomFreeService,
+          as: 'freeService'
+        },
+        {
+          model: User,
+          as: 'host',
+          attributes: ['id', 'name', 'email', 'phoneNumber', 'phoneVerified'],
+          include: [
+            {
+              model: UserBankAccount,
+              as: 'bankAccounts',
+              attributes: ['id'],
+              limit: 1
+            }
+          ]
         }
       ]
     });
@@ -562,20 +567,111 @@ const getPropertyDetail = async (req, res) => {
       return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
-    // BASE_URL 추가 (사진 URL)
-    const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
-    const roomData = room.toJSON();
+    // 진행 단계 계산
+    const registrationProgress = calculateProgress(room);
 
-    if (roomData.photos && roomData.photos.length > 0) {
-      roomData.photos = roomData.photos.map(photo => ({
-        ...photo,
-        photoUrl: photo.photoUrl.startsWith('http')
-          ? photo.photoUrl
-          : `${baseUrl}${photo.photoUrl}`
-      }));
-    }
+    // 호스트 정보 가공
+    const hostInfo = {
+      id: room.host.id,
+      name: room.host.name,
+      email: room.host.email,
+      phoneNumber: room.host.phoneNumber,
+      phoneVerified: room.host.phoneVerified || false,
+      hasBankAccount: room.host.bankAccounts && room.host.bankAccounts.length > 0
+    };
 
-    return success(res, roomData, '매물 상세 조회 성공');
+    // 응답 데이터 구조화
+    const responseData = {
+      // 기본 정보
+      id: room.id,
+      roomName: room.roomName,
+      address: room.address,
+      detailAddress: room.detailAddress,  // 관리자는 상세주소 확인 가능
+      latitude: room.latitude,
+      longitude: room.longitude,
+      area: room.area,
+      floor: room.floor,
+      buildingType: room.buildingType,
+      parkingAvailable: room.parkingAvailable,
+      parkingInfo: room.parkingInfo,
+      elevatorAvailable: room.elevatorAvailable,
+      roomCount: room.roomCount,
+      bathroomCount: room.bathroomCount,
+      livingRoomCount: room.livingRoomCount,
+      kitchenCount: room.kitchenCount,
+      isDuplex: room.isDuplex,
+      entrancePassword: room.entrancePassword,  // 관리자는 현관 비밀번호 확인 가능
+
+      // 요금 정보 (1일 기준, 할인 기준은 주 단위)
+      dailyRent: room.dailyRent,
+      dailyMaintenanceFee: room.dailyMaintenanceFee,
+      longTermWeeks: room.longTermWeeks,
+      longTermDiscount: room.longTermDiscount,
+      quickMoveIn: room.quickMoveIn,
+      quickMoveInDiscount: room.quickMoveInDiscount,
+      maintenanceDetail: room.maintenanceDetail,
+      includeElectricity: room.includeElectricity,
+      includeWater: room.includeWater,
+      includeGas: room.includeGas,
+      includeInternet: room.includeInternet,
+      cleaningFee: room.cleaningFee,
+      minContractWeeks: room.minContractWeeks,
+      refundPolicy: room.refundPolicy,
+
+      // 사진
+      photos: room.photos.map(photo => ({
+        id: photo.id,
+        url: photo.url,
+        order: photo.order
+      })),
+
+      // 편의시설
+      amenities: room.amenity ? {
+        basicOptions: room.amenity.basicOptions,
+        additionalOptions: room.amenity.additionalOptions,
+        convenienceOptions: room.amenity.convenienceOptions,
+        petsAllowed: room.amenity.petsAllowed
+      } : null,
+
+      // 무료 부가서비스
+      freeServices: room.freeService ? {
+        agreeTerms: room.freeService.agreeTerms,
+        cleaningService: room.freeService.cleaningService,
+        cleaningToolImageUrl: room.freeService.cleaningToolImageUrl,
+        hairDryerRental: room.freeService.hairDryerRental,
+        beddingService: room.freeService.beddingService,
+        bedSizes: {
+          '슈퍼싱글': room.freeService.bedSizeSuperSingle,
+          '퀸': room.freeService.bedSizeQueen,
+          '킹': room.freeService.bedSizeKing
+        },
+        amenityKit: room.freeService.amenityKit,
+        autoPasswordChange: room.freeService.autoPasswordChange,
+        roomPassword: room.freeService.roomPassword
+      } : null,
+
+      // 방 소개
+      description: room.description,
+      transportation: room.transportation,
+      houseRules: room.houseRules,
+
+      // 상태
+      status: room.status,
+      submittedAt: room.submittedAt,
+      approvedAt: room.approvedAt,
+      publishedAt: room.publishedAt,
+      rejectionReason: room.rejectionReason,
+      createdAt: room.createdAt,
+      updatedAt: room.updatedAt,
+
+      // 호스트 정보
+      host: hostInfo,
+
+      // 등록 진행 상태
+      registrationProgress
+    };
+
+    return success(res, responseData, '매물 상세 조회 성공');
   } catch (err) {
     console.error('매물 상세 조회 실패:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);

@@ -563,7 +563,6 @@ Authorization: Bearer {accessToken}
   "message": "매물 상세 조회 성공",
   "data": {
     "id": 78,
-    "hostId": 1,
     "roomName": "강남 신축 원룸",
     "address": "서울 강남구 테헤란로 123",
     "detailAddress": "101호",
@@ -595,7 +594,62 @@ Authorization: Bearer {accessToken}
     "includeInternet": true,
     "cleaningFee": 30000,
     "minContractWeeks": 1,
-    "refundPolicy": "전액 환불",
+    "refundPolicy": "유연",
+
+    "photos": [
+      {
+        "id": 201,
+        "url": "/uploads/rooms/photo1.jpg",
+        "order": 0
+      },
+      {
+        "id": 202,
+        "url": "/uploads/rooms/photo2.jpg",
+        "order": 1
+      },
+      {
+        "id": 203,
+        "url": "/uploads/rooms/photo3.jpg",
+        "order": 2
+      }
+    ],
+
+    "amenities": {
+      "basicOptions": {
+        "bed": true,
+        "desk": true,
+        "closet": true,
+        "shoeRack": true
+      },
+      "additionalOptions": {
+        "airConditioner": true,
+        "refrigerator": true,
+        "washingMachine": true,
+        "tv": true
+      },
+      "convenienceOptions": {
+        "wifi": true,
+        "microwave": true,
+        "inductionStove": true
+      },
+      "petsAllowed": false
+    },
+
+    "freeServices": {
+      "agreeTerms": true,
+      "cleaningService": true,
+      "cleaningToolImageUrl": "/uploads/rooms/cleaning.jpg",
+      "hairDryerRental": true,
+      "beddingService": true,
+      "bedSizes": {
+        "슈퍼싱글": 1,
+        "퀸": 0,
+        "킹": 0
+      },
+      "amenityKit": true,
+      "autoPasswordChange": false,
+      "roomPassword": null
+    },
 
     "description": "깔끔하게 리모델링한 신축 원룸입니다.",
     "transportation": "지하철 2호선 강남역 도보 5분, 버스 정류장 바로 앞",
@@ -606,7 +660,6 @@ Authorization: Bearer {accessToken}
     "approvedAt": null,
     "publishedAt": null,
     "rejectionReason": null,
-
     "createdAt": "2025-10-20T14:00:00.000Z",
     "updatedAt": "2025-10-25T10:00:00.000Z",
 
@@ -615,57 +668,20 @@ Authorization: Bearer {accessToken}
       "name": "홍길동",
       "email": "hong@example.com",
       "phoneNumber": "010-1234-5678",
-      "profileImageUrl": "/uploads/profiles/user1.jpg"
+      "phoneVerified": true,
+      "hasBankAccount": true
     },
 
-    "photos": [
-      {
-        "id": 201,
-        "photoUrl": "http://localhost:3000/uploads/rooms/123/photo1.jpg",
-        "displayOrder": 1
-      },
-      {
-        "id": 202,
-        "photoUrl": "http://localhost:3000/uploads/rooms/123/photo2.jpg",
-        "displayOrder": 2
-      },
-      {
-        "id": 203,
-        "photoUrl": "http://localhost:3000/uploads/rooms/123/photo3.jpg",
-        "displayOrder": 3
+    "registrationProgress": {
+      "currentStep": "completed",
+      "completionRate": 100,
+      "steps": {
+        "basicInfo": true,
+        "pricing": true,
+        "photosAndAmenities": true,
+        "freeServices": true,
+        "description": true
       }
-    ],
-
-    "amenity": {
-      "id": 45,
-      "roomId": 78,
-      "airConditioner": true,
-      "refrigerator": true,
-      "washingMachine": true,
-      "tv": true,
-      "wifi": true,
-      "microwave": true,
-      "gasStove": false,
-      "inductionStove": true,
-      "desk": true,
-      "closet": true,
-      "bed": true,
-      "shoeRack": true,
-      "createdAt": "2025-10-20T14:30:00.000Z",
-      "updatedAt": "2025-10-20T14:30:00.000Z"
-    },
-
-    "freeService": {
-      "id": 45,
-      "roomId": 78,
-      "bedding": true,
-      "toiletries": true,
-      "cookingUtensils": true,
-      "cleaningTools": false,
-      "cleaningToolImageUrl": null,
-      "amenityKit": true,
-      "createdAt": "2025-10-20T14:35:00.000Z",
-      "updatedAt": "2025-10-20T14:35:00.000Z"
     }
   }
 }
