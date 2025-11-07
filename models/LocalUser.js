@@ -17,7 +17,6 @@ const LocalUser = sequelize.define('LocalUser', {
   userId: {
     type: DataTypes.INTEGER,
     allowNull: false,
-    unique: true,
     references: {
       model: 'users',
       key: 'id'
@@ -68,7 +67,9 @@ const LocalUser = sequelize.define('LocalUser', {
   underscored: true,
   indexes: [
     {
-      fields: ['user_id']
+      unique: true,
+      fields: ['user_id'],
+      name: 'local_users_user_id_unique'
     },
     {
       fields: ['password_reset_token']

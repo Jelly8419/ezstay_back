@@ -25,7 +25,6 @@ const ChatRoom = sequelize.define('ChatRoom', {
   contractId: {
     type: DataTypes.INTEGER,
     allowNull: false,
-    unique: true,
     field: 'contract_id',
     references: {
       model: 'contracts',
@@ -36,7 +35,6 @@ const ChatRoom = sequelize.define('ChatRoom', {
   firebaseChatRoomId: {
     type: DataTypes.STRING(100),
     allowNull: false,
-    unique: true,
     field: 'firebase_chat_room_id',
     comment: 'Firebase Firestore 채팅방 ID (예: contract_123)'
   },

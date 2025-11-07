@@ -5,14 +5,18 @@ const adminAuthController = require('../controllers/adminAuthController');
 const adminLogController = require('../controllers/adminLogController');
 const { authenticateAdmin, requireAdminRole } = require('../middleware/auth');
 const actionLogger = require('../middleware/actionLogger');
+const { adminAuthLimiter, adminApiLimiter } = require('../middleware/rateLimiter');
 
 /**
  * 관리자 인증 API (인증 불필요)
  */
-router.post('/auth/login', adminAuthController.login);
+router.post('/auth/login', adminAuthLimiter, adminAuthController.login);
 
 // 이후 모든 라우트는 관리자 인증 필요
 router.use(authenticateAdmin);
+
+// 관리자 API Rate Limiter 적용 (인증 후)
+router.use(adminApiLimiter);
 
 // 액션 로거 미들웨어 적용 (인증 후)
 router.use(actionLogger);
