@@ -1,6 +1,8 @@
 const cron = require('node-cron');
-const { Contract, sequelize } = require('../models');
+const { Contract, ChatRoom, sequelize } = require('../models');
 const { Op } = require('sequelize');
+const { sendSystemMessage } = require('../config/firebaseAdmin');
+const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 
 /**
  * 계약 상태 자동 업데이트 스케줄러
@@ -79,6 +81,28 @@ async function updatePaymentExpired() {
     // 입실날짜 당일 23:59:59까지는 만료 안 됨
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // 오늘 0시
 
+    // 먼저 만료될 계약들을 조회 (시스템 메시지 발송용)
+    const expiredContracts = await Contract.findAll({
+      where: {
+        status: 'APPROVED',
+        [Op.or]: [
+          // 승인일로부터 24시간 경과
+          { approvedAt: { [Op.lte]: oneDayAgo } },
+          // 입실날짜가 오늘보다 이전 (어제 이전)
+          { checkInDate: { [Op.lt]: todayStart } }
+        ]
+      },
+      include: [
+        {
+          model: ChatRoom,
+          as: 'chatRoom',
+          attributes: ['firebaseChatRoomId']
+        }
+      ],
+      transaction
+    });
+
+    // 계약 상태 업데이트
     const result = await Contract.update(
       {
         status: 'PAYMENT_EXPIRED',
@@ -88,9 +112,7 @@ async function updatePaymentExpired() {
         where: {
           status: 'APPROVED',
           [Op.or]: [
-            // 승인일로부터 24시간 경과
             { approvedAt: { [Op.lte]: oneDayAgo } },
-            // 입실날짜가 오늘보다 이전 (어제 이전)
             { checkInDate: { [Op.lt]: todayStart } }
           ]
         },
@@ -99,6 +121,22 @@ async function updatePaymentExpired() {
     );
 
     await transaction.commit();
+
+    // 시스템 메시지 발송 (트랜잭션 외부에서 비동기 실행)
+    if (expiredContracts.length > 0) {
+      expiredContracts.forEach(contract => {
+        if (contract.chatRoom) {
+          sendSystemMessage(
+            contract.chatRoom.firebaseChatRoomId,
+            getSystemMessageTemplate(SystemMessageTypes.PAYMENT_EXPIRED),
+            SystemMessageTypes.PAYMENT_EXPIRED,
+            { contractId: contract.id }
+          ).catch(err => {
+            console.error(`결제 만료 시스템 메시지 발송 실패 (계약 ID: ${contract.id}):`, err);
+          });
+        }
+      });
+    }
 
     if (result[0] > 0) {
       console.log(`[스케줄러] ${result[0]}건의 계약을 미결제 만료 처리했습니다.`);
