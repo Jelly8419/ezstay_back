@@ -4,8 +4,10 @@ const {
   createCustomToken,
   createChatRoomMetadata,
   getChatRoomMetadata,
-  getUserChatRooms
+  getUserChatRooms,
+  sendSystemMessage
 } = require('../config/firebaseAdmin');
+const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 const { Op } = require('sequelize');
 
 /**
@@ -452,10 +454,72 @@ const getChatRoomByContractId = async (req, res) => {
   }
 };
 
+/**
+ * 시스템 메시지 테스트 발송 (개발/테스트용)
+ * POST /api/chats/rooms/:chatRoomId/system-message
+ */
+const sendTestSystemMessage = async (req, res) => {
+  try {
+    const { chatRoomId } = req.params;
+    const { messageType, customText, metadata } = req.body;
+    const userId = req.user.id;
+
+    // 채팅방 조회 및 권한 확인
+    const chatRoom = await ChatRoom.findOne({
+      where: { firebaseChatRoomId: chatRoomId }
+    });
+
+    if (!chatRoom) {
+      return error(res, {
+        code: 3002,
+        message: '채팅방을 찾을 수 없습니다.'
+      }, 404);
+    }
+
+    // 권한 확인 (호스트 또는 게스트만)
+    if (chatRoom.hostId !== userId && chatRoom.guestId !== userId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    // 메시지 타입 검증
+    const validTypes = Object.values(SystemMessageTypes);
+    if (messageType && !validTypes.includes(messageType)) {
+      return error(res, {
+        code: 4000,
+        message: '유효하지 않은 시스템 메시지 타입입니다.',
+        validTypes
+      }, 400);
+    }
+
+    // 메시지 텍스트 생성
+    const messageText = customText || getSystemMessageTemplate(
+      messageType || SystemMessageTypes.IMPORTANT_NOTICE,
+      metadata || {}
+    );
+
+    // 시스템 메시지 발송
+    const result = await sendSystemMessage(
+      chatRoomId,
+      messageText,
+      messageType || SystemMessageTypes.IMPORTANT_NOTICE,
+      metadata || {}
+    );
+
+    return success(res, {
+      message: result,
+      chatRoomId
+    }, '시스템 메시지 발송 완료');
+  } catch (err) {
+    console.error('시스템 메시지 테스트 발송 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
 module.exports = {
   getCustomToken,
   createChatRoom,
   getMyChatRooms,
   getChatRoomDetail,
-  getChatRoomByContractId
+  getChatRoomByContractId,
+  sendTestSystemMessage
 };

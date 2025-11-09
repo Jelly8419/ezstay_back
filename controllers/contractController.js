@@ -8,7 +8,8 @@ const {
   cancelRentalItemReservations,
   validateDates
 } = require('../utils/contractHelper');
-const { createChatRoomMetadata } = require('../config/firebaseAdmin');
+const { createChatRoomMetadata, sendSystemMessage } = require('../config/firebaseAdmin');
+const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 
 /**
  * 계약 요청 생성 (게스트 -> 호스트)
@@ -762,6 +763,35 @@ const approveContract = async (req, res) => {
       });
 
       console.log(`✅ 채팅방 생성 완료: ${firebaseChatRoomId}`);
+
+      // 결제 마감 시한 계산 (승인일로부터 24시간 후)
+      const paymentDeadline = new Date(contract.approvedAt);
+      paymentDeadline.setHours(paymentDeadline.getHours() + 24);
+      const paymentDeadlineStr = paymentDeadline.toLocaleString('ko-KR', {
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: false
+      });
+
+      // 시스템 메시지 발송 (채팅방 생성 성공 시)
+      sendSystemMessage(
+        firebaseChatRoomId,
+        getSystemMessageTemplate(SystemMessageTypes.CONTRACT_APPROVED, {
+          paymentDeadline: paymentDeadlineStr
+        }),
+        SystemMessageTypes.CONTRACT_APPROVED,
+        {
+          contractId: contract.id,
+          checkInDate: contract.checkInDate,
+          checkOutDate: contract.checkOutDate,
+          paymentDeadline: paymentDeadlineStr
+        }
+      ).catch(err => {
+        console.error('시스템 메시지 발송 실패 (계약 승인은 완료됨):', err);
+      });
+
     } catch (chatRoomError) {
       console.error('채팅방 생성 실패 (계약 승인은 완료됨):', chatRoomError);
       // 채팅방 생성 실패해도 계약 승인은 계속 진행
@@ -845,6 +875,28 @@ const rejectContract = async (req, res) => {
       { transaction }
     );
 
+    // 채팅방이 있다면 시스템 메시지 발송 (거절 시에는 채팅방이 없을 수 있음)
+    const chatRoom = await ChatRoom.findOne({
+      where: { contractId },
+      transaction
+    });
+
+    if (chatRoom) {
+      sendSystemMessage(
+        chatRoom.firebaseChatRoomId,
+        getSystemMessageTemplate(SystemMessageTypes.CONTRACT_REJECTED, {
+          reason: hostMessage
+        }),
+        SystemMessageTypes.CONTRACT_REJECTED,
+        {
+          contractId: contract.id,
+          rejectionReason: hostMessage
+        }
+      ).catch(err => {
+        console.error('시스템 메시지 발송 실패 (계약 거절은 완료됨):', err);
+      });
+    }
+
     // TODO: 렌탈 아이템 예약 해제 (재고 복구)
     // TODO: 게스트에게 거절 알림 전송 (추후 구현)
 
@@ -920,6 +972,27 @@ const cancelContractByGuest = async (req, res) => {
       },
       { transaction }
     );
+
+    // 채팅방이 있다면 시스템 메시지 발송 (승인 대기 중 취소 시 채팅방이 없을 수 있음)
+    const chatRoom = await ChatRoom.findOne({
+      where: { contractId },
+      transaction
+    });
+
+    if (chatRoom) {
+      sendSystemMessage(
+        chatRoom.firebaseChatRoomId,
+        getSystemMessageTemplate(SystemMessageTypes.CONTRACT_CANCELED),
+        SystemMessageTypes.CONTRACT_CANCELED,
+        {
+          contractId: contract.id,
+          cancelledBy: 'guest',
+          cancellationReason: cancellationReason || null
+        }
+      ).catch(err => {
+        console.error('시스템 메시지 발송 실패 (계약 취소는 완료됨):', err);
+      });
+    }
 
     // TODO: 호스트에게 취소 알림 전송 (추후 구현)
     // await sendNotificationToHost(contract.hostId, { ... });

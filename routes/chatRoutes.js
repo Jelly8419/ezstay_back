@@ -5,7 +5,8 @@ const {
   createChatRoom,
   getMyChatRooms,
   getChatRoomDetail,
-  getChatRoomByContractId
+  getChatRoomByContractId,
+  sendTestSystemMessage
 } = require('../controllers/chatController');
 const { authenticateToken } = require('../middleware/auth');
 
@@ -28,5 +29,8 @@ router.get('/rooms/:chatRoomId', authenticateToken, getChatRoomDetail);
 
 // 계약 ID로 채팅방 조회
 router.get('/contracts/:contractId/room', authenticateToken, getChatRoomByContractId);
+
+// 시스템 메시지 테스트 발송 (개발/테스트용)
+router.post('/rooms/:chatRoomId/system-message', authenticateToken, sendTestSystemMessage);
 
 module.exports = router;
