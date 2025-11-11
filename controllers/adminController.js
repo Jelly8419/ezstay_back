@@ -1,5 +1,5 @@
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, RoomFreeService, UserBankAccount } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, RoomFreeService, UserBankAccount, Inquiry } = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -67,8 +67,8 @@ const getDashboardStats = async (req, res) => {
     // 매물 심사 대기 수
     const pendingReviews = await Room.count({ where: { status: 'pending_review' } });
 
-    // 미답변 문의 수 (TODO: 문의 모델 구현 후 적용)
-    const pendingInquiries = 0; // 임시값
+    // 미답변 문의 수
+    const pendingInquiries = await Inquiry.count({ where: { status: 'pending' } });
 
     // 트렌드 계산
     const userTrend = totalUsersLastMonth > 0

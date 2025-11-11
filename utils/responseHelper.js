@@ -44,6 +44,16 @@ const ErrorCodes = {
   AMENITIES_REQUIRED: { code: 4204, message: '편의시설 정보를 입력해주세요.' },
   PHOTO_IDS_REQUIRED: { code: 4205, message: '사진 ID 배열이 필요합니다.' },
 
+  // 고객센터 관련 (4xxx)
+  NOTICE_NOT_FOUND: { code: 4301, message: '공지사항을 찾을 수 없습니다.' },
+  FAQ_CATEGORY_NOT_FOUND: { code: 4302, message: 'FAQ 카테고리를 찾을 수 없습니다.' },
+  FAQ_NOT_FOUND: { code: 4303, message: 'FAQ를 찾을 수 없습니다.' },
+  INQUIRY_NOT_FOUND: { code: 4304, message: '문의를 찾을 수 없습니다.' },
+  CATEGORY_IN_USE: { code: 4305, message: '해당 카테고리에 FAQ가 존재하여 삭제할 수 없습니다.' },
+  ANSWER_ALREADY_EXISTS: { code: 4306, message: '이미 답변된 문의입니다.' },
+  INVALID_STATUS: { code: 4307, message: '유효하지 않은 상태 값입니다.' },
+  DUPLICATE_CATEGORY_NAME: { code: 4308, message: '이미 존재하는 카테고리 이름입니다.' },
+
   // 서버 관련 (5xxx)
   INTERNAL_ERROR: { code: 5001, message: '서버 오류가 발생했습니다.' },
   DATABASE_ERROR: { code: 5002, message: '데이터베이스 오류가 발생했습니다.' },

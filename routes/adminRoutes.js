@@ -3,6 +3,9 @@ const router = express.Router();
 const adminController = require('../controllers/adminController');
 const adminAuthController = require('../controllers/adminAuthController');
 const adminLogController = require('../controllers/adminLogController');
+const noticeController = require('../controllers/noticeController');
+const faqController = require('../controllers/faqController');
+const inquiryController = require('../controllers/inquiryController');
 const { authenticateAdmin, requireAdminRole } = require('../middleware/auth');
 const actionLogger = require('../middleware/actionLogger');
 const { adminAuthLimiter, adminApiLimiter } = require('../middleware/rateLimiter');
@@ -108,5 +111,68 @@ router.get(
   requireAdminRole(['super_admin']),
   adminLogController.getActionLogById
 );
+
+/**
+ * 고객센터 관리 (cs_admin 이상 접근 가능)
+ */
+// 공지사항 목록 (관리자용)
+router.get('/support/notices', noticeController.getNoticesAdmin);
+
+// 공지사항 상세 (관리자용)
+router.get('/support/notices/:id', noticeController.getNoticeByIdAdmin);
+
+// 공지사항 생성
+router.post('/support/notices', noticeController.createNotice);
+
+// 공지사항 수정
+router.patch('/support/notices/:id', noticeController.updateNotice);
+
+// 공지사항 삭제
+router.delete('/support/notices/:id', noticeController.deleteNotice);
+
+// 공지사항 게시
+router.patch('/support/notices/:id/publish', noticeController.publishNotice);
+
+// FAQ 카테고리 목록 (관리자용)
+router.get('/support/faq/categories', faqController.getFAQCategoriesAdmin);
+
+// FAQ 카테고리 생성
+router.post('/support/faq/categories', faqController.createFAQCategory);
+
+// FAQ 카테고리 수정
+router.patch('/support/faq/categories/:id', faqController.updateFAQCategory);
+
+// FAQ 카테고리 삭제
+router.delete('/support/faq/categories/:id', faqController.deleteFAQCategory);
+
+// FAQ 목록 (관리자용)
+router.get('/support/faqs', faqController.getFAQsAdmin);
+
+// FAQ 상세 (관리자용)
+router.get('/support/faqs/:id', faqController.getFAQByIdAdmin);
+
+// FAQ 생성
+router.post('/support/faqs', faqController.createFAQ);
+
+// FAQ 수정
+router.patch('/support/faqs/:id', faqController.updateFAQ);
+
+// FAQ 삭제
+router.delete('/support/faqs/:id', faqController.deleteFAQ);
+
+// 문의 목록 (관리자용)
+router.get('/support/inquiries', inquiryController.getInquiriesAdmin);
+
+// 문의 상세 (관리자용)
+router.get('/support/inquiries/:id', inquiryController.getInquiryByIdAdmin);
+
+// 문의 답변 등록
+router.post('/support/inquiries/:id/answer', inquiryController.answerInquiry);
+
+// 문의 상태 변경
+router.patch('/support/inquiries/:id/status', inquiryController.updateInquiryStatus);
+
+// 문의 삭제 (관리자)
+router.delete('/support/inquiries/:id', inquiryController.deleteInquiryAdmin);
 
 module.exports = router;

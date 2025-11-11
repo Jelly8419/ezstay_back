@@ -168,6 +168,7 @@ return error(res, ErrorCodes.INTERNAL_ERROR, 500);
 - **4xxx**: 검증 관련 (VALIDATION_ERROR, MISSING_REQUIRED_FIELDS, DUPLICATE_EMAIL)
 - **41xx**: 파일 업로드 (NO_FILE_UPLOADED, MIN_PHOTOS_REQUIRED)
 - **42xx**: 방 등록 (ROOM_INFO_INCOMPLETE, PRICING_INFO_REQUIRED)
+- **429x**: Rate Limiting (4290: 일반 API 제한, 4291: 인증 API 제한, 4292: 파일 업로드 제한, 4293: 비밀번호 재설정 제한, 4294: 관리자 인증 제한, 4295: 관리자 API 제한)
 - **5xxx**: 서버 관련 (INTERNAL_ERROR, DATABASE_ERROR)
 
 ### 인증 미들웨어 사용
@@ -242,12 +243,27 @@ ALLOWED_ORIGINS=http://localhost:3000,https://yourdomain.com
 ```
 
 ### 4. **Rate Limiting**
+**일반 사용자 API**:
 - 일반 API: 15분/100회
 - 로그인/회원가입: 15분/5회 (Brute Force 방어)
 - 파일 업로드: 1시간/20회
+- 비밀번호 재설정: 1시간/3회
+
+**관리자 API** (업무 특성상 완화):
+- 관리자 로그인: 15분/10회 (일반 사용자의 2배)
+- 관리자 일반 API: 15분/300회 (일반 사용자의 3배)
+
 ```javascript
-const { authLimiter } = require('../middleware/rateLimiter');
+const { authLimiter, adminAuthLimiter, adminApiLimiter } = require('../middleware/rateLimiter');
+
+// 일반 사용자 로그인
 router.post('/login', authLimiter, login);
+
+// 관리자 로그인
+router.post('/admin/auth/login', adminAuthLimiter, adminLogin);
+
+// 관리자 API (모든 인증된 관리자 라우트에 자동 적용)
+router.use(adminApiLimiter);
 ```
 
 ### 5. **입력 검증**
@@ -276,6 +292,49 @@ if (!passwordValidation.valid) {
 - Multer, JWT, Sequelize 에러 자동 처리
 - 프로덕션 환경에서 민감한 정보 노출 방지
 - 일관된 에러 응답 형식
+
+### 8. **Sequelize 모델 인덱스 중복 방지** (중요!)
+Sequelize 모델에서 `unique: true`와 `indexes`를 함께 사용하면 인덱스가 중복 생성되어 MySQL의 64개 인덱스 제한을 초과할 수 있습니다.
+
+**❌ 잘못된 예시** (중복 인덱스 생성):
+```javascript
+const Model = sequelize.define('Model', {
+  field: {
+    type: DataTypes.STRING,
+    unique: true  // ❌ 자동 인덱스 생성
+  }
+}, {
+  indexes: [
+    {
+      unique: true,
+      fields: ['field']  // ❌ 또 다른 인덱스 생성
+    }
+  ]
+});
+```
+
+**✅ 올바른 예시** (단일 인덱스):
+```javascript
+const Model = sequelize.define('Model', {
+  field: {
+    type: DataTypes.STRING
+    // unique: true 제거
+  }
+}, {
+  indexes: [
+    {
+      unique: true,
+      fields: ['field'],
+      name: 'model_field_unique'  // 명시적인 이름 지정 권장
+    }
+  ]
+});
+```
+
+**적용된 모델**:
+- [Admin.js](c:\study\ezstay_back\models\Admin.js): `username` 필드
+- [ChatRoom.js](c:\study\ezstay_back\models\ChatRoom.js): `contractId`, `firebaseChatRoomId` 필드
+- [LocalUser.js](c:\study\ezstay_back\models\LocalUser.js): `userId` 필드
 
 ## 개발 시 주의사항
 

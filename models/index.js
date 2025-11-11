@@ -13,6 +13,10 @@ const RentalItem = require('./RentalItem');
 const Contract = require('./Contract');
 const RentalItemReservation = require('./RentalItemReservation');
 const ChatRoom = require('./ChatRoom');
+const NoticeModel = require('./Notice');
+const FAQCategoryModel = require('./FAQCategory');
+const FAQModel = require('./FAQ');
+const InquiryModel = require('./Inquiry');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -41,6 +45,12 @@ const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process
 // Admin 모델 초기화
 const Admin = AdminModel(sequelize);
 const AdminActionLog = AdminActionLogModel(sequelize);
+
+// 고객센터 모델 초기화
+const Notice = NoticeModel(sequelize);
+const FAQCategory = FAQCategoryModel(sequelize);
+const FAQ = FAQModel(sequelize);
+const Inquiry = InquiryModel(sequelize);
 
 // 모델 관계 설정
 User.hasOne(LocalUser, {
@@ -189,6 +199,63 @@ Admin.hasMany(AdminActionLog, {
   as: 'actionLogs'
 });
 
+// Notice 관계 설정
+Notice.belongsTo(Admin, {
+  foreignKey: 'createdBy',
+  as: 'author'
+});
+Notice.belongsTo(Admin, {
+  foreignKey: 'updatedBy',
+  as: 'editor'
+});
+Admin.hasMany(Notice, {
+  foreignKey: 'createdBy',
+  as: 'notices'
+});
+
+// FAQCategory와 FAQ 관계 설정
+FAQCategory.hasMany(FAQ, {
+  foreignKey: 'categoryId',
+  as: 'faqs'
+});
+FAQ.belongsTo(FAQCategory, {
+  foreignKey: 'categoryId',
+  as: 'category'
+});
+
+// FAQ와 Admin 관계 설정
+FAQ.belongsTo(Admin, {
+  foreignKey: 'createdBy',
+  as: 'author'
+});
+FAQ.belongsTo(Admin, {
+  foreignKey: 'updatedBy',
+  as: 'editor'
+});
+Admin.hasMany(FAQ, {
+  foreignKey: 'createdBy',
+  as: 'faqs'
+});
+
+// Inquiry 관계 설정
+Inquiry.belongsTo(User, {
+  foreignKey: 'userId',
+  as: 'user'
+});
+User.hasMany(Inquiry, {
+  foreignKey: 'userId',
+  as: 'inquiries'
+});
+
+Inquiry.belongsTo(Admin, {
+  foreignKey: 'answeredBy',
+  as: 'admin'
+});
+Admin.hasMany(Inquiry, {
+  foreignKey: 'answeredBy',
+  as: 'answeredInquiries'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -204,5 +271,9 @@ module.exports = {
   RentalItem,
   Contract,
   RentalItemReservation,
-  ChatRoom
+  ChatRoom,
+  Notice,
+  FAQCategory,
+  FAQ,
+  Inquiry
 };
