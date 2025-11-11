@@ -18,12 +18,8 @@ const UserBankAccount = sequelize.define('UserBankAccount', {
   userId: {
     type: DataTypes.INTEGER,
     allowNull: false,
-    comment: '사용자 ID (users 테이블 참조)',
-    references: {
-      model: 'users',
-      key: 'id'
-    },
-    onDelete: 'CASCADE'
+    comment: '사용자 ID (users 테이블 참조)'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   bankName: {
     type: DataTypes.STRING(50),

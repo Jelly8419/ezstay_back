@@ -45,23 +45,17 @@ module.exports = (sequelize) => {
     createdBy: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      comment: '작성한 관리자 ID (Admin.id)',
-      references: {
-        model: 'Admins',
-        key: 'id'
-      }
+      comment: '작성한 관리자 ID (Admin.id)'
+      // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
     },
     updatedBy: {
       type: DataTypes.INTEGER,
       allowNull: true,
-      comment: '마지막 수정한 관리자 ID',
-      references: {
-        model: 'Admins',
-        key: 'id'
-      }
+      comment: '마지막 수정한 관리자 ID'
+      // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
     }
   }, {
-    tableName: 'Notices',
+    tableName: 'notices',
     timestamps: true,
     indexes: [
       {

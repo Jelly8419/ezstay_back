@@ -25,21 +25,15 @@ const RentalItemReservation = sequelize.define('RentalItemReservation', {
     type: DataTypes.INTEGER,
     allowNull: false,
     field: 'contract_id',
-    references: {
-      model: 'contracts',
-      key: 'id'
-    },
     comment: '계약 ID'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   rentalItemId: {
     type: DataTypes.INTEGER,
     allowNull: false,
     field: 'rental_item_id',
-    references: {
-      model: 'rental_items',
-      key: 'id'
-    },
     comment: '렌탈 아이템 ID'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   quantity: {
     type: DataTypes.INTEGER,

@@ -26,11 +26,8 @@ const ChatRoom = sequelize.define('ChatRoom', {
     type: DataTypes.INTEGER,
     allowNull: false,
     field: 'contract_id',
-    references: {
-      model: 'contracts',
-      key: 'id'
-    },
     comment: '계약 ID (1:1 관계)'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   firebaseChatRoomId: {
     type: DataTypes.STRING(100),
@@ -42,31 +39,22 @@ const ChatRoom = sequelize.define('ChatRoom', {
     type: DataTypes.INTEGER,
     allowNull: false,
     field: 'host_id',
-    references: {
-      model: 'users',
-      key: 'id'
-    },
     comment: '호스트 ID'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   guestId: {
     type: DataTypes.INTEGER,
     allowNull: false,
     field: 'guest_id',
-    references: {
-      model: 'users',
-      key: 'id'
-    },
     comment: '게스트 ID'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   roomId: {
     type: DataTypes.INTEGER,
     allowNull: false,
     field: 'room_id',
-    references: {
-      model: 'rooms',
-      key: 'id'
-    },
     comment: '방 ID (메타정보용)'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   isActive: {
     type: DataTypes.BOOLEAN,

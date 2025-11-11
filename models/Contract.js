@@ -25,31 +25,22 @@ const Contract = sequelize.define('Contract', {
     type: DataTypes.INTEGER,
     allowNull: false,
     field: 'room_id',
-    references: {
-      model: 'rooms',
-      key: 'id'
-    },
     comment: '방 ID'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   hostId: {
     type: DataTypes.INTEGER,
     allowNull: false,
     field: 'host_id',
-    references: {
-      model: 'users',
-      key: 'id'
-    },
     comment: '호스트 ID'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   guestId: {
     type: DataTypes.INTEGER,
     allowNull: false,
     field: 'guest_id',
-    references: {
-      model: 'users',
-      key: 'id'
-    },
     comment: '게스트 ID'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
 
   // 체크인/체크아웃 정보

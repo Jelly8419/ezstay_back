@@ -16,12 +16,8 @@ const RoomPhoto = sequelize.define('RoomPhoto', {
   },
   roomId: {
     type: DataTypes.INTEGER,
-    allowNull: false,
-    references: {
-      model: 'rooms',
-      key: 'id'
-    },
-    onDelete: 'CASCADE'
+    allowNull: false
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   url: {
     type: DataTypes.STRING(500),

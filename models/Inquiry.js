@@ -10,13 +10,8 @@ module.exports = (sequelize) => {
     userId: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      comment: '문의 작성자 ID (User.id)',
-      references: {
-        model: 'Users',
-        key: 'id'
-      },
-      onUpdate: 'CASCADE',
-      onDelete: 'CASCADE'
+      comment: '문의 작성자 ID (User.id)'
+      // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
     },
     categoryType: {
       type: DataTypes.ENUM('general', 'reservation', 'payment', 'room', 'account', 'other'),
@@ -46,11 +41,8 @@ module.exports = (sequelize) => {
     answeredBy: {
       type: DataTypes.INTEGER,
       allowNull: true,
-      comment: '답변한 관리자 ID',
-      references: {
-        model: 'Admins',
-        key: 'id'
-      }
+      comment: '답변한 관리자 ID'
+      // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
     },
     answeredAt: {
       type: DataTypes.DATE,
@@ -58,7 +50,7 @@ module.exports = (sequelize) => {
       comment: '답변 작성 시각'
     }
   }, {
-    tableName: 'Inquiries',
+    tableName: 'inquiries',
     timestamps: true,
     indexes: [
       {

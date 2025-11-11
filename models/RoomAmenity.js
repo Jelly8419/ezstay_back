@@ -11,12 +11,8 @@ const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process
 const RoomAmenity = sequelize.define('RoomAmenity', {
   roomId: {
     type: DataTypes.INTEGER,
-    primaryKey: true,
-    references: {
-      model: 'rooms',
-      key: 'id'
-    },
-    onDelete: 'CASCADE'
+    primaryKey: true
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   basicOptions: {
     type: DataTypes.JSON,

@@ -28,7 +28,7 @@ module.exports = (sequelize) => {
       comment: '활성화 여부'
     }
   }, {
-    tableName: 'FAQCategories',
+    tableName: 'faqcategories',
     timestamps: true,
     indexes: [
       {

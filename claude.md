@@ -336,6 +336,96 @@ const Model = sequelize.define('Model', {
 - [ChatRoom.js](c:\study\ezstay_back\models\ChatRoom.js): `contractId`, `firebaseChatRoomId` 필드
 - [LocalUser.js](c:\study\ezstay_back\models\LocalUser.js): `userId` 필드
 
+### 9. **Sequelize 외래키 중복 생성 방지** (매우 중요!)
+Sequelize 모델에서 컬럼 정의에 `references` 옵션과 `models/index.js`의 `belongsTo`/`hasMany`를 함께 사용하면 **외래키가 중복 생성**되어 심각한 문제가 발생할 수 있습니다.
+
+#### ⚠️ 문제 상황
+- 서버 재시작할 때마다 `sync({ alter: true })`가 동일한 외래키를 반복 생성
+- MySQL의 64개 인덱스 제한 초과 가능
+- 실제 발생 사례: `notices` 테이블에 외래키 62개 중복 생성 (`notices_ibfk_1` ~ `notices_ibfk_62`)
+
+**❌ 잘못된 예시** (이중 외래키 정의):
+```javascript
+// models/Notice.js
+const Notice = sequelize.define('Notice', {
+  createdBy: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    references: {        // ❌ 첫 번째 외래키 정의
+      model: 'Admins',
+      key: 'id'
+    }
+  }
+});
+
+// models/index.js
+Notice.belongsTo(Admin, {
+  foreignKey: 'createdBy',  // ❌ 두 번째 외래키 정의 (중복!)
+  as: 'author'
+});
+```
+
+**✅ 올바른 예시** (단일 외래키 정의):
+```javascript
+// models/Notice.js
+const Notice = sequelize.define('Notice', {
+  createdBy: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    comment: '작성한 관리자 ID'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
+  }
+});
+
+// models/index.js
+Notice.belongsTo(Admin, {
+  foreignKey: 'createdBy',  // ✅ 여기서만 외래키 정의
+  as: 'author'
+});
+```
+
+#### 📋 중요 원칙
+1. **모델 정의에서 `references` 옵션 사용 금지**
+2. **`models/index.js`에서 `belongsTo`/`hasMany`로만 관계 설정**
+3. **`sync({ alter: false })` 사용** (프로덕션/개발 공통)
+4. **스키마 변경은 마이그레이션 사용 권장**
+
+#### ✅ 적용된 모델 (2025-01-11 수정 완료)
+- [Notice.js](c:\study\ezstay_back\models\Notice.js): `createdBy`, `updatedBy`
+- [FAQ.js](c:\study\ezstay_back\models\FAQ.js): `categoryId`, `createdBy`, `updatedBy`
+- [Inquiry.js](c:\study\ezstay_back\models\Inquiry.js): `userId`, `answeredBy`
+- [ChatRoom.js](c:\study\ezstay_back\models\ChatRoom.js): `contractId`, `hostId`, `guestId`, `roomId`
+- [Contract.js](c:\study\ezstay_back\models\Contract.js): `roomId`, `hostId`, `guestId`
+- [LocalUser.js](c:\study\ezstay_back\models\LocalUser.js): `userId`
+- [SocialUser.js](c:\study\ezstay_back\models\SocialUser.js): `userId`
+- [RentalItemReservation.js](c:\study\ezstay_back\models\RentalItemReservation.js): `contractId`, `rentalItemId`
+- [Room.js](c:\study\ezstay_back\models\Room.js): `hostId`
+- [RoomAmenity.js](c:\study\ezstay_back\models\RoomAmenity.js): `roomId`
+- [RoomFreeService.js](c:\study\ezstay_back\models\RoomFreeService.js): `roomId`
+- [RoomPhoto.js](c:\study\ezstay_back\models\RoomPhoto.js): `roomId`
+- [UserBankAccount.js](c:\study\ezstay_back\models\UserBankAccount.js): `userId`
+
+#### 🔧 기존 DB 정리 (필요 시)
+중복 생성된 외래키는 자동으로 제거되지 않습니다. 수동 정리가 필요합니다:
+
+```sql
+-- 1. 기존 중복 외래키 제거
+SHOW CREATE TABLE notices;  -- 현재 외래키 확인
+ALTER TABLE notices DROP FOREIGN KEY notices_ibfk_1;
+-- ... (중복된 외래키 모두 제거)
+
+-- 2. 올바른 외래키 재생성
+ALTER TABLE notices
+ADD CONSTRAINT fk_notices_created_by
+FOREIGN KEY (createdBy) REFERENCES admins(id)
+ON DELETE NO ACTION ON UPDATE CASCADE;
+
+ALTER TABLE notices
+ADD CONSTRAINT fk_notices_updated_by
+FOREIGN KEY (updatedBy) REFERENCES admins(id)
+ON DELETE SET NULL ON UPDATE CASCADE;
+```
+
 ## 개발 시 주의사항
 
 1. **모든 컨트롤러에서 responseHelper 사용 필수**

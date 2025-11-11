@@ -16,13 +16,8 @@ const SocialUser = sequelize.define('SocialUser', {
   },
   userId: {
     type: DataTypes.INTEGER,
-    allowNull: false,
-    references: {
-      model: 'users',
-      key: 'id'
-    },
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE'
+    allowNull: false
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   provider: {
     type: DataTypes.ENUM('kakao'),

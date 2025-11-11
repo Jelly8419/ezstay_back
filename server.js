@@ -123,7 +123,8 @@ sequelize.authenticate()
     console.log('Connected to MySQL');
 
     // 데이터베이스 테이블 동기화 (관계 포함)
-    await sequelize.sync({ alter: true });
+    // alter: false로 변경하여 외래키 중복 생성 방지
+    await sequelize.sync({ alter: false });
     console.log('Database synchronized');
   })
   .catch(err => {
