@@ -237,7 +237,14 @@ const Room = sequelize.define('Room', {
 }, {
   tableName: 'rooms',
   timestamps: true,
-  underscored: true
+  underscored: true,
+  indexes: [
+    {
+      fields: ['status', 'latitude', 'longitude'],
+      name: 'idx_status_location',
+      comment: '지도 영역 검색 최적화 (카카오맵 클러스터링)'
+    }
+  ]
 });
 
 module.exports = { Room, sequelize };

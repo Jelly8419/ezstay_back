@@ -387,6 +387,11 @@ const Contract = sequelize.define('Contract', {
     {
       fields: ['created_at'],
       name: 'idx_created_at'
+    },
+    {
+      fields: ['status', 'check_out_date', 'check_in_date'],
+      name: 'idx_status_dates',
+      comment: '지도 검색 시 예약 가능 여부 조회 최적화 (getUnavailableRoomIds)'
     }
   ]
 });

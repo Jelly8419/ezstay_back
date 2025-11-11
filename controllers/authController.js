@@ -2,43 +2,41 @@ const { User, LocalUser, SocialUser, UserBankAccount, sequelize } = require('../
 const { generateTokens, hashPassword, comparePassword, verifyToken } = require('../utils/auth');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
 const { validateEmail, validatePassword } = require('../utils/validator');
+const { withTransaction } = require('../utils/transactionHelper');
 const { Op } = require('sequelize');
 
+/**
+ * 회원가입 (이메일)
+ * @route POST /api/auth/register
+ * @body {string} email - 이메일 주소
+ * @body {string} password - 비밀번호 (최소 8자, 대문자+소문자+숫자)
+ * @body {string} [user_mode] - 사용자 모드 (guest | host)
+ * @returns {201} 회원가입 성공 (사용자 정보 + JWT 토큰)
+ */
 const register = async (req, res) => {
-  const transaction = await sequelize.transaction();
+  const { email, password, user_mode } = req.body;
 
-  try {
-    const { email, password, user_mode } = req.body;
+  const emailValidation = validateEmail(email);
+  if (!emailValidation.valid) {
+    return error(res, ErrorCodes.INVALID_EMAIL, 400);
+  }
 
-    // 입력값 검증
-    const emailValidation = validateEmail(email);
-    if (!emailValidation.valid) {
-      await transaction.rollback();
-      return error(res, ErrorCodes.INVALID_EMAIL, 400);
-    }
+  const passwordValidation = validatePassword(password);
+  if (!passwordValidation.valid) {
+    return error(res, { code: 4004, message: passwordValidation.message }, 400);
+  }
 
-    const passwordValidation = validatePassword(password);
-    if (!passwordValidation.valid) {
-      await transaction.rollback();
-      return error(res, { code: 4004, message: passwordValidation.message }, 400);
-    }
+  const existingUser = await User.findOne({ where: { email } });
+  if (existingUser) {
+    return error(res, ErrorCodes.DUPLICATE_EMAIL, 400);
+  }
 
-    const existingUser = await User.findOne({
-      where: { email }
-    });
-
-    if (existingUser) {
-      await transaction.rollback();
-      return error(res, ErrorCodes.DUPLICATE_EMAIL, 400);
-    }
-
-    // 기본 사용자 정보 생성
+  const result = await withTransaction(async (transaction) => {
     const newUser = await User.create({
       email,
       userType: 'local'
     }, { transaction });
 
-    // 일반 회원 전용 정보 생성
     const hashedPassword = await hashPassword(password);
     await LocalUser.create({
       userId: newUser.id,
@@ -54,9 +52,7 @@ const register = async (req, res) => {
 
     await newUser.update({ refreshToken }, { transaction });
 
-    await transaction.commit();
-
-    return created(res, {
+    return {
       user: {
         id: newUser.id,
         email: newUser.email,
@@ -69,10 +65,13 @@ const register = async (req, res) => {
       },
       accessToken,
       refreshToken
-    }, '회원가입이 완료되었습니다.');
-  } catch (err) {
-    await transaction.rollback();
-    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+    };
+  });
+
+  if (result.success) {
+    return created(res, result.data, '회원가입이 완료되었습니다.');
+  } else {
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, result.error.message);
   }
 };
 

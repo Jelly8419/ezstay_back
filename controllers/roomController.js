@@ -3,6 +3,8 @@ const { Op } = require('sequelize');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
 const { safeRedisOperation } = require('../config/redis');
 const crypto = require('crypto');
+const roomService = require('../services/roomService');
+const appConfig = require('../config/app.config');
 
 const createRoom = async (req, res) => {
   try {
@@ -213,271 +215,80 @@ const getRoomsForMap = async (req, res) => {
   try {
     const { swLat, swLng, neLat, neLng, zoom, checkIn, checkOut } = req.query;
 
-    // === 날짜 필터 검증 ===
-    if ((checkIn && !checkOut) || (!checkIn && checkOut)) {
-      return error(res, {
-        code: 4005,
-        message: '입실일과 퇴실일을 모두 입력해주세요.'
-      }, 400);
+    // 날짜 범위 검증
+    const dateValidation = roomService.validateDateRange(checkIn, checkOut);
+    if (!dateValidation.valid) {
+      return error(res, dateValidation.error, 400);
     }
 
-    if (checkIn && checkOut) {
-      const checkInDate = new Date(checkIn);
-      const checkOutDate = new Date(checkOut);
-
-      if (isNaN(checkInDate.getTime()) || isNaN(checkOutDate.getTime())) {
-        return error(res, {
-          code: 4006,
-          message: '유효하지 않은 날짜 형식입니다. (YYYY-MM-DD)'
-        }, 400);
-      }
-
-      if (checkInDate >= checkOutDate) {
-        return error(res, {
-          code: 4007,
-          message: '퇴실일은 입실일보다 이후여야 합니다.'
-        }, 400);
-      }
-
-      // 과거 날짜 체크 (선택적)
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      if (checkInDate < today) {
-        return error(res, {
-          code: 4008,
-          message: '과거 날짜로 검색할 수 없습니다.'
-        }, 400);
-      }
+    // 좌표 검증
+    const boundsValidation = roomService.validateMapBounds(swLat, swLng, neLat, neLng);
+    if (!boundsValidation.valid) {
+      return error(res, boundsValidation.error, 400);
     }
-    // === 날짜 필터 검증 끝 ===
 
-    // === Phase 1: ETag 생성 및 HTTP 캐싱 ===
+    const coords = boundsValidation.coords;
     const dateFilter = checkIn && checkOut ? `${checkIn}_${checkOut}` : 'any';
-    const coordString = `${swLat},${swLng},${neLat},${neLng},${zoom || 'default'},${dateFilter}`;
-    const coordHash = crypto.createHash('md5').update(coordString).digest('hex').substring(0, 16);
 
-    // 데이터 버전 조회 (매물 변경 시 증가)
-    const dataVersion = await safeRedisOperation(async (client) => {
-      return await client.get('rooms:data:version');
-    }) || '1';
-
-    const etag = `"${coordHash}-v${dataVersion}"`;
-
-    // 클라이언트 ETag 확인 (브라우저 캐시 검증)
+    // ETag 생성 및 HTTP 캐시 검증
+    const etag = await roomService.generateETag(coords, zoom, dateFilter);
     if (req.headers['if-none-match'] === etag) {
       console.log('✅ HTTP 304 Not Modified - 브라우저 캐시 사용');
-      return res.status(304).end(); // 데이터 전송 없음
-    }
-    // === Phase 1 끝 ===
-
-    // 줌 레벨 6 이상(너무 축소된 상태)일 때는 매물을 보여주지 않음
-    if (zoom) {
-      const zoomLevel = parseInt(zoom);
-      if (zoomLevel >= 6) {
-        return success(res, {
-          count: 0,
-          rooms: [],
-          message: '지도를 더 확대해주세요.'
-        }, '지도를 더 확대하면 매물을 확인할 수 있습니다.');
-      }
+      return res.status(304).end();
     }
 
-    // 줌 레벨에 따른 limit 자동 설정
-    // 카카오맵: 줌 레벨이 작을수록 상세(확대), 클수록 넓은 영역(축소)
-    let limit = 500; // 기본값
-    if (zoom) {
-      const zoomLevel = parseInt(zoom);
-      if (zoomLevel >= 5) {
-        limit = 200; // 중간 영역 (동 레벨)
-      } else if (zoomLevel >= 3) {
-        limit = 300; // 좁은 영역
-      } else {
-        limit = 500; // 상세 영역 (거리/건물 레벨)
-      }
+    // 줌 레벨에 따른 limit 계산
+    const limit = roomService.calculateLimit(zoom, req.query.limit);
+    if (limit === 0) {
+      return success(res, {
+        count: 0,
+        rooms: [],
+        message: '지도를 더 확대해주세요.'
+      }, '지도를 더 확대하면 매물을 확인할 수 있습니다.');
     }
-
-    // 사용자 지정 limit이 있으면 우선 적용 (단, 최대 500개로 제한)
-    if (req.query.limit) {
-      limit = Math.min(parseInt(req.query.limit), 500);
-    }
-
-    // 필수 파라미터 검증
-    if (!swLat || !swLng || !neLat || !neLng) {
-      return error(res, {
-        code: 4001,
-        message: '지도 영역 좌표가 필요합니다. (swLat, swLng, neLat, neLng)'
-      }, 400);
-    }
-
-    // 좌표 유효성 검증
-    const swLatNum = parseFloat(swLat);
-    const swLngNum = parseFloat(swLng);
-    const neLatNum = parseFloat(neLat);
-    const neLngNum = parseFloat(neLng);
-
-    if (isNaN(swLatNum) || isNaN(swLngNum) || isNaN(neLatNum) || isNaN(neLngNum)) {
-      return error(res, {
-        code: 4002,
-        message: '좌표는 숫자 형식이어야 합니다.'
-      }, 400);
-    }
-
-    // 위도/경도 범위 검증
-    if (swLatNum < -90 || swLatNum > 90 || neLatNum < -90 || neLatNum > 90) {
-      return error(res, {
-        code: 4003,
-        message: '위도는 -90 ~ 90 범위여야 합니다.'
-      }, 400);
-    }
-
-    if (swLngNum < -180 || swLngNum > 180 || neLngNum < -180 || neLngNum > 180) {
-      return error(res, {
-        code: 4004,
-        message: '경도는 -180 ~ 180 범위여야 합니다.'
-      }, 400);
-    }
-
-    // === Redis 캐싱 로직 시작 ===
-    // 캐시 키는 정확한 검색 영역(4개 좌표)으로 생성하여 부정확한 캐시 히트 방지
-    // 소수점 4자리로 반올림 (약 11m 정밀도, 캐시 효율성 증가)
-    const roundedSwLat = swLatNum.toFixed(4);
-    const roundedSwLng = swLngNum.toFixed(4);
-    const roundedNeLat = neLatNum.toFixed(4);
-    const roundedNeLng = neLngNum.toFixed(4);
-
-    const cacheKey = `rooms:map:${roundedSwLat},${roundedSwLng},${roundedNeLat},${roundedNeLng}:zoom${zoom || 'default'}:date${dateFilter}`;
 
     // Redis 캐시 확인
-    const cachedData = await safeRedisOperation(async (client) => {
-      return await client.get(cacheKey);
-    });
+    const cacheKey = roomService.generateCacheKey(coords, zoom, dateFilter);
+    const cachedData = await roomService.getCachedRooms(cacheKey);
 
     if (cachedData) {
-      console.log('✅ Cache HIT:', cacheKey);
-      const parsedData = JSON.parse(cachedData);
-
-      // HTTP 캐싱 헤더 설정
       res.set({
         'ETag': etag,
-        'Cache-Control': 'public, max-age=60, must-revalidate', // 1분 브라우저 캐시
+        'Cache-Control': `public, max-age=${appConfig.cache.ttl.BROWSER}, must-revalidate`,
         'Vary': 'Accept-Encoding'
       });
-
-      return success(res, parsedData, '지도 영역 내 방 목록을 조회했습니다. (캐시)');
+      return success(res, cachedData, '지도 영역 내 방 목록을 조회했습니다. (캐시)');
     }
 
-    console.log('❌ Cache MISS:', cacheKey, '- DB 조회 중...');
-    // === Redis 캐싱 로직 끝 ===
+    // 예약 불가능한 방 조회
+    const excludeRoomIds = await roomService.getUnavailableRoomIds(checkIn, checkOut);
 
-    // === 날짜 필터: 예약 불가능한 방 조회 ===
-    let excludeRoomIds = [];
-    if (checkIn && checkOut) {
-      const unavailableRooms = await Contract.findAll({
-        attributes: ['roomId'],
-        where: {
-          status: {
-            [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'APPROVED']
-          },
-          // 기간 겹침 체크: 기존 예약의 체크아웃이 검색 체크인 이후 && 기존 예약의 체크인이 검색 체크아웃 이전
-          [Op.and]: [
-            { checkOutDate: { [Op.gte]: checkIn } },
-            { checkInDate: { [Op.lte]: checkOut } }
-          ]
-        },
-        raw: true
-      });
-
-      excludeRoomIds = unavailableRooms.map(r => r.roomId);
-      console.log(`📅 날짜 필터 적용: ${checkIn} ~ ${checkOut} (제외된 방: ${excludeRoomIds.length}개)`);
-    }
-    // === 날짜 필터 끝 ===
-
-    // 좌표 범위 내 방 조회 (DB)
-    const whereClause = {
-      status: 'published',
-      latitude: {
-        [Op.between]: [swLatNum, neLatNum],
-        [Op.ne]: null // null 값 제외
-      },
-      longitude: {
-        [Op.between]: [swLngNum, neLngNum],
-        [Op.ne]: null // null 값 제외
-      }
-    };
-
-    // 예약 불가능한 방 제외
-    if (excludeRoomIds.length > 0) {
-      whereClause.id = { [Op.notIn]: excludeRoomIds };
-    }
-
-    const rooms = await Room.findAll({
-      where: whereClause,
-      attributes: [
-        'id',
-        'roomName',
-        'address',
-        'latitude',
-        'longitude',
-        'dailyRent',
-        'area',
-        'roomCount',
-        'bathroomCount',
-        'buildingType'
-      ],
-      include: [{
-        model: RoomPhoto,
-        as: 'photos',
-        attributes: ['id', 'url'],
-        limit: 1,
-        required: false,
-        separate: true, // N+1 문제 방지
-        order: [['order', 'ASC']]
-      }],
-      limit: limit,
-      order: [['created_at', 'DESC']]
-    });
+    // DB에서 방 목록 조회
+    const rooms = await roomService.fetchRoomsFromDB(coords, excludeRoomIds, limit);
 
     // 응답 데이터 가공
-    const mapData = rooms.map(room => ({
-      id: room.id,
-      roomName: room.roomName,
-      address: room.address,
-      latitude: parseFloat(room.latitude),
-      longitude: parseFloat(room.longitude),
-      dailyRent: room.dailyRent,
-      area: parseFloat(room.area),
-      roomCount: room.roomCount,
-      bathroomCount: room.bathroomCount,
-      buildingType: room.buildingType,
-      thumbnail: room.photos && room.photos.length > 0 ? room.photos[0].url : null
-    }));
+    const responseData = roomService.transformRoomsForMap(rooms);
 
-    const responseData = {
-      count: mapData.length,
-      rooms: mapData
-    };
+    // Redis 캐시 저장
+    await roomService.cacheRooms(cacheKey, responseData);
 
-    // === Redis 캐싱 저장 ===
-    // 5분(300초) TTL로 캐싱
-    await safeRedisOperation(async (client) => {
-      await client.setEx(cacheKey, 300, JSON.stringify(responseData));
-      console.log('💾 캐시 저장 완료:', cacheKey, '(TTL: 5분)');
-    });
-    // === Redis 캐싱 저장 끝 ===
-
-    // === Phase 2: 서버 사이드 사전 캐싱 (비동기) ===
-    // 인접 영역 사전 캐싱 (응답 지연 없음)
+    // 인접 영역 사전 캐싱 (비동기)
     setImmediate(() => {
-      prefetchAdjacentAreas(swLatNum, swLngNum, neLatNum, neLngNum, zoom).catch(err => {
+      roomService.prefetchAdjacentAreas(
+        coords.swLatNum,
+        coords.swLngNum,
+        coords.neLatNum,
+        coords.neLngNum,
+        zoom
+      ).catch(err => {
         console.error('사전 캐싱 실패:', err.message);
       });
     });
-    // === Phase 2 끝 ===
 
     // HTTP 캐싱 헤더 설정
     res.set({
       'ETag': etag,
-      'Cache-Control': 'public, max-age=60, must-revalidate', // 1분 브라우저 캐시
+      'Cache-Control': `public, max-age=${appConfig.cache.ttl.BROWSER}, must-revalidate`,
       'Vary': 'Accept-Encoding'
     });
 
@@ -488,131 +299,6 @@ const getRoomsForMap = async (req, res) => {
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
-
-/**
- * 인접 8방향 영역 사전 캐싱
- * @param {number} swLat - 현재 영역 남서쪽 위도
- * @param {number} swLng - 현재 영역 남서쪽 경도
- * @param {number} neLat - 현재 영역 북동쪽 위도
- * @param {number} neLng - 현재 영역 북동쪽 경도
- * @param {string} zoom - 줌 레벨
- */
-async function prefetchAdjacentAreas(swLat, swLng, neLat, neLng, zoom) {
-  const latDiff = neLat - swLat;
-  const lngDiff = neLng - swLng;
-
-  // 인접 8방향 영역 계산
-  const adjacentAreas = [
-    // 북
-    { swLat: swLat + latDiff, swLng, neLat: neLat + latDiff, neLng },
-    // 남
-    { swLat: swLat - latDiff, swLng, neLat: neLat - latDiff, neLng },
-    // 동
-    { swLat, swLng: swLng + lngDiff, neLat, neLng: neLng + lngDiff },
-    // 서
-    { swLat, swLng: swLng - lngDiff, neLat, neLng: neLng - lngDiff },
-    // 북동 (대각선)
-    { swLat: swLat + latDiff, swLng: swLng + lngDiff, neLat: neLat + latDiff, neLng: neLng + lngDiff },
-    // 북서
-    { swLat: swLat + latDiff, swLng: swLng - lngDiff, neLat: neLat + latDiff, neLng: neLng - lngDiff },
-    // 남동
-    { swLat: swLat - latDiff, swLng: swLng + lngDiff, neLat: neLat - latDiff, neLng: neLng + lngDiff },
-    // 남서
-    { swLat: swLat - latDiff, swLng: swLng - lngDiff, neLat: neLat - latDiff, neLng: neLng - lngDiff }
-  ];
-
-  // 병렬로 사전 캐싱 (캐시 없는 경우만 DB 조회)
-  const prefetchPromises = adjacentAreas.map(area =>
-    cacheAreaIfNotExists(area, zoom)
-  );
-
-  await Promise.all(prefetchPromises);
-  console.log(`💾 인접 8방향 사전 캐싱 완료 (zoom: ${zoom})`);
-}
-
-/**
- * 특정 영역의 캐시가 없으면 DB 조회 후 캐싱
- * @param {object} area - 영역 좌표 (swLat, swLng, neLat, neLng)
- * @param {string} zoom - 줌 레벨
- */
-async function cacheAreaIfNotExists(area, zoom) {
-  const roundedSwLat = area.swLat.toFixed(4);
-  const roundedSwLng = area.swLng.toFixed(4);
-  const roundedNeLat = area.neLat.toFixed(4);
-  const roundedNeLng = area.neLng.toFixed(4);
-
-  const cacheKey = `rooms:map:${roundedSwLat},${roundedSwLng},${roundedNeLat},${roundedNeLng}:zoom${zoom || 'default'}`;
-
-  // 캐시 존재 여부 확인
-  const exists = await safeRedisOperation(async (client) => {
-    return await client.exists(cacheKey);
-  });
-
-  if (exists) {
-    console.log('⏭️  이미 캐시됨:', cacheKey);
-    return; // 이미 캐시되어 있으면 스킵
-  }
-
-  // DB 조회 후 캐싱
-  try {
-    const rooms = await Room.findAll({
-      where: {
-        status: 'published',
-        latitude: {
-          [Op.between]: [parseFloat(area.swLat), parseFloat(area.neLat)],
-          [Op.ne]: null
-        },
-        longitude: {
-          [Op.between]: [parseFloat(area.swLng), parseFloat(area.neLng)],
-          [Op.ne]: null
-        }
-      },
-      attributes: [
-        'id', 'roomName', 'address', 'latitude', 'longitude',
-        'dailyRent', 'area', 'roomCount', 'bathroomCount', 'buildingType'
-      ],
-      include: [{
-        model: RoomPhoto,
-        as: 'photos',
-        attributes: ['id', 'url'],
-        limit: 1,
-        required: false,
-        separate: true,
-        order: [['order', 'ASC']]
-      }],
-      limit: 500,
-      order: [['created_at', 'DESC']]
-    });
-
-    const mapData = rooms.map(room => ({
-      id: room.id,
-      roomName: room.roomName,
-      address: room.address,
-      latitude: parseFloat(room.latitude),
-      longitude: parseFloat(room.longitude),
-      dailyRent: room.dailyRent,
-      area: parseFloat(room.area),
-      roomCount: room.roomCount,
-      bathroomCount: room.bathroomCount,
-      buildingType: room.buildingType,
-      thumbnail: room.photos && room.photos.length > 0 ? room.photos[0].url : null
-    }));
-
-    const responseData = {
-      count: mapData.length,
-      rooms: mapData
-    };
-
-    // 10분 TTL로 캐싱 (인접 영역은 더 길게)
-    await safeRedisOperation(async (client) => {
-      await client.setEx(cacheKey, 600, JSON.stringify(responseData));
-    });
-
-    console.log('✨ 사전 캐싱 완료:', cacheKey, `(${mapData.length}개)`);
-  } catch (err) {
-    console.error('사전 캐싱 실패:', cacheKey, err.message);
-  }
-}
 
 module.exports = {
   createRoom,
