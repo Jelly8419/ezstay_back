@@ -58,7 +58,6 @@ jobs:
             --protocol tcp \
             --port 22 \
             --cidr ${RUNNER_IP}/32 \
-            --description "GitHub Actions Runner - Temporary" \
             || echo "⚠️ IP already exists in security group or error occurred"
 
       - name: Deploy to Test Server via SSH
