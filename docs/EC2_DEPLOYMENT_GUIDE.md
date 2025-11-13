@@ -57,7 +57,7 @@ chmod +x ~/setup-test-server.sh
 
 ### Step 3: 환경변수 설정
 ```bash
-cd ~/ezstay_back
+cd /opt/ezstay/backend
 nano .env
 ```
 
@@ -179,13 +179,13 @@ MIIEpAIBAAKCAQEA...
 
 ### 1. 수동 배포 테스트 (EC2에서)
 ```bash
-cd ~/ezstay_back
+cd /opt/ezstay/backend
 git fetch origin
 git checkout develop
 git pull origin develop
-npm ci --production
-pm2 restart ezstay-backend || pm2 start server.js --name ezstay-backend
-pm2 logs ezstay-backend
+npm ci  # 테스트 환경: 모든 의존성 설치
+pm2 restart ezstay-api || pm2 start server.js --name ezstay-api
+pm2 logs ezstay-api
 ```
 
 **정상 동작 확인**:

@@ -69,13 +69,52 @@ jobs:
           key: ${{ secrets.TEST_SERVER_SSH_KEY }}
           port: 22
           script: |
-            cd /home/ec2-user/ezstay_back
+            set -e  # 에러 발생 시 즉시 중단
+
+            echo "📦 배포 시작: $(date)"
+            cd /opt/ezstay/backend
+
+            # 현재 커밋 해시 백업 (롤백용)
+            CURRENT_COMMIT=$(git rev-parse HEAD)
+            echo "현재 버전: $CURRENT_COMMIT"
+
+            # 최신 코드 가져오기
+            echo "🔄 Git Pull..."
             git fetch origin
             git checkout develop
             git pull origin develop
-            npm ci --production
-            pm2 restart ezstay-backend || pm2 start server.js --name ezstay-backend
-            echo "✅ Deployment completed at $(date)"
+
+            # package.json 변경 감지
+            if git diff $CURRENT_COMMIT HEAD --name-only | grep -q "package.json"; then
+              echo "📦 package.json 변경 감지 - 의존성 재설치..."
+              npm ci  # 테스트 환경: 모든 의존성 설치
+            else
+              echo "✅ package.json 변경 없음 - 의존성 설치 스킵"
+            fi
+
+            # PM2로 무중단 배포 (reload)
+            echo "🔄 PM2 Reload (무중단 배포)..."
+            pm2 reload ezstay-api || pm2 start server.js --name ezstay-api
+
+            # 헬스체크 (5초 대기)
+            echo "🏥 헬스체크 중..."
+            sleep 5
+
+            # 포트 8080 또는 3000에서 헬스체크
+            if curl -f http://localhost:8080/health > /dev/null 2>&1 || curl -f http://localhost:3000/health > /dev/null 2>&1; then
+              echo "✅ 백엔드 서비스 정상"
+              echo "🎉 배포 완료: $(date)"
+            else
+              echo "❌ 헬스체크 실패 - 롤백 시작..."
+              git reset --hard $CURRENT_COMMIT
+              npm ci  # 롤백 시에도 모든 의존성 설치
+              pm2 reload ezstay-api
+              echo "🔙 롤백 완료: $CURRENT_COMMIT"
+              exit 1
+            fi
+
+            # PM2 상태 출력
+            pm2 status
 
       - name: Notify deployment status
         if: always()

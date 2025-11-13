@@ -22,8 +22,9 @@ sudo npm install -g pm2
 
 # 4. 프로젝트 디렉토리 생성
 echo "📁 Setting up project directory..."
-PROJECT_DIR="/home/ec2-user/ezstay_back"
-mkdir -p "$PROJECT_DIR"
+PROJECT_DIR="/opt/ezstay/backend"
+sudo mkdir -p "$PROJECT_DIR"
+sudo chown -R ec2-user:ec2-user /opt/ezstay
 cd "$PROJECT_DIR"
 
 # 5. Git 저장소 클론 (이미 있다면 스킵)
@@ -71,14 +72,14 @@ echo "⚠️  .env 파일을 수정하세요: nano .env"
 
 # 7. 의존성 설치
 echo "📦 Installing npm packages..."
-npm ci --production
+npm ci  # 테스트 환경: 모든 의존성 설치 (devDependencies 포함)
 
 # 8. PM2 ecosystem 파일 생성
 echo "⚙️ Creating PM2 ecosystem..."
 cat > ecosystem.config.js << 'EOF'
 module.exports = {
   apps: [{
-    name: 'ezstay-backend',
+    name: 'ezstay-api',
     script: './server.js',
     instances: 1,
     exec_mode: 'fork',
@@ -87,7 +88,7 @@ module.exports = {
     max_memory_restart: '500M',
     env: {
       NODE_ENV: 'development',
-      PORT: 3000
+      PORT: 8080
     },
     error_file: './logs/error.log',
     out_file: './logs/output.log',
@@ -107,12 +108,17 @@ pm2 save
 pm2 startup
 
 echo ""
+echo "📝 PM2 자동 시작 설정:"
+echo "다음 명령어를 복사해서 실행하세요 (sudo 권한 필요):"
+pm2 startup | grep "sudo"
+
+echo ""
 echo "✅ Setup completed!"
 echo ""
 echo "📝 Next steps:"
 echo "1. Edit .env file: nano .env"
 echo "2. Setup MySQL database and Redis"
-echo "3. Test deployment: pm2 logs ezstay-backend"
+echo "3. Test deployment: pm2 logs ezstay-api"
 echo "4. Configure GitHub Actions secrets"
 echo ""
 echo "🔗 Application URL: http://$(curl -s ifconfig.me):3000"
