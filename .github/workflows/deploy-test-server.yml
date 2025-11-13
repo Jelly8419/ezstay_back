@@ -39,30 +39,31 @@ jobs:
           fi
         continue-on-error: true
 
-      - name: Get GitHub Actions Runner IP
-        id: ip
-        uses: haythem/public-ip@v1.3
+      # 임시로 주석 처리: Security Group에 0.0.0.0/0 SSH 규칙 추가 후 테스트
+      # - name: Get GitHub Actions Runner IP
+      #   id: ip
+      #   uses: haythem/public-ip@v1.3
 
-      - name: Add GitHub Actions IP to EC2 Security Group
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: |
-          RUNNER_IP="${{ steps.ip.outputs.ipv4 }}"
-          echo "🌐 GitHub Actions Runner IP: $RUNNER_IP"
-
-          # EC2 보안 그룹에 현재 Runner IP 추가
-          aws ec2 authorize-security-group-ingress \
-            --group-id ${{ secrets.EC2_SECURITY_GROUP_ID }} \
-            --protocol tcp \
-            --port 22 \
-            --cidr ${RUNNER_IP}/32 \
-            || echo "⚠️ IP already exists in security group or error occurred"
-
-          # 보안 그룹 규칙 적용 대기 (10초)
-          echo "⏳ Waiting for security group rules to propagate..."
-          sleep 10
+      # - name: Add GitHub Actions IP to EC2 Security Group
+      #   env:
+      #     AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+      #   run: |
+      #     RUNNER_IP="${{ steps.ip.outputs.ipv4 }}"
+      #     echo "🌐 GitHub Actions Runner IP: $RUNNER_IP"
+      #
+      #     # EC2 보안 그룹에 현재 Runner IP 추가
+      #     aws ec2 authorize-security-group-ingress \
+      #       --group-id ${{ secrets.EC2_SECURITY_GROUP_ID }} \
+      #       --protocol tcp \
+      #       --port 22 \
+      #       --cidr ${RUNNER_IP}/32 \
+      #       || echo "⚠️ IP already exists in security group or error occurred"
+      #
+      #     # 보안 그룹 규칙 적용 대기 (10초)
+      #     echo "⏳ Waiting for security group rules to propagate..."
+      #     sleep 10
 
       - name: Deploy to Test Server via SSH
         uses: appleboy/ssh-action@v1.0.0
@@ -128,22 +129,23 @@ jobs:
             echo "❌ Deployment to test server failed!"
           fi
 
-      - name: Remove GitHub Actions IP from EC2 Security Group
-        if: always()
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: |
-          RUNNER_IP="${{ steps.ip.outputs.ipv4 }}"
-          echo "🧹 Removing GitHub Actions Runner IP: $RUNNER_IP"
-
-          # EC2 보안 그룹에서 현재 Runner IP 제거
-          aws ec2 revoke-security-group-ingress \
-            --group-id ${{ secrets.EC2_SECURITY_GROUP_ID }} \
-            --protocol tcp \
-            --port 22 \
-            --cidr ${RUNNER_IP}/32 \
-            || echo "⚠️ IP does not exist or already removed"
+      # 임시로 주석 처리: 테스트 완료 후 복원 필요
+      # - name: Remove GitHub Actions IP from EC2 Security Group
+      #   if: always()
+      #   env:
+      #     AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+      #   run: |
+      #     RUNNER_IP="${{ steps.ip.outputs.ipv4 }}"
+      #     echo "🧹 Removing GitHub Actions Runner IP: $RUNNER_IP"
+      #
+      #     # EC2 보안 그룹에서 현재 Runner IP 제거
+      #     aws ec2 revoke-security-group-ingress \
+      #       --group-id ${{ secrets.EC2_SECURITY_GROUP_ID }} \
+      #       --protocol tcp \
+      #       --port 22 \
+      #       --cidr ${RUNNER_IP}/32 \
+      #       || echo "⚠️ IP does not exist or already removed"
 
     
