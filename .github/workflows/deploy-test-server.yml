@@ -75,6 +75,10 @@ jobs:
             set -e  # 에러 발생 시 즉시 중단
 
             echo "📦 배포 시작: $(date)"
+
+            # root로 전환하여 실행
+            sudo su - root << 'ROOTEOF'
+            set -e
             cd /opt/ezstay/backend
 
             # 현재 커밋 해시 백업 (롤백용)
@@ -118,6 +122,7 @@ jobs:
 
             # PM2 상태 출력
             pm2 status
+            ROOTEOF
 
       - name: Notify deployment status
         if: always()
