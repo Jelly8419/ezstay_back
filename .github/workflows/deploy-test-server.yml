@@ -104,14 +104,4 @@ jobs:
             --cidr ${RUNNER_IP}/32 \
             || echo "⚠️ IP does not exist or already removed"
 
-      - name: Slack Notification (optional)
-        if: always()
-        uses: 8398a7/action-slack@v3
-        with:
-          status: ${{ job.status }}
-          text: |
-            Deployment to test server ${{ job.status }}
-            Branch: ${{ github.ref }}
-            Commit: ${{ github.sha }}
-          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-        continue-on-error: true
+    
