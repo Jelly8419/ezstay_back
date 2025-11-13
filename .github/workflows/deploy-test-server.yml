@@ -39,6 +39,28 @@ jobs:
           fi
         continue-on-error: true
 
+      - name: Get GitHub Actions Runner IP
+        id: ip
+        uses: haythem/public-ip@v1.3
+
+      - name: Add GitHub Actions IP to EC2 Security Group
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          RUNNER_IP="${{ steps.ip.outputs.ipv4 }}"
+          echo "🌐 GitHub Actions Runner IP: $RUNNER_IP"
+
+          # EC2 보안 그룹에 현재 Runner IP 추가
+          aws ec2 authorize-security-group-ingress \
+            --group-id ${{ secrets.EC2_SECURITY_GROUP_ID }} \
+            --protocol tcp \
+            --port 22 \
+            --cidr ${RUNNER_IP}/32 \
+            --description "GitHub Actions Runner - Temporary" \
+            || echo "⚠️ IP already exists in security group or error occurred"
+
       - name: Deploy to Test Server via SSH
         uses: appleboy/ssh-action@v1.0.0
         with:
@@ -63,6 +85,24 @@ jobs:
           else
             echo "❌ Deployment to test server failed!"
           fi
+
+      - name: Remove GitHub Actions IP from EC2 Security Group
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          RUNNER_IP="${{ steps.ip.outputs.ipv4 }}"
+          echo "🧹 Removing GitHub Actions Runner IP: $RUNNER_IP"
+
+          # EC2 보안 그룹에서 현재 Runner IP 제거
+          aws ec2 revoke-security-group-ingress \
+            --group-id ${{ secrets.EC2_SECURITY_GROUP_ID }} \
+            --protocol tcp \
+            --port 22 \
+            --cidr ${RUNNER_IP}/32 \
+            || echo "⚠️ IP does not exist or already removed"
 
       - name: Slack Notification (optional)
         if: always()
