@@ -84,7 +84,6 @@ jobs:
 
             # 최신 코드 가져오기
             echo "🔄 Git Pull..."
-            export GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
             git fetch origin
             git checkout develop
             git pull origin develop
