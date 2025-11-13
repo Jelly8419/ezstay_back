@@ -60,6 +60,10 @@ jobs:
             --cidr ${RUNNER_IP}/32 \
             || echo "⚠️ IP already exists in security group or error occurred"
 
+          # 보안 그룹 규칙 적용 대기 (10초)
+          echo "⏳ Waiting for security group rules to propagate..."
+          sleep 10
+
       - name: Deploy to Test Server via SSH
         uses: appleboy/ssh-action@v1.0.0
         with:
