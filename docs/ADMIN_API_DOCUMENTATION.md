@@ -1309,7 +1309,96 @@ node scripts/createAdmin.js
 
 ---
 
-### 3. 방 비밀번호 변경
+### 3. 방 상태 변경 이력 조회
+
+**Endpoint**: `GET /api/admin/properties/:roomId/status-history`
+
+**설명**: 방 게시 상태 변경 이력을 조회합니다 (보안 감사용)
+
+**권한**: super_admin, admin
+
+**Query 파라미터**:
+- `limit` (선택): 조회 개수 (기본값: 20, 최대: 50)
+- `offset` (선택): 페이지네이션 오프셋 (기본값: 0)
+
+**응답 예시 (super_admin)**:
+```json
+{
+  "success": true,
+  "message": "상태 변경 이력 조회 완료",
+  "data": {
+    "total": 15,
+    "histories": [
+      {
+        "id": 3,
+        "previousStatus": "published",
+        "newStatus": "hidden_by_admin",
+        "reason": "호스트 요청으로 임시 비공개",
+        "changedBy": "김관리",
+        "changedAt": "2023-12-15T14:30:00.000Z",
+        "ipAddress": "192.168.1.100",
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+      },
+      {
+        "id": 2,
+        "previousStatus": "hidden_by_admin",
+        "newStatus": "published",
+        "reason": "문제 해결 완료",
+        "changedBy": "이관리",
+        "changedAt": "2023-12-10T09:15:00.000Z",
+        "ipAddress": "192.168.1.50",
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
+      }
+    ],
+    "pagination": {
+      "limit": 20,
+      "offset": 0,
+      "hasMore": false
+    }
+  }
+}
+```
+
+**응답 예시 (admin, cs_admin - IP/UserAgent 제외)**:
+```json
+{
+  "success": true,
+  "message": "상태 변경 이력 조회 완료",
+  "data": {
+    "total": 15,
+    "histories": [
+      {
+        "id": 3,
+        "previousStatus": "published",
+        "newStatus": "hidden_by_admin",
+        "reason": "호스트 요청으로 임시 비공개",
+        "changedBy": "김관리",
+        "changedAt": "2023-12-15T14:30:00.000Z"
+      }
+    ],
+    "pagination": {
+      "limit": 20,
+      "offset": 0,
+      "hasMore": false
+    }
+  }
+}
+```
+
+**에러 응답**:
+```json
+{
+  "success": false,
+  "error": {
+    "code": 3001,
+    "message": "방을 찾을 수 없습니다."
+  }
+}
+```
+
+---
+
+### 4. 방 비밀번호 변경
 
 **Endpoint**: `PATCH /api/admin/properties/:roomId/password`
 
@@ -1352,7 +1441,7 @@ node scripts/createAdmin.js
 
 ---
 
-### 4. 비밀번호 변경 이력 조회
+### 5. 비밀번호 변경 이력 조회
 
 **Endpoint**: `GET /api/admin/properties/:roomId/password-history`
 
@@ -1443,7 +1532,7 @@ node scripts/createAdmin.js
 
 ---
 
-### 5. 메모 생성
+### 6. 메모 생성
 
 **Endpoint**: `POST /api/admin/properties/:roomId/memos`
 
@@ -1485,7 +1574,7 @@ node scripts/createAdmin.js
 
 ---
 
-### 6. 메모 수정
+### 7. 메모 수정
 
 **Endpoint**: `PATCH /api/admin/properties/:roomId/memos/:memoId`
 
@@ -1527,7 +1616,7 @@ node scripts/createAdmin.js
 
 ---
 
-### 7. 메모 삭제
+### 8. 메모 삭제
 
 **Endpoint**: `DELETE /api/admin/properties/:roomId/memos/:memoId`
 

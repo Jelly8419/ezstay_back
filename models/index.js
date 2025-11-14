@@ -55,8 +55,10 @@ const Inquiry = InquiryModel(sequelize);
 // 방 관리 모델 초기화
 const RoomMemoModel = require('./RoomMemo');
 const RoomPasswordHistoryModel = require('./RoomPasswordHistory');
+const RoomStatusHistoryModel = require('./RoomStatusHistory');
 const RoomMemoInstance = RoomMemoModel(sequelize);
 const RoomPasswordHistoryInstance = RoomPasswordHistoryModel(sequelize);
+const RoomStatusHistoryInstance = RoomStatusHistoryModel(sequelize);
 
 // 모델 관계 설정
 User.hasOne(LocalUser, {
@@ -300,6 +302,25 @@ Admin.hasMany(RoomPasswordHistoryInstance, {
   as: 'passwordChanges'
 });
 
+// RoomStatusHistory 관계 설정
+RoomStatusHistoryInstance.belongsTo(Room, {
+  foreignKey: 'roomId',
+  as: 'room'
+});
+Room.hasMany(RoomStatusHistoryInstance, {
+  foreignKey: 'roomId',
+  as: 'statusHistories'
+});
+
+RoomStatusHistoryInstance.belongsTo(Admin, {
+  foreignKey: 'adminId',
+  as: 'admin'
+});
+Admin.hasMany(RoomStatusHistoryInstance, {
+  foreignKey: 'adminId',
+  as: 'statusChanges'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -321,5 +342,6 @@ module.exports = {
   FAQ,
   Inquiry,
   RoomMemo: RoomMemoInstance,
-  RoomPasswordHistory: RoomPasswordHistoryInstance
+  RoomPasswordHistory: RoomPasswordHistoryInstance,
+  RoomStatusHistory: RoomStatusHistoryInstance
 };

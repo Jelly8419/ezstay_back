@@ -91,6 +91,13 @@ router.patch(
   adminController.updateRoomStatus
 );
 
+// 방 상태 변경 이력 조회
+router.get(
+  '/properties/:roomId/status-history',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.getRoomStatusHistory
+);
+
 // 방 비밀번호 변경
 router.patch(
   '/properties/:roomId/password',

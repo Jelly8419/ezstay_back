@@ -1,5 +1,5 @@
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, RoomFreeService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, RoomFreeService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 const { calculateProgress } = require('../utils/roomProgress');
@@ -912,6 +912,11 @@ const updateRoomStatus = async (req, res) => {
   try {
     const { roomId } = req.params;
     const { status, reason } = req.body;
+    const adminId = req.admin.id;
+
+    // IP 주소 및 User-Agent 추출
+    const ipAddress = req.ip || req.connection.remoteAddress;
+    const userAgent = req.get('User-Agent');
 
     // 허용된 상태값 검증
     const allowedStatuses = ['published', 'hidden_by_admin'];
@@ -936,28 +941,42 @@ const updateRoomStatus = async (req, res) => {
       }, 400);
     }
 
-    // 상태 변경
-    const previousStatus = room.status;
-    room.status = status;
+    // 트랜잭션 시작
+    const transaction = await sequelize.transaction();
 
-    // hidden_by_admin으로 변경 시 사유 기록 (rejectionReason 필드 재활용)
-    if (status === 'hidden_by_admin' && reason) {
-      room.rejectionReason = reason;
-    } else if (status === 'published') {
-      room.rejectionReason = null; // 게시 시 사유 초기화
+    try {
+      // 상태 변경
+      const previousStatus = room.status;
+      room.status = status;
+      await room.save({ transaction });
+
+      // 상태 변경 이력 저장
+      await RoomStatusHistory.create({
+        roomId,
+        adminId,
+        previousStatus,
+        newStatus: status,
+        reason: reason || null,
+        ipAddress,
+        userAgent,
+        changedAt: new Date()
+      }, { transaction });
+
+      await transaction.commit();
+
+      // 캐시 무효화
+      await invalidateRoomCache();
+
+      return success(res, {
+        roomId: room.id,
+        previousStatus,
+        newStatus: status,
+        reason: reason || null
+      }, '방 상태 변경 완료');
+    } catch (err) {
+      await transaction.rollback();
+      throw err;
     }
-
-    await room.save();
-
-    // 캐시 무효화
-    await invalidateRoomCache();
-
-    return success(res, {
-      roomId: room.id,
-      previousStatus,
-      newStatus: status,
-      reason: room.rejectionReason
-    }, '방 상태 변경 완료');
   } catch (err) {
     console.error('방 상태 변경 실패:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
@@ -1240,6 +1259,67 @@ const getRoomPasswordHistory = async (req, res) => {
   }
 };
 
+/**
+ * 방 상태 변경 이력 조회 (보안 감사용)
+ * GET /api/admin/properties/:roomId/status-history
+ */
+const getRoomStatusHistory = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { limit, offset } = req.query;
+
+    // 방 존재 여부 확인
+    const room = await Room.findByPk(roomId);
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 상태 변경 이력 조회
+    const { count, rows: histories } = await RoomStatusHistory.findAndCountAll({
+      where: { roomId },
+      include: [
+        {
+          model: Admin,
+          as: 'admin',
+          attributes: ['id', 'name']
+        }
+      ],
+      order: [['changedAt', 'DESC']],
+      limit: Math.min(parseInt(limit) || 20, 50),
+      offset: parseInt(offset) || 0
+    });
+
+    // 응답 데이터 가공 (보안상 IP/UserAgent는 super_admin만 볼 수 있도록)
+    const isSuperAdmin = req.admin.role === 'super_admin';
+
+    const responseData = histories.map(history => ({
+      id: history.id,
+      previousStatus: history.previousStatus,
+      newStatus: history.newStatus,
+      reason: history.reason,
+      changedBy: history.admin.name,
+      changedAt: history.changedAt,
+      ...(isSuperAdmin && {
+        ipAddress: history.ipAddress,
+        userAgent: history.userAgent
+      })
+    }));
+
+    return success(res, {
+      total: count,
+      histories: responseData,
+      pagination: {
+        limit: parseInt(limit) || 20,
+        offset: parseInt(offset) || 0,
+        hasMore: count > (parseInt(offset) || 0) + responseData.length
+      }
+    }, '상태 변경 이력 조회 완료');
+  } catch (err) {
+    console.error('상태 변경 이력 조회 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   // 대시보드
   getDashboardStats,
@@ -1260,6 +1340,7 @@ module.exports = {
   // 방 정보 관리 (관리자 전용)
   getRoomManagementDetail,
   updateRoomStatus,
+  getRoomStatusHistory,
   updateRoomPassword,
   getRoomPasswordHistory,
   createRoomMemo,
