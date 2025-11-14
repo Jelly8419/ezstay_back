@@ -79,6 +79,41 @@ router.post(
   adminController.rejectProperty
 );
 
+// --- 방 정보 관리 (관리자 전용) ---
+
+// 방 상세 정보 조회 (메모, 계약 포함)
+router.get('/properties/:roomId/management', adminController.getRoomManagementDetail);
+
+// 방 상태 변경 (게시중 <-> 비게시)
+router.patch(
+  '/properties/:roomId/status',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.updateRoomStatus
+);
+
+// 방 비밀번호 변경
+router.patch(
+  '/properties/:roomId/password',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.updateRoomPassword
+);
+
+// 방 비밀번호 변경 이력 조회
+router.get(
+  '/properties/:roomId/password-history',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.getRoomPasswordHistory
+);
+
+// 메모 생성
+router.post('/properties/:roomId/memos', adminController.createRoomMemo);
+
+// 메모 수정
+router.patch('/properties/:roomId/memos/:memoId', adminController.updateRoomMemo);
+
+// 메모 삭제
+router.delete('/properties/:roomId/memos/:memoId', adminController.deleteRoomMemo);
+
 /**
  * 예약 관리
  */

@@ -213,9 +213,10 @@ const Room = sequelize.define('Room', {
   },
   // 상태 관리
   status: {
-    type: DataTypes.ENUM('draft', 'pending_review', 'approved', 'rejected', 'published'),
+    type: DataTypes.ENUM('draft', 'pending_review', 'approved', 'rejected', 'published', 'hidden_by_admin'),
     allowNull: false,
-    defaultValue: 'draft'
+    defaultValue: 'draft',
+    comment: '방 상태 (hidden_by_admin: 관리자가 임시로 숨긴 상태)'
   },
   submittedAt: {
     type: DataTypes.DATE,
