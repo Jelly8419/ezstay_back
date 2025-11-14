@@ -1,5 +1,5 @@
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, RoomFreeService, UserBankAccount, Inquiry } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, RoomFreeService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory } = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -809,6 +809,438 @@ const getReservationDetail = async (req, res) => {
   }
 };
 
+/**
+ * 관리자용 방 상세 정보 조회 (메모 포함)
+ * GET /api/admin/properties/:roomId/management
+ */
+const getRoomManagementDetail = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+
+    // 방 정보 조회 (모든 관련 정보 포함)
+    const room = await Room.findByPk(roomId, {
+      include: [
+        {
+          model: User,
+          as: 'host',
+          attributes: ['id', 'name', 'email', 'phoneNumber']
+        },
+        {
+          model: Contract,
+          as: 'contracts',
+          where: {
+            status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'APPROVED'] }
+          },
+          required: false,
+          include: [
+            {
+              model: User,
+              as: 'guest',
+              attributes: ['id', 'name', 'phoneNumber']
+            }
+          ],
+          order: [['check_in_date', 'DESC']]
+        },
+        {
+          model: RoomMemo,
+          as: 'memos',
+          include: [
+            {
+              model: Admin,
+              as: 'admin',
+              attributes: ['id', 'name']
+            }
+          ],
+          order: [['created_at', 'DESC']]
+        }
+      ]
+    });
+
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 응답 데이터 구조화
+    const responseData = {
+      roomInfo: {
+        id: room.id,
+        roomName: room.roomName,
+        status: room.status,
+        entrancePassword: room.entrancePassword,
+        address: room.address,
+        detailAddress: room.detailAddress,
+        dailyRent: room.dailyRent,
+        createdAt: room.createdAt,
+        updatedAt: room.updatedAt
+      },
+      hostInfo: {
+        id: room.host.id,
+        name: room.host.name,
+        email: room.host.email,
+        phoneNumber: room.host.phoneNumber
+      },
+      contracts: room.contracts.map(contract => ({
+        id: contract.id,
+        guestName: contract.guest.name,
+        guestPhone: contract.guest.phoneNumber,
+        checkInDate: contract.checkInDate,
+        checkOutDate: contract.checkOutDate,
+        status: contract.status,
+        totalAmount: contract.totalAmount,
+        createdAt: contract.createdAt
+      })),
+      memos: room.memos.map(memo => ({
+        id: memo.id,
+        content: memo.content,
+        createdBy: memo.admin.name,
+        createdAt: memo.createdAt,
+        updatedAt: memo.updatedAt
+      }))
+    };
+
+    return success(res, responseData, '방 상세 정보 조회 완료');
+  } catch (err) {
+    console.error('방 상세 정보 조회 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 방 상태 변경 (게시중 <-> 비게시)
+ * PATCH /api/admin/properties/:roomId/status
+ */
+const updateRoomStatus = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { status, reason } = req.body;
+
+    // 허용된 상태값 검증
+    const allowedStatuses = ['published', 'hidden_by_admin'];
+    if (!allowedStatuses.includes(status)) {
+      return error(res, {
+        code: 4001,
+        message: `허용되지 않은 상태값입니다. (허용: ${allowedStatuses.join(', ')})`
+      }, 400);
+    }
+
+    const room = await Room.findByPk(roomId);
+
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 현재 상태와 동일한지 확인
+    if (room.status === status) {
+      return error(res, {
+        code: 4002,
+        message: '이미 해당 상태입니다.'
+      }, 400);
+    }
+
+    // 상태 변경
+    const previousStatus = room.status;
+    room.status = status;
+
+    // hidden_by_admin으로 변경 시 사유 기록 (rejectionReason 필드 재활용)
+    if (status === 'hidden_by_admin' && reason) {
+      room.rejectionReason = reason;
+    } else if (status === 'published') {
+      room.rejectionReason = null; // 게시 시 사유 초기화
+    }
+
+    await room.save();
+
+    // 캐시 무효화
+    await invalidateRoomCache();
+
+    return success(res, {
+      roomId: room.id,
+      previousStatus,
+      newStatus: status,
+      reason: room.rejectionReason
+    }, '방 상태 변경 완료');
+  } catch (err) {
+    console.error('방 상태 변경 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 방 비밀번호 변경 (이력 저장 포함)
+ * PATCH /api/admin/properties/:roomId/password
+ */
+const updateRoomPassword = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { newPassword, reason } = req.body;
+    const adminId = req.admin.id; // authenticateAdmin 미들웨어에서 설정
+
+    // 비밀번호 필수 검증
+    if (!newPassword || newPassword.trim() === '') {
+      return error(res, {
+        code: 4003,
+        message: '새 비밀번호를 입력해주세요.'
+      }, 400);
+    }
+
+    // 길이 제한만 검증 (특수문자 허용: *1234#, #9876* 등)
+    if (newPassword.length < 4 || newPassword.length > 50) {
+      return error(res, {
+        code: 4004,
+        message: '비밀번호는 4~50자 이내로 입력해주세요.'
+      }, 400);
+    }
+
+    const room = await Room.findByPk(roomId);
+
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    const previousPassword = room.entrancePassword;
+
+    // 트랜잭션으로 비밀번호 변경 + 이력 저장
+    const transaction = await sequelize.transaction();
+
+    try {
+      // 1. 방 비밀번호 변경
+      room.entrancePassword = newPassword.trim();
+      await room.save({ transaction });
+
+      // 2. 변경 이력 저장
+      const ipAddress = req.ip || req.connection.remoteAddress;
+      const userAgent = req.get('user-agent');
+
+      await RoomPasswordHistory.create({
+        roomId,
+        adminId,
+        previousPassword,
+        newPassword: newPassword.trim(),
+        reason: reason || null,
+        ipAddress,
+        userAgent,
+        changedAt: new Date()
+      }, { transaction });
+
+      await transaction.commit();
+
+      return success(res, {
+        roomId: room.id,
+        previousPassword,
+        newPassword: newPassword.trim(),
+        changedAt: new Date(),
+        reason: reason || null
+      }, '방 비밀번호 변경 완료');
+    } catch (err) {
+      await transaction.rollback();
+      throw err;
+    }
+  } catch (err) {
+    console.error('방 비밀번호 변경 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 메모 생성
+ * POST /api/admin/properties/:roomId/memos
+ */
+const createRoomMemo = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { content } = req.body;
+    const adminId = req.admin.id; // authenticateAdmin 미들웨어에서 설정
+
+    // 내용 필수 검증
+    if (!content || content.trim() === '') {
+      return error(res, {
+        code: 4005,
+        message: '메모 내용을 입력해주세요.'
+      }, 400);
+    }
+
+    // 방 존재 여부 확인
+    const room = await Room.findByPk(roomId);
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 메모 생성
+    const memo = await RoomMemo.create({
+      roomId,
+      adminId,
+      content: content.trim()
+    });
+
+    // 작성자 정보 포함하여 조회
+    const memoWithAdmin = await RoomMemo.findByPk(memo.id, {
+      include: [
+        {
+          model: Admin,
+          as: 'admin',
+          attributes: ['id', 'name']
+        }
+      ]
+    });
+
+    return success(res, {
+      id: memoWithAdmin.id,
+      content: memoWithAdmin.content,
+      createdBy: memoWithAdmin.admin.name,
+      createdAt: memoWithAdmin.createdAt
+    }, '메모 생성 완료', 201);
+  } catch (err) {
+    console.error('메모 생성 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 메모 수정
+ * PATCH /api/admin/properties/:roomId/memos/:memoId
+ */
+const updateRoomMemo = async (req, res) => {
+  try {
+    const { roomId, memoId } = req.params;
+    const { content } = req.body;
+
+    // 내용 필수 검증
+    if (!content || content.trim() === '') {
+      return error(res, {
+        code: 4005,
+        message: '메모 내용을 입력해주세요.'
+      }, 400);
+    }
+
+    // 메모 존재 여부 및 방 일치 확인
+    const memo = await RoomMemo.findOne({
+      where: { id: memoId, roomId }
+    });
+
+    if (!memo) {
+      return error(res, {
+        code: 4006,
+        message: '해당 메모를 찾을 수 없습니다.'
+      }, 404);
+    }
+
+    // 메모 수정
+    memo.content = content.trim();
+    await memo.save();
+
+    // 작성자 정보 포함하여 조회
+    const memoWithAdmin = await RoomMemo.findByPk(memo.id, {
+      include: [
+        {
+          model: Admin,
+          as: 'admin',
+          attributes: ['id', 'name']
+        }
+      ]
+    });
+
+    return success(res, {
+      id: memoWithAdmin.id,
+      content: memoWithAdmin.content,
+      createdBy: memoWithAdmin.admin.name,
+      updatedAt: memoWithAdmin.updatedAt
+    }, '메모 수정 완료');
+  } catch (err) {
+    console.error('메모 수정 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 메모 삭제
+ * DELETE /api/admin/properties/:roomId/memos/:memoId
+ */
+const deleteRoomMemo = async (req, res) => {
+  try {
+    const { roomId, memoId } = req.params;
+
+    // 메모 존재 여부 및 방 일치 확인
+    const memo = await RoomMemo.findOne({
+      where: { id: memoId, roomId }
+    });
+
+    if (!memo) {
+      return error(res, {
+        code: 4006,
+        message: '해당 메모를 찾을 수 없습니다.'
+      }, 404);
+    }
+
+    await memo.destroy();
+
+    return success(res, { id: memoId }, '메모 삭제 완료');
+  } catch (err) {
+    console.error('메모 삭제 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 비밀번호 변경 이력 조회
+ * GET /api/admin/properties/:roomId/password-history
+ */
+const getRoomPasswordHistory = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { limit = 10, offset = 0 } = req.query;
+
+    // 방 존재 여부 확인
+    const room = await Room.findByPk(roomId);
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 비밀번호 변경 이력 조회 (최신순)
+    const { count, rows: histories } = await RoomPasswordHistory.findAndCountAll({
+      where: { roomId },
+      include: [
+        {
+          model: Admin,
+          as: 'admin',
+          attributes: ['id', 'name']
+        }
+      ],
+      order: [['changed_at', 'DESC']],
+      limit: Math.min(parseInt(limit) || 10, 50),
+      offset: parseInt(offset) || 0
+    });
+
+    // 응답 데이터 가공 (보안상 IP/UserAgent는 super_admin만 볼 수 있도록)
+    const isSuperAdmin = req.admin.role === 'super_admin';
+
+    const responseData = histories.map(history => ({
+      id: history.id,
+      previousPassword: history.previousPassword,
+      newPassword: history.newPassword,
+      reason: history.reason,
+      changedBy: history.admin.name,
+      changedAt: history.changedAt,
+      ...(isSuperAdmin && {
+        ipAddress: history.ipAddress,
+        userAgent: history.userAgent
+      })
+    }));
+
+    return success(res, {
+      total: count,
+      histories: responseData,
+      pagination: {
+        limit: parseInt(limit) || 10,
+        offset: parseInt(offset) || 0,
+        hasMore: count > (parseInt(offset) || 0) + responseData.length
+      }
+    }, '비밀번호 변경 이력 조회 완료');
+  } catch (err) {
+    console.error('비밀번호 변경 이력 조회 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   // 대시보드
   getDashboardStats,
@@ -822,9 +1254,18 @@ module.exports = {
   // 매물 관리
   getProperties,
   getPendingReviews,
-  getPropertyDetail,  // ✅ 추가
+  getPropertyDetail,
   approveProperty,
   rejectProperty,
+
+  // 방 정보 관리 (관리자 전용)
+  getRoomManagementDetail,
+  updateRoomStatus,
+  updateRoomPassword,
+  getRoomPasswordHistory,
+  createRoomMemo,
+  updateRoomMemo,
+  deleteRoomMemo,
 
   // 예약 관리
   getReservations,

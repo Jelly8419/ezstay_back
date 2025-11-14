@@ -14,7 +14,8 @@
 4. [유저 관리 API](#유저-관리-api)
 5. [매물 관리 API](#매물-관리-api)
 6. [예약 관리 API](#예약-관리-api)
-7. [에러 코드](#에러-코드)
+7. [방 정보 관리 API](#방-정보-관리-api) ⭐ NEW
+8. [에러 코드](#에러-코드)
 
 ---
 
@@ -1201,5 +1202,364 @@ node scripts/createAdmin.js
 
 ---
 
+## 📝 방 정보 관리 API
+
+### 1. 방 상세 정보 조회 (관리자 전용)
+
+**Endpoint**: `GET /api/admin/properties/:roomId/management`
+
+**설명**: 방 번호, 호스트 정보, 계약 내역, 메모를 포함한 전체 정보 조회
+
+**권한**: 모든 관리자
+
+**응답 예시**:
+```json
+{
+  "success": true,
+  "message": "방 상세 정보 조회 완료",
+  "data": {
+    "roomInfo": {
+      "id": 1,
+      "roomName": "평화로에 위치한 대학생 아파트",
+      "status": "published",
+      "entrancePassword": "123456",
+      "address": "서울 대학로",
+      "detailAddress": "101동 502호",
+      "dailyRent": 50000,
+      "createdAt": "2023-12-01T10:00:00.000Z",
+      "updatedAt": "2023-12-15T14:30:00.000Z"
+    },
+    "hostInfo": {
+      "id": 10,
+      "name": "김민준",
+      "email": "minjun.kim@example.com",
+      "phoneNumber": "010-1234-5678"
+    },
+    "contracts": [
+      {
+        "id": "20231201-001",
+        "guestName": "이현우",
+        "guestPhone": "010-9876-5432",
+        "checkInDate": "2023-12-15",
+        "checkOutDate": "2023-12-20",
+        "status": "IN_PROGRESS",
+        "totalAmount": 300000,
+        "createdAt": "2023-12-01T09:00:00.000Z"
+      }
+    ],
+    "memos": [
+      {
+        "id": 5,
+        "content": "게스트 이연우님 계약 만료 후 재계약 요청",
+        "createdBy": "관리자",
+        "createdAt": "2023-12-10T15:20:00.000Z",
+        "updatedAt": "2023-12-10T15:20:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+---
+
+### 2. 방 상태 변경
+
+**Endpoint**: `PATCH /api/admin/properties/:roomId/status`
+
+**설명**: 방 게시 상태를 변경합니다 (게시중 ↔ 비게시)
+
+**권한**: super_admin, admin
+
+**요청 Body**:
+```json
+{
+  "status": "published",  // 또는 "hidden_by_admin"
+  "reason": "호스트 요청으로 임시 비공개"  // hidden_by_admin 시 선택사항
+}
+```
+
+**허용 상태값**:
+- `published`: 게시중
+- `hidden_by_admin`: 관리자가 임시로 숨긴 상태
+
+**응답 예시**:
+```json
+{
+  "success": true,
+  "message": "방 상태 변경 완료",
+  "data": {
+    "roomId": 1,
+    "previousStatus": "published",
+    "newStatus": "hidden_by_admin",
+    "reason": "호스트 요청으로 임시 비공개"
+  }
+}
+```
+
+**에러 응답**:
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4001,
+    "message": "허용되지 않은 상태값입니다. (허용: published, hidden_by_admin)"
+  }
+}
+```
+
+---
+
+### 3. 방 비밀번호 변경
+
+**Endpoint**: `PATCH /api/admin/properties/:roomId/password`
+
+**설명**: 방 출입 비밀번호를 변경합니다
+
+**권한**: super_admin, admin
+
+**요청 Body**:
+```json
+{
+  "newPassword": "654321"
+}
+```
+
+**비밀번호 형식**: 4~8자리 숫자만 가능
+
+**응답 예시**:
+```json
+{
+  "success": true,
+  "message": "방 비밀번호 변경 완료",
+  "data": {
+    "roomId": 1,
+    "previousPassword": "123456",
+    "newPassword": "654321"
+  }
+}
+```
+
+**에러 응답**:
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4004,
+    "message": "비밀번호는 4~50자 이내로 입력해주세요."
+  }
+}
+```
+
+---
+
+### 4. 비밀번호 변경 이력 조회
+
+**Endpoint**: `GET /api/admin/properties/:roomId/password-history`
+
+**설명**: 특정 방의 비밀번호 변경 이력을 조회합니다 (보안 감사용)
+
+**권한**: `super_admin`, `admin`
+
+**Query Parameters**:
+- `limit` (선택, 기본값: 20): 페이지당 항목 수
+- `offset` (선택, 기본값: 0): 건너뛸 항목 수
+
+**응답 예시 (super_admin)**:
+```json
+{
+  "success": true,
+  "message": "비밀번호 변경 이력 조회 완료",
+  "data": {
+    "histories": [
+      {
+        "id": 3,
+        "previousPassword": "1234",
+        "newPassword": "*1234#",
+        "reason": "호스트 분실 신고로 인한 변경",
+        "changedBy": "김철수",
+        "changedAt": "2023-12-10T14:30:00.000Z",
+        "ipAddress": "192.168.1.100",
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)..."
+      },
+      {
+        "id": 2,
+        "previousPassword": "5678",
+        "newPassword": "1234",
+        "reason": "게스트 체크아웃 후 보안 강화",
+        "changedBy": "이영희",
+        "changedAt": "2023-12-05T09:15:00.000Z",
+        "ipAddress": "192.168.1.101",
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)..."
+      }
+    ],
+    "pagination": {
+      "total": 5,
+      "limit": 20,
+      "offset": 0,
+      "hasMore": false
+    }
+  }
+}
+```
+
+**응답 예시 (admin, cs_admin)**:
+```json
+{
+  "success": true,
+  "message": "비밀번호 변경 이력 조회 완료",
+  "data": {
+    "histories": [
+      {
+        "id": 3,
+        "previousPassword": "1234",
+        "newPassword": "*1234#",
+        "reason": "호스트 분실 신고로 인한 변경",
+        "changedBy": "김철수",
+        "changedAt": "2023-12-10T14:30:00.000Z"
+      }
+    ],
+    "pagination": {
+      "total": 5,
+      "limit": 20,
+      "offset": 0,
+      "hasMore": false
+    }
+  }
+}
+```
+
+> **Note**: `ipAddress`와 `userAgent` 필드는 `super_admin` 권한에서만 조회 가능합니다.
+
+**에러 응답**:
+```json
+{
+  "success": false,
+  "error": {
+    "code": 3002,
+    "message": "존재하지 않는 방입니다."
+  }
+}
+```
+
+---
+
+### 5. 메모 생성
+
+**Endpoint**: `POST /api/admin/properties/:roomId/memos`
+
+**설명**: 방에 대한 관리 메모를 생성합니다
+
+**권한**: 모든 관리자
+
+**요청 Body**:
+```json
+{
+  "content": "게스트 이연우님 계약 만료 후 재계약 요청"
+}
+```
+
+**응답 예시**:
+```json
+{
+  "success": true,
+  "message": "메모 생성 완료",
+  "data": {
+    "id": 5,
+    "content": "게스트 이연우님 계약 만료 후 재계약 요청",
+    "createdBy": "관리자",
+    "createdAt": "2023-12-10T15:20:00.000Z"
+  }
+}
+```
+
+**에러 응답**:
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4005,
+    "message": "메모 내용을 입력해주세요."
+  }
+}
+```
+
+---
+
+### 6. 메모 수정
+
+**Endpoint**: `PATCH /api/admin/properties/:roomId/memos/:memoId`
+
+**설명**: 기존 메모를 수정합니다
+
+**권한**: 모든 관리자 (작성자와 무관하게 수정 가능)
+
+**요청 Body**:
+```json
+{
+  "content": "게스트 이연우님 재계약 완료 (12/15 ~ 12/20)"
+}
+```
+
+**응답 예시**:
+```json
+{
+  "success": true,
+  "message": "메모 수정 완료",
+  "data": {
+    "id": 5,
+    "content": "게스트 이연우님 재계약 완료 (12/15 ~ 12/20)",
+    "createdBy": "관리자",
+    "updatedAt": "2023-12-10T16:00:00.000Z"
+  }
+}
+```
+
+**에러 응답**:
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4006,
+    "message": "해당 메모를 찾을 수 없습니다."
+  }
+}
+```
+
+---
+
+### 7. 메모 삭제
+
+**Endpoint**: `DELETE /api/admin/properties/:roomId/memos/:memoId`
+
+**설명**: 메모를 삭제합니다
+
+**권한**: 모든 관리자
+
+**응답 예시**:
+```json
+{
+  "success": true,
+  "message": "메모 삭제 완료",
+  "data": {
+    "id": 5
+  }
+}
+```
+
+---
+
+## 🚨 추가 에러 코드
+
+| 코드 | 메시지 | 설명 |
+|------|--------|------|
+| 4001 | 허용되지 않은 상태값입니다 | 상태 변경 시 허용되지 않은 값 전송 |
+| 4002 | 이미 해당 상태입니다 | 동일한 상태로 변경 시도 |
+| 4003 | 새 비밀번호를 입력해주세요 | 비밀번호 누락 |
+| 4004 | 비밀번호는 4~8자리 숫자만 가능합니다 | 비밀번호 형식 오류 |
+| 4005 | 메모 내용을 입력해주세요 | 메모 내용 누락 |
+| 4006 | 해당 메모를 찾을 수 없습니다 | 존재하지 않는 메모 접근 |
+
+---
+
 **작성자**: Ezstay Development Team
-**최종 수정일**: 2025-10-27
+**최종 수정일**: 2025-01-14
