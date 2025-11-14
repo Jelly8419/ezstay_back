@@ -1,7 +1,6 @@
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, RoomFreeService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, RoomFreeService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, sequelize } = require('../models');
 const { Op } = require('sequelize');
-const sequelize = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 const { calculateProgress } = require('../utils/roomProgress');
 
