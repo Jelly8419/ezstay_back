@@ -596,8 +596,6 @@ const getPropertyDetail = async (req, res) => {
       elevatorAvailable: room.elevatorAvailable,
       roomCount: room.roomCount,
       bathroomCount: room.bathroomCount,
-      livingRoomCount: room.livingRoomCount,
-      kitchenCount: room.kitchenCount,
       isDuplex: room.isDuplex,
       entrancePassword: room.entrancePassword,  // 관리자는 현관 비밀번호 확인 가능
 

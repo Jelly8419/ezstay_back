@@ -230,8 +230,7 @@ KEYS rooms:map:* | wc -l
 KEYS rooms:map:*:zoom3 | xargs redis-cli DEL
 ```
 
-**성능 모니터링:**
-```javascript
+**성능 모니터링:**```javascript
 // 캐시 히트율 계산
 const totalRequests = cacheHits + cacheMisses;
 const hitRate = (cacheHits / totalRequests) * 100;

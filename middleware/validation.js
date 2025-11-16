@@ -9,8 +9,6 @@ const validateRoomData = (req, res, next) => {
     elevatorAvailable,
     roomCount,
     bathroomCount,
-    livingRoomCount,
-    kitchenCount,
     isDuplex
   } = req.body;
 
@@ -55,14 +53,6 @@ const validateRoomData = (req, res, next) => {
 
   if (!bathroomCount || bathroomCount < 0) {
     errors.push('화장실 개수는 0 이상의 숫자여야 합니다.');
-  }
-
-  if (!livingRoomCount || livingRoomCount < 0) {
-    errors.push('거실 개수는 0 이상의 숫자여야 합니다.');
-  }
-
-  if (!kitchenCount || kitchenCount < 0) {
-    errors.push('주방 개수는 0 이상의 숫자여야 합니다.');
   }
 
   if (typeof isDuplex !== 'boolean') {

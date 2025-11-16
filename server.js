@@ -37,9 +37,13 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    // 개발 환경: 모든 localhost 허용
+    // 개발 환경: 모든 localhost와 127.0.0.1을 포트 무관하게 허용
     if (process.env.NODE_ENV === 'development') {
-      if (origin && (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1'))) {
+      if (origin && (origin.startsWith('http://localhost:') ||
+                     origin.startsWith('http://127.0.0.1:') ||
+                     origin === 'http://localhost' ||
+                     origin === 'http://127.0.0.1')) {
+        console.log(`[CORS] Development mode - allowing origin: ${origin}`);
         return callback(null, true);
       }
     }
@@ -47,9 +51,11 @@ const corsOptions = {
     // 환경변수로 지정된 도메인 허용 (개발/프로덕션 공통)
     const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [];
     if (origin && allowedOrigins.includes(origin)) {
+      console.log(`[CORS] Allowed origin from env: ${origin}`);
       return callback(null, true);
     }
 
+    console.log(`[CORS] Blocked origin: ${origin}`);
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true,

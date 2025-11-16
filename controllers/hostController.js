@@ -22,8 +22,6 @@ const createRoom = async (req, res) => {
       elevatorAvailable,
       roomCount,
       bathroomCount,
-      livingRoomCount,
-      kitchenCount,
       isDuplex,
       entrancePassword
     } = req.body;
@@ -60,8 +58,6 @@ const createRoom = async (req, res) => {
       elevatorAvailable: elevatorAvailable || false,
       roomCount: roomCount || 0,
       bathroomCount: bathroomCount || 0,
-      livingRoomCount: livingRoomCount || 0,
-      kitchenCount: kitchenCount || 0,
       isDuplex: isDuplex || false,
       entrancePassword,
       status: 'draft'
@@ -99,8 +95,6 @@ const updateBasicInfo = async (req, res) => {
       elevatorAvailable,
       roomCount,
       bathroomCount,
-      livingRoomCount,
-      kitchenCount,
       isDuplex,
       entrancePassword
     } = req.body;
@@ -140,8 +134,6 @@ const updateBasicInfo = async (req, res) => {
       elevatorAvailable: elevatorAvailable ?? room.elevatorAvailable,
       roomCount: roomCount ?? room.roomCount,
       bathroomCount: bathroomCount ?? room.bathroomCount,
-      livingRoomCount: livingRoomCount ?? room.livingRoomCount,
-      kitchenCount: kitchenCount ?? room.kitchenCount,
       isDuplex: isDuplex ?? room.isDuplex,
       entrancePassword: entrancePassword ?? room.entrancePassword
     }, { transaction });
@@ -679,8 +671,6 @@ const getRoom = async (req, res) => {
       elevatorAvailable: room.elevatorAvailable,
       roomCount: room.roomCount,
       bathroomCount: room.bathroomCount,
-      livingRoomCount: room.livingRoomCount,
-      kitchenCount: room.kitchenCount,
       isDuplex: room.isDuplex,
       entrancePassword: room.entrancePassword,
 

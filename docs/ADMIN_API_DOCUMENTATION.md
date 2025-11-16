@@ -577,8 +577,6 @@ Authorization: Bearer {accessToken}
     "elevatorAvailable": true,
     "roomCount": 1,
     "bathroomCount": 1,
-    "livingRoomCount": 0,
-    "kitchenCount": 1,
     "isDuplex": false,
     "entrancePassword": "1234*",
 

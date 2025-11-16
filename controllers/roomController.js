@@ -18,8 +18,6 @@ const createRoom = async (req, res) => {
       elevatorAvailable,
       roomCount,
       bathroomCount,
-      livingRoomCount,
-      kitchenCount,
       isDuplex,
       hostId
     } = req.body;
@@ -34,8 +32,6 @@ const createRoom = async (req, res) => {
       elevatorAvailable,
       roomCount,
       bathroomCount,
-      livingRoomCount,
-      kitchenCount,
       isDuplex,
       hostId
     });

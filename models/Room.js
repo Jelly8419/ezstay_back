@@ -85,20 +85,6 @@ const Room = sequelize.define('Room', {
       min: 0
     }
   },
-  livingRoomCount: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    validate: {
-      min: 0
-    }
-  },
-  kitchenCount: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    validate: {
-      min: 0
-    }
-  },
   isDuplex: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
