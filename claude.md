@@ -105,7 +105,7 @@ Room (방)
    - 주소 입력 시 카카오 로컬 API로 자동 위도/경도 변환
    - 좌표 변환 실패 시에도 등록은 계속 진행됨 (좌표는 선택사항)
 2. **요금 설정** (`PATCH /api/host/rooms/:roomId/pricing`)
-3. **사진 업로드** (`POST /api/host/rooms/:roomId/photos`) - 최소 6장, 최대 20장
+3. **사진 업로드** (`POST /api/host/rooms/:roomId/photos`) - 최소 5장, 최대 20장
 4. **편의시설** (`PATCH /api/host/rooms/:roomId/amenities`)
 5. **무료 부가서비스** (`PATCH /api/host/rooms/:roomId/free-services`)
 6. **방 소개** (`PATCH /api/host/rooms/:roomId/description`)

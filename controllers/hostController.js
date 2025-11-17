@@ -227,14 +227,33 @@ const uploadPhotos = async (req, res) => {
       return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
-    // multer로 업로드된 파일들 처리 (실제 파일 업로드 미들웨어 필요)
+    // 신규 업로드 파일 체크
     if (!req.files || req.files.length === 0) {
-      return error(res, ErrorCodes.MIN_PHOTOS_REQUIRED, 400);
+      return error(res, ErrorCodes.NO_FILE_UPLOADED, 400);
     }
 
-    if (req.files.length < 6 || req.files.length > 20) {
-      return error(res, ErrorCodes.MAX_PHOTOS_EXCEEDED, 400);
+    // 기존 업로드된 사진 개수 조회
+    const existingPhotoCount = await RoomPhoto.count({
+      where: { roomId: room.id }
+    });
+
+    // 총 사진 개수 체크 (기존 + 신규)
+    const totalPhotoCount = existingPhotoCount + req.files.length;
+
+    if (totalPhotoCount < 5) {
+      return error(res, ErrorCodes.MIN_PHOTOS_REQUIRED, 400,
+        `최소 5장의 사진이 필요합니다. (현재: ${totalPhotoCount}장)`);
     }
+
+    if (totalPhotoCount > 20) {
+      return error(res, ErrorCodes.MAX_PHOTOS_EXCEEDED, 400,
+        `최대 20장까지만 업로드 가능합니다. (현재: ${existingPhotoCount}장, 추가 시도: ${req.files.length}장)`);
+    }
+
+    // 기존 사진의 최대 order 조회 (신규 사진의 시작 순서 결정)
+    const maxOrder = await RoomPhoto.max('order', {
+      where: { roomId: room.id }
+    }) || -1;
 
     const photoUrls = [];
     for (let i = 0; i < req.files.length; i++) {
@@ -244,7 +263,7 @@ const uploadPhotos = async (req, res) => {
       const photo = await RoomPhoto.create({
         roomId: room.id,
         url: relativePath,
-        order: i
+        order: maxOrder + 1 + i
       }, { transaction });
 
       photoUrls.push({
@@ -441,7 +460,7 @@ const submitReview = async (req, res) => {
     }
 
     // 필수 정보 검증
-    if (!room.photos || room.photos.length < 6) {
+    if (!room.photos || room.photos.length < 5) {
       return error(res, ErrorCodes.MIN_PHOTOS_REQUIRED, 400);
     }
 

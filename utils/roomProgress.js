@@ -23,7 +23,7 @@ const calculateProgress = (room) => {
   }
 
    // 2단계: 사진 및 편의시설 체크
-  if (room.photos && room.photos.length >= 6 && room.amenity) {
+  if (room.photos && room.photos.length >= 5 && room.amenity) {
     steps.photosAndAmenities = true;
   }
 
