@@ -861,3 +861,84 @@ ALTER TABLE rooms DROP INDEX idx_status_location;
 
 현재 캐싱 전략이 훌륭하므로, **복합 인덱스 추가만으로도 충분한 성능 개선**을 달성할 수 있습니다.
 캐시 미스 시에도 빠른 응답 속도를 보장하여 사용자 경험이 크게 개선됩니다.
+
+## 방 등록 진행 단계 추적 (2025-01-17)
+
+### 문제점 및 해결 방안
+
+**파일**: [utils/roomProgress.js](c:\study\ezstay_back\utils\roomProgress.js)
+
+#### 배경
+방 등록은 5단계로 구성되며, 각 단계별 완료 여부를 추적하여 사용자에게 진행률을 표시합니다:
+1. **basicInfo**: 기본 정보 (필수)
+2. **photosAndAmenities**: 사진 및 편의시설 (필수)
+3. **pricing**: 요금 설정 (필수)
+4. **freeServices**: 무료 부가서비스 (**선택 사항**)
+5. **description**: 방 소개 (필수)
+
+#### 기존 로직의 문제점
+
+**문제 1**: 순차적 추적의 한계
+```javascript
+// 기존 코드
+if (!steps.freeServices) currentStep = 'freeServices';  // ❌ 여기서 막힘
+else if (!steps.description) currentStep = 'description';
+```
+- 4단계(무료 부가서비스)는 선택 사항이지만, 건너뛰면 `currentStep`이 계속 `'freeServices'`로 고정
+- 사용자가 5단계에서 작업 중이어도 4단계로 표시되는 문제
+
+**문제 2**: 완료율 계산 오류
+```javascript
+// 기존 코드
+const completionRate = (completedSteps / 5) * 100;
+// 1,2,3,5단계 완료 → 80% (4단계 미완료로 인해)
+```
+
+#### 해결 방안
+
+**해결 1**: 스마트한 currentStep 추적
+```javascript
+const determineCurrentStep = (room, steps) => {
+  // 1. 필수 단계 순차 체크
+  if (!steps.basicInfo) return 'basicInfo';
+  if (!steps.photosAndAmenities) return 'photosAndAmenities';
+  if (!steps.pricing) return 'pricing';
+
+  // 2. 5단계 완료 시 → 'completed' (4단계 무시)
+  if (steps.description) return 'completed';
+
+  // 3. 최근 작업 시간으로 실제 작업 중인 단계 판단
+  // - room.updatedAt, room.freeService.updatedAt 비교
+  // - description 필드 있으면 → 'description'
+
+  // 4. 기본값
+  return !steps.freeServices ? 'freeServices' : 'description';
+};
+```
+
+**해결 2**: 필수 단계만으로 완료율 계산
+```javascript
+const requiredSteps = ['basicInfo', 'photosAndAmenities', 'pricing', 'description'];
+const completionRate = (completedRequiredSteps / 4) * 100;
+// 1,2,3,5단계 완료 → 100% ✅
+```
+
+### 개선 효과
+
+| 시나리오 | 기존 동작 | 개선 후 |
+|---------|----------|---------|
+| 4단계 건너뛰고 5단계 작업 | `currentStep: 'freeServices'` ❌ | `currentStep: 'description'` ✅ |
+| 1,2,3,5단계 완료 | `completionRate: 80%` ❌ | `completionRate: 100%` ✅ |
+| 5단계 먼저 작성 후 4단계 추가 | `currentStep: 'freeServices'` ❌ | `currentStep: 'completed'` ✅ |
+
+### 주요 특징
+
+1. **선택 단계 건너뛰기 지원**: 4단계는 완료율 계산에서 제외
+2. **최근 작업 시간 기반 추적**: `updatedAt` 비교로 실제 작업 중인 단계 판단
+3. **하위 호환성**: 기존 데이터에 영향 없음 (읽기 로직만 변경)
+4. **프론트엔드 친화적**: 4단계를 "선택 사항" 배지로 표시 가능
+
+### 관련 파일
+- [utils/roomProgress.js](c:\study\ezstay_back\utils\roomProgress.js) - 진행 단계 계산 로직
+- [docs/SCHEMA_CHANGE_DESIGN_2025_01.md](c:\study\ezstay_back\docs\SCHEMA_CHANGE_DESIGN_2025_01.md) - 상세 설계 문서
+- [controllers/hostController.js](c:\study\ezstay_back\controllers\hostController.js) - 방 등록 API (getMyRooms, getRoom)

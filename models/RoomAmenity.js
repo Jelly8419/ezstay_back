@@ -17,22 +17,24 @@ const RoomAmenity = sequelize.define('RoomAmenity', {
   basicOptions: {
     type: DataTypes.JSON,
     allowNull: false,
-    defaultValue: {}
+    defaultValue: {},
+    comment: '기본 편의시설 (침대 정보 포함 가능: { "침대": { "킹": 3, "퀸": 0, "싱글": 1, "슈퍼싱글": 2 } })'
   },
   additionalOptions: {
     type: DataTypes.JSON,
     allowNull: false,
-    defaultValue: {}
+    defaultValue: {},
+    comment: '추가 옵션 (petsAllowed 포함 가능)'
   },
   convenienceOptions: {
     type: DataTypes.JSON,
     allowNull: false,
     defaultValue: {}
   },
-  petsAllowed: {
-    type: DataTypes.BOOLEAN,
-    allowNull: false,
-    defaultValue: false
+  wifiPassword: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+    comment: '와이파이 비밀번호 (호스트 제공 정보)'
   }
 }, {
   tableName: 'room_amenities',

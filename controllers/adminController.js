@@ -632,25 +632,18 @@ const getPropertyDetail = async (req, res) => {
 
       // 무료 부가서비스
       freeServices: room.freeService ? {
-        agreeTerms: room.freeService.agreeTerms,
         cleaningService: room.freeService.cleaningService,
-        cleaningToolImageUrl: room.freeService.cleaningToolImageUrl,
         hairDryerRental: room.freeService.hairDryerRental,
         beddingService: room.freeService.beddingService,
-        bedSizes: {
-          '슈퍼싱글': room.freeService.bedSizeSuperSingle,
-          '퀸': room.freeService.bedSizeQueen,
-          '킹': room.freeService.bedSizeKing
-        },
         amenityKit: room.freeService.amenityKit,
+        towelSetRental: room.freeService.towelSetRental,
         autoPasswordChange: room.freeService.autoPasswordChange,
         roomPassword: room.freeService.roomPassword
       } : null,
 
       // 방 소개
       description: room.description,
-      transportation: room.transportation,
-      houseRules: room.houseRules,
+      maxGuests: room.maxGuests,
 
       // 상태
       status: room.status,

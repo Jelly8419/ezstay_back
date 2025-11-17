@@ -7,7 +7,6 @@ const {
   uploadPhotos,
   updateAmenities,
   updateFreeServices,
-  uploadCleaningToolImage,
   updateDescription,
   submitReview,
   reorderPhotos,
@@ -43,22 +42,19 @@ router.patch('/rooms/:roomId/amenities', updateAmenities);
 // 6. 무료 부가서비스 설정
 router.patch('/rooms/:roomId/free-services', updateFreeServices);
 
-// 7. 청소도구 이미지 업로드 (단일 이미지) - Rate Limiting 적용
-router.post('/rooms/:roomId/cleaning-tool-image', uploadLimiter, uploadSingleImage, uploadCleaningToolImage);
-
-// 8. 방 소개
+// 7. 방 소개
 router.patch('/rooms/:roomId/description', updateDescription);
 
-// 9. 심사 요청
+// 8. 심사 요청
 router.post('/rooms/:roomId/submit-review', submitReview);
 
-// 10. 사진 순서 변경
+// 9. 사진 순서 변경
 router.patch('/rooms/:roomId/photos/reorder', reorderPhotos);
 
-// 11. 사진 삭제
+// 10. 사진 삭제
 router.delete('/rooms/:roomId/photos/:photoId', deletePhoto);
 
-// 12. 방 상세 정보 조회
+// 11. 방 상세 정보 조회
 router.get('/rooms/:roomId', getRoom);
 
 module.exports = router;

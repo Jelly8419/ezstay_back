@@ -14,19 +14,10 @@ const RoomFreeService = sequelize.define('RoomFreeService', {
     primaryKey: true
     // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
-  agreeTerms: {
-    type: DataTypes.BOOLEAN,
-    allowNull: false,
-    defaultValue: false
-  },
   cleaningService: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
     defaultValue: false
-  },
-  cleaningToolImageUrl: {
-    type: DataTypes.STRING(500),
-    allowNull: true
   },
   hairDryerRental: {
     type: DataTypes.BOOLEAN,
@@ -37,21 +28,6 @@ const RoomFreeService = sequelize.define('RoomFreeService', {
     type: DataTypes.BOOLEAN,
     allowNull: false,
     defaultValue: false
-  },
-  bedSizeSuperSingle: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    defaultValue: 0
-  },
-  bedSizeQueen: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    defaultValue: 0
-  },
-  bedSizeKing: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    defaultValue: 0
   },
   amenityKit: {
     type: DataTypes.BOOLEAN,

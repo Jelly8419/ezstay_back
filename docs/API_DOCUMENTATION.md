@@ -965,26 +965,42 @@ GET /api/rooms?checkInDate=2025-02-01&checkOutDate=2025-02-10&page=1&limit=20
         "order": 0
       }
     ],
-    "amenities": {
+    "amenity": {
       "basicOptions": {
         "refrigerator": true,
         "washingMachine": true,
-        "airConditioner": true
+        "airConditioner": true,
+        "침대": {
+          "킹": 2,
+          "퀸": 0,
+          "싱글": 1,
+          "슈퍼싱글": 0
+        }
       },
       "additionalOptions": {
         "doorLock": true,
-        "cctv": true
+        "cctv": true,
+        "petsAllowed": false
       },
-      "petsAllowed": false
+      "convenienceOptions": {
+        "heatingCooling": true,
+        "hairDryer": true
+      }
     },
-    "freeServices": {
+    "freeService": {
       "cleaningService": true,
       "hairDryerRental": true,
-      "beddingService": true
+      "beddingService": true,
+      "amenityKit": true,
+      "towelSetRental": true
     },
     "description": "홍대입구역 도보 5분 거리의 깨끗한 원룸입니다.",
-    "transportation": "지하철 2호선 홍대입구역 도보 5분",
-    "houseRules": "금연, 애완동물 불가"
+    "maxGuests": 4,
+    "host": {
+      "id": 123,
+      "name": "김호스트",
+      "profileImageUrl": "http://localhost:8080/uploads/profiles/host-profile.jpg"
+    }
   }
 }
 ```
@@ -993,8 +1009,9 @@ GET /api/rooms?checkInDate=2025-02-01&checkOutDate=2025-02-10&page=1&limit=20
 다음 필드는 게스트에게 노출되지 않습니다:
 - `entrancePassword`: 출입 비밀번호
 - `detailAddress`: 상세 주소
-- `hostId`: 호스트 ID
+- `hostId`: 호스트 ID (대신 `host` 객체로 제공)
 - `status`: 방 상태
+- **`amenity.wifiPassword`**: 와이파이 비밀번호 (계약 전 제거됨)
 
 ### Error Responses
 
@@ -1408,9 +1425,14 @@ Authorization: Bearer {access_token}
     "washingMachine": "boolean",
     "airConditioner": "boolean",
     "sink": "boolean",
-    "bed": "boolean",
     "tv": "boolean",
-    "internet": "boolean"
+    "internet": "boolean",
+    "침대": {
+      "킹": "number",
+      "퀸": "number",
+      "싱글": "number",
+      "슈퍼싱글": "number"
+    }
   },
   "additionalOptions": {
     "doorLock": "boolean",
@@ -1428,7 +1450,8 @@ Authorization: Bearer {access_token}
     "sofa": "boolean",
     "desk": "boolean",
     "curtain": "boolean",
-    "balcony": "boolean"
+    "balcony": "boolean",
+    "petsAllowed": "boolean"
   },
   "convenienceOptions": {
     "heatingCooling": "boolean",
@@ -1445,7 +1468,41 @@ Authorization: Bearer {access_token}
     "hairDryer": "boolean",
     "bidet": "boolean"
   },
-  "petsAllowed": "boolean"
+  "wifiPassword": "string | null"
+}
+```
+
+### 필드 설명
+- `basicOptions`: 기본 편의시설 (JSON)
+  - **침대**: 방에 실제로 있는 침대 사양 (중첩 객체)
+    - 킹, 퀸, 싱글, 슈퍼싱글: 각 침대 타입별 개수
+- `additionalOptions`: 추가 옵션 (JSON)
+  - **petsAllowed**: 펫 가능 여부 (이전 버전의 최상위 필드에서 이동)
+- `convenienceOptions`: 편의 옵션 (JSON)
+- **wifiPassword**: 와이파이 비밀번호 (호스트가 게스트에게 제공)
+
+### 예시 요청
+```json
+{
+  "basicOptions": {
+    "에어컨": true,
+    "냉장고": true,
+    "침대": {
+      "킹": 2,
+      "퀸": 0,
+      "싱글": 1,
+      "슈퍼싱글": 1
+    }
+  },
+  "additionalOptions": {
+    "petsAllowed": true,
+    "doorLock": true
+  },
+  "convenienceOptions": {
+    "heatingCooling": true,
+    "hairDryer": true
+  },
+  "wifiPassword": "guest1234"
 }
 ```
 
@@ -1460,6 +1517,11 @@ Authorization: Bearer {access_token}
 }
 ```
 
+### 검증 규칙
+- `침대` 객체의 키는 "킹", "퀸", "싱글", "슈퍼싱글"만 허용
+- 침대 수량은 0 이상의 숫자여야 함
+- 유효하지 않은 침대 사이즈 입력 시 400 에러 반환
+
 ---
 
 ## 5. 무료 부가서비스 설정
@@ -1468,18 +1530,39 @@ Authorization: Bearer {access_token}
 ### Request Body
 ```json
 {
-  "agreeTerms": "boolean",
   "cleaningService": "boolean",
-  "cleaningToolImageUrl": "string | null",
   "hairDryerRental": "boolean",
   "beddingService": "boolean",
-  "bedSizes": {
-    "슈퍼싱글": "number",
-    "퀸": "number",
-    "킹": "number"
-  },
+  "amenityKit": "boolean",
+  "towelSetRental": "boolean",
   "autoPasswordChange": "boolean",
   "roomPassword": "string | null"
+}
+```
+
+### 필드 설명
+- `cleaningService`: 청소 서비스 제공 여부 (⚠️ `true`로 설정 시 `rooms.cleaning_fee`가 자동으로 0원으로 업데이트됨)
+- `hairDryerRental`: 헤어드라이어 대여 여부
+- `beddingService`: 침구류 제공 서비스 여부
+- `amenityKit`: 어메니티 키트 제공 여부
+- `towelSetRental`: 수건 세트 대여 여부
+- `autoPasswordChange`: 자동 비밀번호 변경 여부
+- `roomPassword`: 방 비밀번호
+
+### 중요 사항
+- **cleaningService 동작**: `cleaningService`를 `true`로 설정하면, 청소 서비스를 Ezstay에서 직접 제공하므로 호스트가 설정한 `cleaning_fee`는 자동으로 0원으로 업데이트됩니다.
+- **캐시 무효화**: `cleaningService` 변경 시 지도 캐시가 자동으로 무효화됩니다.
+
+### 예시 요청
+```json
+{
+  "cleaningService": true,
+  "hairDryerRental": false,
+  "beddingService": true,
+  "amenityKit": true,
+  "towelSetRental": true,
+  "autoPasswordChange": false,
+  "roomPassword": "1234"
 }
 ```
 
@@ -1493,6 +1576,12 @@ Authorization: Bearer {access_token}
   }
 }
 ```
+
+### ⚠️ 중요: 편의시설 vs 무료 부가서비스의 침대 구분
+- **편의시설 (basicOptions.침대)**: 방에 **실제로 있는** 침대 사양
+  - 예: "이 방에는 킹 침대 2개, 싱글 침대 1개가 있습니다"
+- **무료 부가서비스 (bedSizes)**: **침구류 제공 서비스**를 위한 수량
+  - 예: "킹 침대용 침구 2세트, 싱글 침대용 침구 1세트를 제공합니다"
 
 ---
 
@@ -1525,8 +1614,7 @@ Authorization: Bearer {access_token}
 ```json
 {
   "description": "string",
-  "transportation": "string",
-  "houseRules": "string"
+  "maxGuests": "number (1~20, 필수)"
 }
 ```
 
@@ -1648,22 +1736,16 @@ Authorization: Bearer {access_token}
       "petsAllowed": false
     },
     "freeServices": {
-      "agreeTerms": false,
       "cleaningService": false,
-      "cleaningToolImageUrl": null,
       "hairDryerRental": false,
       "beddingService": false,
-      "bedSizes": {
-        "슈퍼싱글": 0,
-        "퀸": 0,
-        "킹": 0
-      },
+      "amenityKit": false,
+      "towelSetRental": false,
       "autoPasswordChange": false,
       "roomPassword": null
     },
     "description": "string",
-    "transportation": "string",
-    "houseRules": "string",
+    "maxGuests": 2,
     "status": "draft",
     "submittedAt": null,
     "approvedAt": null,

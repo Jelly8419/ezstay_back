@@ -278,7 +278,7 @@ const updateAmenities = async (req, res) => {
       basicOptions,
       additionalOptions,
       convenienceOptions,
-      petsAllowed
+      wifiPassword
     } = req.body;
 
     const room = await Room.findOne({
@@ -289,13 +289,30 @@ const updateAmenities = async (req, res) => {
       return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
+    // 침대 데이터 검증 (basicOptions에 침대 정보가 있는 경우)
+    if (basicOptions?.침대) {
+      const bedSizes = basicOptions.침대;
+      const validSizes = ['킹', '퀸', '싱글', '슈퍼싱글'];
+
+      for (const size in bedSizes) {
+        if (!validSizes.includes(size)) {
+          return error(res, ErrorCodes.VALIDATION_ERROR, 400,
+            { field: 'basicOptions.침대', message: `유효하지 않은 침대 사이즈: ${size}` });
+        }
+        if (typeof bedSizes[size] !== 'number' || bedSizes[size] < 0) {
+          return error(res, ErrorCodes.VALIDATION_ERROR, 400,
+            { field: 'basicOptions.침대', message: `침대 수량은 0 이상의 숫자여야 합니다: ${size}` });
+        }
+      }
+    }
+
     // RoomAmenity 생성 또는 업데이트
     await RoomAmenity.upsert({
       roomId: room.id,
       basicOptions: basicOptions || {},
       additionalOptions: additionalOptions || {},
       convenienceOptions: convenienceOptions || {},
-      petsAllowed: petsAllowed || false
+      wifiPassword
     }, { transaction });
 
     await transaction.commit();
@@ -316,13 +333,11 @@ const updateFreeServices = async (req, res) => {
     const { roomId } = req.params;
     const hostId = req.user.id;
     const {
-      agreeTerms,
       cleaningService,
-      cleaningToolImageUrl,
       hairDryerRental,
       beddingService,
-      bedSizes,
       amenityKit,
+      towelSetRental,
       autoPasswordChange,
       roomPassword
     } = req.body;
@@ -337,20 +352,29 @@ const updateFreeServices = async (req, res) => {
 
     await RoomFreeService.upsert({
       roomId: room.id,
-      agreeTerms: agreeTerms || false,
       cleaningService: cleaningService || false,
-      cleaningToolImageUrl,
       hairDryerRental: hairDryerRental || false,
       beddingService: beddingService || false,
-      bedSizeSuperSingle: bedSizes?.['슈퍼싱글'] || 0,
-      bedSizeQueen: bedSizes?.['퀸'] || 0,
-      bedSizeKing: bedSizes?.['킹'] || 0,
       amenityKit: amenityKit || false,
+      towelSetRental: towelSetRental || false,
       autoPasswordChange: autoPasswordChange || false,
       roomPassword
     }, { transaction });
 
+    // cleaningService가 true인 경우 cleaning_fee를 0으로 설정
+    // (청소 서비스는 Ezstay에서 제공하므로 호스트 청소비 불필요)
+    if (cleaningService === true) {
+      await room.update({
+        cleaningFee: 0
+      }, { transaction });
+    }
+
     await transaction.commit();
+
+    // cleaningFee 변경 시 지도 캐시 무효화
+    if (cleaningService === true) {
+      await invalidateRoomCache();
+    }
 
     return updated(res, { roomId: room.id }, '무료 부가서비스 정보가 저장되었습니다.');
   } catch (err) {
@@ -360,47 +384,12 @@ const updateFreeServices = async (req, res) => {
   }
 };
 
-// 7. 청소도구 이미지 업로드
-const uploadCleaningToolImage = async (req, res) => {
-  try {
-    const { roomId } = req.params;
-    const hostId = req.user.id;
-
-    const room = await Room.findOne({
-      where: { id: roomId, hostId }
-    });
-
-    if (!room) {
-      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
-    }
-
-    if (!req.file) {
-      return error(res, ErrorCodes.NO_FILE_UPLOADED, 400);
-    }
-
-    const imageUrl = `/uploads/rooms/${req.file.filename}`;
-
-    const freeService = await RoomFreeService.findOne({
-      where: { roomId: room.id }
-    });
-
-    if (freeService) {
-      await freeService.update({ cleaningToolImageUrl: imageUrl });
-    }
-
-    return success(res, { imageUrl }, '청소도구 이미지가 업로드되었습니다.');
-  } catch (err) {
-    console.error('Cleaning tool image upload error:', err);
-    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
-  }
-};
-
-// 8. 방 소개 및 설명
+// 7. 방 소개 및 설명
 const updateDescription = async (req, res) => {
   try {
     const { roomId } = req.params;
     const hostId = req.user.id;
-    const { description, transportation, houseRules } = req.body;
+    const { description, maxGuests } = req.body;
 
     const room = await Room.findOne({
       where: { id: roomId, hostId }
@@ -410,10 +399,19 @@ const updateDescription = async (req, res) => {
       return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
+    // maxGuests 검증
+    if (maxGuests !== undefined) {
+      if (!Number.isInteger(maxGuests) || maxGuests < 1 || maxGuests > 20) {
+        return error(res, {
+          code: 4004,
+          message: '최대 인원은 1~20명 사이의 정수만 입력 가능합니다.'
+        }, 400);
+      }
+    }
+
     await room.update({
       description,
-      transportation,
-      houseRules
+      maxGuests: maxGuests !== undefined ? maxGuests : room.maxGuests
     });
 
     return updated(res, { roomId: room.id }, '방 소개가 저장되었습니다.');
@@ -579,7 +577,7 @@ const getMyRooms = async (req, res) => {
         {
           model: RoomFreeService,
           as: 'freeService',
-          attributes: ['roomId', 'agreeTerms']
+          attributes: ['roomId']
         }
       ],
       order: [['createdAt', 'DESC']],
@@ -707,25 +705,18 @@ const getRoom = async (req, res) => {
 
       // 무료 부가서비스
       freeServices: room.freeService ? {
-        agreeTerms: room.freeService.agreeTerms,
         cleaningService: room.freeService.cleaningService,
-        cleaningToolImageUrl: room.freeService.cleaningToolImageUrl,
         hairDryerRental: room.freeService.hairDryerRental,
         beddingService: room.freeService.beddingService,
-        bedSizes: {
-          '슈퍼싱글': room.freeService.bedSizeSuperSingle,
-          '퀸': room.freeService.bedSizeQueen,
-          '킹': room.freeService.bedSizeKing
-        },
         amenityKit: room.freeService.amenityKit,
+        towelSetRental: room.freeService.towelSetRental,
         autoPasswordChange: room.freeService.autoPasswordChange,
         roomPassword: room.freeService.roomPassword
       } : null,
 
       // 방 소개
       description: room.description,
-      transportation: room.transportation,
-      houseRules: room.houseRules,
+      maxGuests: room.maxGuests,
 
       // 상태
       status: room.status,
@@ -751,7 +742,6 @@ module.exports = {
   uploadPhotos,
   updateAmenities,
   updateFreeServices,
-  uploadCleaningToolImage,
   updateDescription,
   submitReview,
   reorderPhotos,

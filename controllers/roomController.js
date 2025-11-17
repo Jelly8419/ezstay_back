@@ -116,6 +116,11 @@ const getRoomById = async (req, res) => {
     // hostId는 응답에서 제외 (host 객체로 대체)
     delete roomData.hostId;
 
+    // 게스트 API이므로 민감 정보 제거
+    if (roomData.amenity) {
+      delete roomData.amenity.wifiPassword;  // 와이파이 비밀번호는 계약 후 제공
+    }
+
     // === 대여 물품 재고 정보 추가 ===
     // freeService에서 true인 항목에 대해서만 해당 카테고리의 물품 목록 조회
     const availableRentalItems = {};

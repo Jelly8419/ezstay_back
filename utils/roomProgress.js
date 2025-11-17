@@ -10,9 +10,9 @@
 const calculateProgress = (room) => {
   const steps = {
     basicInfo: false,           // 1단계: 기본 정보
-    pricing: false,             // 2단계: 요금 설정
-    photosAndAmenities: false,  // 3단계: 사진 및 편의시설
-    freeServices: false,        // 4단계: 무료 부가서비스
+    photosAndAmenities: false,  // 2단계: 사진 및 편의시설
+    pricing: false,             // 3단계: 요금 설정
+    freeServices: false,        // 4단계: 무료 부가서비스 (선택 사항)
     description: false          // 5단계: 방 소개
   };
 
@@ -22,45 +22,107 @@ const calculateProgress = (room) => {
     steps.basicInfo = true;
   }
 
-  // 2단계: 요금 설정 체크
-  if (room.dailyRent && room.minContractWeeks && room.refundPolicy) {
-    steps.pricing = true;
-  }
-
-  // 3단계: 사진 및 편의시설 체크
+   // 2단계: 사진 및 편의시설 체크
   if (room.photos && room.photos.length >= 6 && room.amenity) {
     steps.photosAndAmenities = true;
   }
 
-  // 4단계: 무료 부가서비스 체크
-  if (room.freeService && room.freeService.agreeTerms) {
+  // 3단계: 요금 설정 체크
+  if (room.dailyRent && room.refundPolicy) {
+    steps.pricing = true;
+  }
+
+  // 4단계: 무료 부가서비스 체크 (선택 사항)
+  // freeService 객체가 존재하면 완료로 간주 (사용자가 명시적으로 단계를 거쳤음을 의미)
+  if (room.freeService) {
     steps.freeServices = true;
   }
 
   // 5단계: 방 소개 체크
-  if (room.description && room.transportation && room.houseRules) {
+  if (room.description && room.maxGuests) {
     steps.description = true;
   }
 
-  // 현재 단계 결정 (가장 최근에 완료한 단계의 다음 단계)
-  let currentStep = 'basicInfo';
-  if (!steps.basicInfo) currentStep = 'basicInfo';
-  else if (!steps.pricing) currentStep = 'pricing';
-  else if (!steps.photosAndAmenities) currentStep = 'photosAndAmenities';
-  else if (!steps.freeServices) currentStep = 'freeServices';
-  else if (!steps.description) currentStep = 'description';
-  else currentStep = 'completed';
+  // 현재 단계 결정: 사용자가 실제로 작업 중인 단계 추적
+  let currentStep = determineCurrentStep(room, steps);
 
-  // 완료율 계산
-  const completedSteps = Object.values(steps).filter(Boolean).length;
-  const totalSteps = Object.keys(steps).length;
-  const completionRate = Math.round((completedSteps / totalSteps) * 100);
+  // 완료율 계산 (4단계는 선택 사항이므로 제외)
+  const requiredSteps = ['basicInfo', 'photosAndAmenities', 'pricing', 'description'];
+  const completedRequiredSteps = requiredSteps.filter(step => steps[step]).length;
+  const completionRate = Math.round((completedRequiredSteps / requiredSteps.length) * 100);
 
   return {
     currentStep,        // 현재 진행해야 할 단계
     completionRate,     // 완료율 (%)
     steps               // 각 단계별 완료 여부
   };
+};
+
+/**
+ * 사용자가 실제로 작업 중인 단계 결정
+ * - 순차적 진행을 기본으로 하되, 선택 단계(freeServices)는 건너뛸 수 있음
+ * - 각 테이블의 updatedAt 시간을 비교하여 가장 최근에 작업한 단계를 파악
+ *
+ * @param {Object} room - Room 인스턴스
+ * @param {Object} steps - 각 단계별 완료 여부
+ * @returns {string} currentStep
+ */
+const determineCurrentStep = (room, steps) => {
+  // 1. 순차적으로 미완료된 첫 번째 필수 단계 찾기
+  if (!steps.basicInfo) return 'basicInfo';
+  if (!steps.photosAndAmenities) return 'photosAndAmenities';
+  if (!steps.pricing) return 'pricing';
+
+  // 2. 3단계까지 완료된 경우, 실제 작업 중인 단계 판단
+  // 2-1. 5단계(description)가 이미 완료되었다면
+  if (steps.description) {
+    // 4단계가 미완료여도 현재 단계는 'completed' (4단계는 선택사항)
+    return 'completed';
+  }
+
+  // 2-2. 5단계가 미완료인 경우, 최근 작업 시간으로 판단
+  const timestamps = [];
+
+  // Room 테이블의 description 관련 필드 업데이트 시간
+  if (room.updatedAt) {
+    timestamps.push({
+      step: 'description',
+      time: new Date(room.updatedAt),
+      // description 필드가 있으면 5단계 작업 중으로 간주
+      isRelevant: !!(room.description || room.maxGuests)
+    });
+  }
+
+  // RoomFreeService 업데이트 시간
+  if (room.freeService && room.freeService.updatedAt) {
+    timestamps.push({
+      step: 'freeServices',
+      time: new Date(room.freeService.updatedAt),
+      isRelevant: true
+    });
+  }
+
+  // 관련 있는 최근 작업 찾기
+  const relevantTimestamps = timestamps.filter(t => t.isRelevant);
+
+  if (relevantTimestamps.length > 0) {
+    // 가장 최근 작업을 기준으로 현재 단계 결정
+    relevantTimestamps.sort((a, b) => b.time - a.time);
+    const latestWork = relevantTimestamps[0];
+
+    // 5단계 작업 중이면 currentStep = 'description'
+    if (latestWork.step === 'description') {
+      return 'description';
+    }
+  }
+
+  // 2-3. 어떤 작업도 감지되지 않은 경우
+  // 4단계가 완료되지 않았으면 4단계, 아니면 5단계
+  if (!steps.freeServices) {
+    return 'freeServices';
+  }
+
+  return 'description';
 };
 
 module.exports = {

@@ -189,13 +189,19 @@ const Room = sequelize.define('Room', {
     type: DataTypes.TEXT,
     allowNull: true
   },
-  transportation: {
-    type: DataTypes.TEXT,
-    allowNull: true
-  },
-  houseRules: {
-    type: DataTypes.TEXT,
-    allowNull: true
+  maxGuests: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 2,
+    field: 'max_guests',
+    comment: '최대 가능인원',
+    validate: {
+      min: 1,
+      max: 20,
+      isInt: {
+        msg: '최대 인원은 정수만 입력 가능합니다.'
+      }
+    }
   },
   // 상태 관리
   status: {
