@@ -247,13 +247,16 @@ const fetchRoomsFromDB = async (coords, excludeRoomIds, limit) => {
       'area',
       'roomCount',
       'bathroomCount',
-      'buildingType'
+      'buildingType',
+      'quickMoveIn',
+      'quickMoveInDiscount',
+      'longTermWeeks',
+      'longTermDiscount'
     ],
     include: [{
       model: RoomPhoto,
       as: 'photos',
-      attributes: ['id', 'url'],
-      limit: 1,
+      attributes: ['url', 'order'],
       required: false,
       separate: true,
       order: [['order', 'ASC']]
@@ -280,7 +283,18 @@ const transformRoomsForMap = (rooms) => {
     roomCount: room.roomCount,
     bathroomCount: room.bathroomCount,
     buildingType: room.buildingType,
-    thumbnail: room.photos && room.photos.length > 0 ? room.photos[0].url : null
+    photos: room.photos && room.photos.length > 0
+      ? room.photos.map(photo => ({
+          url: photo.url,
+          order: photo.order
+        }))
+      : [],
+    discounts: {
+      quickMoveIn: room.quickMoveIn || null,
+      quickMoveInDiscount: room.quickMoveInDiscount || null,
+      longTermWeeks: room.longTermWeeks || null,
+      longTermDiscount: room.longTermDiscount || null
+    }
   }));
 
   return {

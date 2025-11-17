@@ -904,7 +904,22 @@ GET /api/rooms?checkInDate=2025-02-01&checkOutDate=2025-02-10&page=1&limit=20
         "roomCount": 1,
         "bathroomCount": 1,
         "buildingType": "오피스텔",
-        "thumbnail": "/uploads/rooms/room-1.jpg",
+        "photos": [
+          {
+            "url": "/uploads/rooms/room-1-1.jpg",
+            "order": 1
+          },
+          {
+            "url": "/uploads/rooms/room-1-2.jpg",
+            "order": 2
+          }
+        ],
+        "discounts": {
+          "quickMoveIn": 7,
+          "quickMoveInDiscount": 5,
+          "longTermWeeks": 4,
+          "longTermDiscount": 10
+        },
         "amenities": {
           "refrigerator": true,
           "washingMachine": true,
@@ -1096,12 +1111,28 @@ GET /api/rooms/map?swLat=37.4&swLng=126.9&neLat=37.6&neLng=127.1&checkIn=2025-11
         "address": "서울특별시 마포구 서교동 123-45",
         "latitude": 37.5563,
         "longitude": 126.9236,
-        "weeklyRent": 350000,
+        "dailyRent": 350000,
         "area": 33.5,
         "roomCount": 1,
         "bathroomCount": 1,
         "buildingType": "오피스텔",
-        "thumbnail": "/uploads/rooms/room-1234567890-123456789.jpg"  // 또는 null (사진이 없는 경우)
+        "photos": [
+          {
+            "url": "/uploads/rooms/room-1234567890-1.jpg",
+            "order": 1
+          },
+          {
+            "url": "/uploads/rooms/room-1234567890-2.jpg",
+            "order": 2
+          }
+          // ... 추가 사진들 (order 순서대로 정렬됨)
+        ],  // 빈 배열 [] (사진이 없는 경우)
+        "discounts": {
+          "quickMoveIn": 7,  // 빠른 입주 가능일 (일 단위, 예: 7 = 7일 이내 입주 시 할인, null 가능)
+          "quickMoveInDiscount": 5,  // 빠른 입주 할인율 (%) (숫자 또는 null)
+          "longTermWeeks": 4,  // 장기 계약 기준 주수 (숫자 또는 null)
+          "longTermDiscount": 10  // 장기 계약 할인율 (%) (숫자 또는 null)
+        }
       }
     ]
   }

@@ -141,8 +141,9 @@ const Room = sequelize.define('Room', {
     comment: '장기 할인율 (%)'
   },
   quickMoveIn: {
-    type: DataTypes.STRING(100),
-    allowNull: true
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    comment: '빠른 입주 가능일 (일 단위, 예: 7 = 7일 이내)'
   },
   quickMoveInDiscount: {
     type: DataTypes.INTEGER,

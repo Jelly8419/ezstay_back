@@ -615,7 +615,12 @@ const getMyRooms = async (req, res) => {
         buildingType: room.buildingType,
         dailyRent: room.dailyRent,
         status: room.status,
-        thumbnail: room.photos[0]?.url || null,
+        photos: room.photos && room.photos.length > 0
+          ? room.photos.map(photo => ({
+              url: photo.url,
+              order: photo.order
+            }))
+          : [],
         registrationProgress,
         submittedAt: room.submittedAt,
         approvedAt: room.approvedAt,
