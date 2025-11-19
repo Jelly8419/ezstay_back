@@ -63,9 +63,32 @@ const getRoomById = async (req, res) => {
         id: req.params.id,
         status: 'published' // 게시된 방만 조회
       },
-      attributes: {
-        exclude: ['entrancePassword', 'detailAddress', 'status'] // 민감정보 제외 (hostId는 포함)
-      },
+      // ✅ 화이트리스트 방식: PRD 요구사항 필드만 명시적으로 선택
+      attributes: [
+        // 기본 정보
+        'id', 'roomName', 'address', 'latitude', 'longitude',
+        'area', 'floor', 'buildingType',
+
+        // 구조 정보
+        'parkingAvailable', 'parkingInfo',
+        'elevatorAvailable', 'roomCount', 'bathroomCount', 'isDuplex',
+
+        // 요금 정보 (PRD 필수)
+        'dailyRent', 'dailyMaintenanceFee', 'maintenanceDetail',
+        'includeElectricity', 'includeWater', 'includeGas', 'includeInternet',
+        'cleaningFee', 'minContractWeeks', 'refundPolicy',
+
+        // 할인 정보
+        'longTermWeeks', 'longTermDiscount', 'quickMoveIn', 'quickMoveInDiscount',
+
+        // 상세 정보
+        'description', 'maxGuests',
+
+        // 타임스탬프
+        'createdAt', 'updatedAt'
+
+        // ❌ 제외: entrancePassword, detailAddress, status, hostId (보안)
+      ],
       include: [
         {
           model: RoomPhoto,
@@ -77,10 +100,16 @@ const getRoomById = async (req, res) => {
           model: RoomAmenity,
           as: 'amenity',
           required: false
+          // wifiPassword는 자동으로 포함되지만 아래에서 제거됨
         },
         {
           model: RoomFreeService,
           as: 'freeService',
+          attributes: [
+            'cleaningService', 'hairDryerRental', 'beddingService',
+            'amenityKit', 'towelSetRental', 'autoPasswordChange'
+            // ⚠️ roomPassword 제외 (보안)
+          ],
           required: false
         },
         {
@@ -113,13 +142,30 @@ const getRoomById = async (req, res) => {
       roomData.host.profileImageUrl = `${baseUrl}${roomData.host.profileImageUrl}`;
     }
 
-    // hostId는 응답에서 제외 (host 객체로 대체)
-    delete roomData.hostId;
-
-    // 게스트 API이므로 민감 정보 제거
+    // 게스트 API이므로 민감 정보 제거 및 JSON 파싱
     if (roomData.amenity) {
       delete roomData.amenity.wifiPassword;  // 와이파이 비밀번호는 계약 후 제공
+
+      // JSON 문자열을 객체로 파싱 (프론트엔드 편의성)
+      try {
+        if (roomData.amenity.basicOptions && typeof roomData.amenity.basicOptions === 'string') {
+          roomData.amenity.basicOptions = JSON.parse(roomData.amenity.basicOptions);
+        }
+        if (roomData.amenity.additionalOptions && typeof roomData.amenity.additionalOptions === 'string') {
+          roomData.amenity.additionalOptions = JSON.parse(roomData.amenity.additionalOptions);
+        }
+        if (roomData.amenity.convenienceOptions && typeof roomData.amenity.convenienceOptions === 'string') {
+          roomData.amenity.convenienceOptions = JSON.parse(roomData.amenity.convenienceOptions);
+        }
+      } catch (parseError) {
+        console.error('Amenity JSON 파싱 실패:', parseError.message);
+        // 파싱 실패 시 원본 데이터 유지
+      }
     }
+
+    // ✅ PRD 요구사항: 고정값 및 계산 필드 추가
+    roomData.deposit = 300000; // 보증금 30만원 고정
+    roomData.weeklyRent = roomData.dailyRent ? roomData.dailyRent * 7 : null; // 주간 임대료 계산
 
     // === 대여 물품 재고 정보 추가 ===
     // freeService에서 true인 항목에 대해서만 해당 카테고리의 물품 목록 조회

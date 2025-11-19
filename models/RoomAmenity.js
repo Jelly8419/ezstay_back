@@ -24,12 +24,19 @@ const RoomAmenity = sequelize.define('RoomAmenity', {
     type: DataTypes.JSON,
     allowNull: false,
     defaultValue: {},
-    comment: '추가 옵션 (petsAllowed 포함 가능)'
+    comment: '추가 옵션 (도어락, CCTV, 가구 등)'
   },
   convenienceOptions: {
     type: DataTypes.JSON,
     allowNull: false,
-    defaultValue: {}
+    defaultValue: {},
+    comment: '편의 옵션 (냉난방기, 공기청정기, 주방용품 등)'
+  },
+  petsAllowed: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    comment: '반려동물 동반 가능 여부'
   },
   wifiPassword: {
     type: DataTypes.STRING(100),

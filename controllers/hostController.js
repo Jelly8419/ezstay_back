@@ -297,6 +297,7 @@ const updateAmenities = async (req, res) => {
       basicOptions,
       additionalOptions,
       convenienceOptions,
+      petsAllowed,
       wifiPassword
     } = req.body;
 
@@ -331,6 +332,7 @@ const updateAmenities = async (req, res) => {
       basicOptions: basicOptions || {},
       additionalOptions: additionalOptions || {},
       convenienceOptions: convenienceOptions || {},
+      petsAllowed: petsAllowed !== undefined ? petsAllowed : false,
       wifiPassword
     }, { transaction });
 
