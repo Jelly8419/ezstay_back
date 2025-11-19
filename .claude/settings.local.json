@@ -52,7 +52,9 @@
       "SlashCommand(/sc:analyze \"notices 테이블 DDL에 Foreign Key 제약조건이 비정상적으로 많이 생성됨 (notices_ibfk_1 ~ notices_ibfk_62). createdBy와 updatedBy 컬럼에 대해 동일한 제약조건이 반복 생성된 것으로 보임. Sequelize 모델 정의와 마이그레이션 실행 이력을 분석하여 원인 파악 필요.\")",
       "SlashCommand(/sc:analyze:*)",
       "Bash(if not exist c:studyezstay_backservices mkdir c:studyezstay_backservices)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(timeout:*)",
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []
