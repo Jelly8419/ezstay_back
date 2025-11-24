@@ -7,7 +7,9 @@ const AdminActionLogModel = require('./AdminActionLog');
 const { Room } = require('./Room');
 const { RoomPhoto } = require('./RoomPhoto');
 const { RoomAmenity } = require('./RoomAmenity');
-const { RoomFreeService } = require('./RoomFreeService');
+const { EzService } = require('./EzService');
+// 하위 호환성을 위한 별칭 (DEPRECATED: EzService 사용 권장)
+const RoomFreeService = EzService;
 const { UserBankAccount } = require('./UserBankAccount');
 const RentalItem = require('./RentalItem');
 const Contract = require('./Contract');
@@ -17,6 +19,9 @@ const NoticeModel = require('./Notice');
 const FAQCategoryModel = require('./FAQCategory');
 const FAQModel = require('./FAQ');
 const InquiryModel = require('./Inquiry');
+const RefundPolicyType = require('./RefundPolicyType');
+const RefundPolicyRule = require('./RefundPolicyRule');
+const Refund = require('./Refund');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -107,13 +112,20 @@ RoomAmenity.belongsTo(Room, {
   as: 'room'
 });
 
-Room.hasOne(RoomFreeService, {
+// EzService (이지서비스) 관계 설정
+Room.hasOne(EzService, {
   foreignKey: 'roomId',
-  as: 'freeService'
+  as: 'ezService'
 });
-RoomFreeService.belongsTo(Room, {
+EzService.belongsTo(Room, {
   foreignKey: 'roomId',
   as: 'room'
+});
+
+// 하위 호환성을 위한 freeService 별칭 (DEPRECATED)
+Room.hasOne(EzService, {
+  foreignKey: 'roomId',
+  as: 'freeService'
 });
 
 User.hasMany(UserBankAccount, {
@@ -321,6 +333,56 @@ Admin.hasMany(RoomStatusHistoryInstance, {
   as: 'statusChanges'
 });
 
+// RefundPolicyType과 RefundPolicyRule 관계 설정
+RefundPolicyType.hasMany(RefundPolicyRule, {
+  foreignKey: 'policyType',
+  sourceKey: 'policyType',
+  as: 'rules'
+});
+RefundPolicyRule.belongsTo(RefundPolicyType, {
+  foreignKey: 'policyType',
+  targetKey: 'policyType',
+  as: 'policy'
+});
+
+// Room과 RefundPolicyType 관계 설정 (선택 사항 - FK 제약 조건 미사용)
+Room.belongsTo(RefundPolicyType, {
+  foreignKey: 'refundPolicy',
+  targetKey: 'policyType',
+  as: 'refundPolicyDetails',
+  constraints: false // 기존 데이터 호환성을 위해 제약 조건 미적용
+});
+RefundPolicyType.hasMany(Room, {
+  foreignKey: 'refundPolicy',
+  sourceKey: 'policyType',
+  as: 'rooms',
+  constraints: false
+});
+
+// Contract와 Refund 관계 설정
+Contract.hasMany(Refund, {
+  foreignKey: 'contractId',
+  as: 'refunds'
+});
+Refund.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract'
+});
+
+// Refund와 RefundPolicyType 관계 설정
+Refund.belongsTo(RefundPolicyType, {
+  foreignKey: 'policyTypeUsed',
+  targetKey: 'policyType',
+  as: 'policyUsed',
+  constraints: false // 정책 삭제 시 환불 이력 보존
+});
+RefundPolicyType.hasMany(Refund, {
+  foreignKey: 'policyTypeUsed',
+  sourceKey: 'policyType',
+  as: 'refunds',
+  constraints: false
+});
+
 module.exports = {
   sequelize,
   User,
@@ -331,7 +393,8 @@ module.exports = {
   Room,
   RoomPhoto,
   RoomAmenity,
-  RoomFreeService,
+  EzService,
+  RoomFreeService, // DEPRECATED: EzService의 별칭, 하위 호환성 유지
   UserBankAccount,
   RentalItem,
   Contract,
@@ -343,5 +406,8 @@ module.exports = {
   Inquiry,
   RoomMemo: RoomMemoInstance,
   RoomPasswordHistory: RoomPasswordHistoryInstance,
-  RoomStatusHistory: RoomStatusHistoryInstance
+  RoomStatusHistory: RoomStatusHistoryInstance,
+  RefundPolicyType,
+  RefundPolicyRule,
+  Refund
 };

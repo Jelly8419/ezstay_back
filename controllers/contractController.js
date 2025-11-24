@@ -1,4 +1,4 @@
-const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund } = require('../models');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const {
   calculateRentalItemsFee,
@@ -10,6 +10,7 @@ const {
 } = require('../utils/contractHelper');
 const { createChatRoomMetadata, sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
+const { calculateRefund } = require('../utils/refundCalculator');
 
 /**
  * 계약 요청 생성 (게스트 -> 호스트)
@@ -63,14 +64,14 @@ const createContractRequest = async (req, res) => {
       );
     }
 
-    // 3. 방 존재 및 상태 확인 (무료부가서비스 정보 포함)
-    const { RoomFreeService } = require('../models');
+    // 3. 방 존재 및 상태 확인 (이지서비스 정보 포함)
+    const { EzService } = require('../models');
     const room = await Room.findOne({
       where: { id: roomId, status: 'published' },
       include: [
         {
-          model: RoomFreeService,
-          as: 'freeService'
+          model: EzService,
+          as: 'ezService'
         }
       ],
       transaction
@@ -175,8 +176,8 @@ const createContractRequest = async (req, res) => {
     const afterDiscount = subtotalServer - discountAmountServer;
 
     // 플랫폼 수수료 계산 (임대료 + 관리비 + 청소비의 10%)
-    // 단, 무료부가서비스에서 청소 허용인 경우 청소비 제외
-    const hasFreeCleaningService = room.freeService?.cleaningService || false;
+    // 단, 이지서비스에서 청소 허용인 경우 청소비 제외
+    const hasFreeCleaningService = room.ezService?.cleaningService || false;
     const feeBase = serverCalculated.rentalFee +
                     serverCalculated.maintenanceFee +
                     (hasFreeCleaningService ? 0 : serverCalculated.cleaningFee);
@@ -1017,6 +1018,333 @@ const cancelContractByGuest = async (req, res) => {
   }
 };
 
+/**
+ * 환불 금액 미리 계산 (게스트가 취소하기 전에 확인)
+ * POST /api/contracts/:contractId/calculate-refund
+ */
+const calculateRefundPreview = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const userId = req.user.id;
+    const { cancellation_date } = req.body;
+
+    // 계약 조회 (게스트 본인 확인)
+    const contract = await Contract.findOne({
+      where: { id: contractId, guestId: userId }
+    });
+
+    if (!contract) {
+      return error(res, { code: 3005, message: '계약을 찾을 수 없습니다' }, 404);
+    }
+
+    // 환불 가능한 상태인지 확인
+    const refundableStatuses = ['APPROVED', 'PAYMENT_COMPLETED', 'IN_PROGRESS'];
+    if (!refundableStatuses.includes(contract.status)) {
+      return error(
+        res,
+        {
+          code: 4501,
+          message: '환불 가능한 상태가 아닙니다',
+          currentStatus: contract.status
+        },
+        400
+      );
+    }
+
+    // 환불 금액 계산
+    const cancellationDate = cancellation_date ? new Date(cancellation_date) : new Date();
+    const refundResult = await calculateRefund(contract, cancellationDate);
+
+    if (!refundResult.success) {
+      return error(res, {
+        code: 5001,
+        message: refundResult.error.message
+      }, 500);
+    }
+
+    return success(res, refundResult.data, '환불 금액이 계산되었습니다.');
+  } catch (err) {
+    console.error('환불 계산 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 환불 요청 (게스트가 계약 취소 및 환불 요청)
+ * POST /api/contracts/:contractId/request-refund
+ */
+const requestRefund = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { contractId } = req.params;
+    const userId = req.user.id;
+    const {
+      cancellation_reason,
+      refund_method,
+      refund_account_info
+    } = req.body;
+
+    // 계약 조회 (게스트 본인 확인)
+    const contract = await Contract.findOne({
+      where: { id: contractId, guestId: userId },
+      transaction
+    });
+
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, { code: 3005, message: '계약을 찾을 수 없습니다' }, 404);
+    }
+
+    // 환불 가능한 상태인지 확인
+    const refundableStatuses = ['APPROVED', 'PAYMENT_COMPLETED', 'IN_PROGRESS'];
+    if (!refundableStatuses.includes(contract.status)) {
+      await transaction.rollback();
+      return error(
+        res,
+        {
+          code: 4501,
+          message: '환불 가능한 상태가 아닙니다',
+          currentStatus: contract.status
+        },
+        400
+      );
+    }
+
+    // 이미 환불 요청이 있는지 확인
+    const existingRefund = await Refund.findOne({
+      where: {
+        contractId,
+        refundStatus: ['REQUESTED', 'CALCULATING', 'APPROVED', 'PROCESSING']
+      },
+      transaction
+    });
+
+    if (existingRefund) {
+      await transaction.rollback();
+      return error(
+        res,
+        {
+          code: 4502,
+          message: '이미 환불 요청이 진행 중입니다',
+          refundId: existingRefund.id
+        },
+        400
+      );
+    }
+
+    // 환불 금액 계산
+    const cancellationDate = new Date();
+    const refundResult = await calculateRefund(contract, cancellationDate);
+
+    if (!refundResult.success) {
+      await transaction.rollback();
+      return error(res, {
+        code: 5001,
+        message: refundResult.error.message
+      }, 500);
+    }
+
+    const refundData = refundResult.data;
+
+    // 입주 전 자동 승인 여부 판단
+    const now = new Date();
+    const checkInDate = new Date(contract.checkInDate);
+    const isBeforeCheckIn = now < checkInDate;
+
+    // 입주 전이면 자동 승인, 입주 후면 관리자 승인 필요
+    const autoApprove = isBeforeCheckIn;
+    const refundStatus = autoApprove ? 'APPROVED' : 'REQUESTED';
+    const contractStatus = autoApprove ? 'REFUND_APPROVED' : 'REFUND_REQUESTED';
+
+    // 환불 요청 레코드 생성
+    const refund = await Refund.create({
+      contractId,
+      refundStatus,
+
+      // 환불 계산 정보
+      policyTypeUsed: refundData.policyTypeUsed,
+      cancellationDate,
+      checkInDate: contract.checkInDate,
+      daysBeforeCheckin: refundData.daysBeforeCheckin,
+      isSameDayCancellation: refundData.isSameDayCancellation,
+
+      // 원본 금액
+      originalRentalFee: contract.rentalFee,
+      originalCleaningFee: contract.cleaningFee,
+      originalMaintenanceFee: contract.maintenanceFee,
+      originalTotalAmount: contract.finalTotalAmount,
+
+      // 환불 금액
+      rentalFeeRefundRate: refundData.rentalFeeRefundRate,
+      rentalFeeRefundAmount: refundData.rentalFeeRefundAmount,
+      cleaningFeeRefundAmount: refundData.cleaningFeeRefundAmount,
+      maintenanceFeeRefundAmount: refundData.maintenanceFeeRefundAmount,
+      totalRefundAmount: refundData.totalRefundAmount,
+
+      // 수수료 및 공제액
+      platformFeeDeducted: refundData.platformFeeDeducted,
+      penaltyAmount: refundData.penaltyAmount,
+      finalRefundAmount: refundData.finalRefundAmount,
+
+      // 환불 방법
+      refundMethod: refund_method || 'ORIGINAL_PAYMENT',
+      refundAccountInfo: refund_account_info || null,
+
+      // 사유
+      cancellationReason: cancellation_reason || null,
+
+      // 타임스탬프
+      requestedAt: new Date(),
+      approvedAt: autoApprove ? new Date() : null
+    }, { transaction });
+
+    // 계약 상태 업데이트
+    await contract.update({
+      status: contractStatus,
+      cancelledAt: new Date(),
+      cancellationReason: cancellation_reason || null
+    }, { transaction });
+
+    // 채팅방에 시스템 메시지 발송
+    const chatRoom = await ChatRoom.findOne({
+      where: { contractId },
+      transaction
+    });
+
+    if (chatRoom) {
+      // 자동 승인 여부에 따라 다른 메시지 타입 사용
+      const messageType = autoApprove
+        ? SystemMessageTypes.REFUND_APPROVED
+        : SystemMessageTypes.REFUND_REQUESTED;
+
+      sendSystemMessage(
+        chatRoom.firebaseChatRoomId,
+        getSystemMessageTemplate(messageType, {
+          refundAmount: refundData.finalRefundAmount.toLocaleString()
+        }),
+        messageType,
+        {
+          contractId: contract.id,
+          refundId: refund.id,
+          refundAmount: refundData.finalRefundAmount,
+          autoApproved: autoApprove
+        }
+      ).catch(err => {
+        console.error('시스템 메시지 발송 실패 (환불 요청은 완료됨):', err);
+      });
+    }
+
+    await transaction.commit();
+
+    // 예상 완료일 계산 (요청일로부터 영업일 기준 5일 후)
+    const estimatedCompletionDate = new Date(refund.requestedAt);
+    estimatedCompletionDate.setDate(estimatedCompletionDate.getDate() + 5);
+
+    // 응답 메시지 (자동 승인 여부에 따라 다르게 표시)
+    const message = autoApprove
+      ? '환불이 자동 승인되었습니다. 영업일 기준 5일 내 처리됩니다.'
+      : '환불 요청이 접수되었습니다. 관리자 승인 후 처리됩니다.';
+
+    return created(
+      res,
+      {
+        refundId: refund.id,
+        contractId: contract.id,
+        refundStatus: refund.refundStatus,
+        autoApproved: autoApprove,
+        totalRefundAmount: refund.totalRefundAmount,
+        finalRefundAmount: refund.finalRefundAmount,
+        requestedAt: refund.requestedAt,
+        approvedAt: refund.approvedAt,
+        estimatedCompletionDate
+      },
+      message
+    );
+  } catch (err) {
+    await transaction.rollback();
+    console.error('환불 요청 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 환불 이력 조회 (게스트/호스트)
+ * GET /api/contracts/:contractId/refunds
+ */
+const getContractRefunds = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const userId = req.user.id;
+
+    // 계약 조회 (당사자 확인)
+    const contract = await Contract.findOne({
+      where: { id: contractId }
+    });
+
+    if (!contract) {
+      return error(res, { code: 3005, message: '계약을 찾을 수 없습니다' }, 404);
+    }
+
+    // 계약 당사자인지 확인
+    if (contract.hostId !== userId && contract.guestId !== userId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    // 환불 이력 조회
+    const refunds = await Refund.findAll({
+      where: { contractId },
+      order: [['createdAt', 'DESC']]
+    });
+
+    return success(
+      res,
+      {
+        refunds: refunds.map(refund => ({
+          id: refund.id,
+          refundStatus: refund.refundStatus,
+
+          // 환불 계산 정보
+          policyTypeUsed: refund.policyTypeUsed,
+          daysBeforeCheckin: refund.daysBeforeCheckin,
+          isSameDayCancellation: refund.isSameDayCancellation,
+
+          // 원본 금액
+          originalRentalFee: refund.originalRentalFee,
+          originalCleaningFee: refund.originalCleaningFee,
+          originalMaintenanceFee: refund.originalMaintenanceFee,
+          originalTotalAmount: refund.originalTotalAmount,
+
+          // 환불 금액
+          rentalFeeRefundRate: refund.rentalFeeRefundRate,
+          rentalFeeRefundAmount: refund.rentalFeeRefundAmount,
+          cleaningFeeRefundAmount: refund.cleaningFeeRefundAmount,
+          maintenanceFeeRefundAmount: refund.maintenanceFeeRefundAmount,
+          totalRefundAmount: refund.totalRefundAmount,
+          finalRefundAmount: refund.finalRefundAmount,
+
+          // 환불 방법
+          refundMethod: refund.refundMethod,
+
+          // 사유 및 메시지
+          cancellationReason: refund.cancellationReason,
+          rejectionReason: refund.rejectionReason,
+
+          // 타임스탬프
+          requestedAt: refund.requestedAt,
+          approvedAt: refund.approvedAt,
+          rejectedAt: refund.rejectedAt,
+          completedAt: refund.completedAt
+        }))
+      },
+      '환불 이력을 조회했습니다.'
+    );
+  } catch (err) {
+    console.error('환불 이력 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
 module.exports = {
   createContractRequest,
   getGuestContracts,
@@ -1024,5 +1352,8 @@ module.exports = {
   getContractDetail,
   approveContract,
   rejectContract,
-  cancelContractByGuest
+  cancelContractByGuest,
+  calculateRefundPreview,
+  requestRefund,
+  getContractRefunds
 };

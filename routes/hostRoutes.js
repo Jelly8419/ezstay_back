@@ -39,8 +39,8 @@ router.post('/rooms/:roomId/photos', uploadLimiter, uploadRoomPhotos, uploadPhot
 // 5. 편의시설 설정
 router.patch('/rooms/:roomId/amenities', updateAmenities);
 
-// 6. 무료 부가서비스 설정
-router.patch('/rooms/:roomId/free-services', updateFreeServices);
+// 6. 이지서비스 설정 (구 무료 부가서비스)
+router.patch('/rooms/:roomId/ez-service', updateFreeServices);
 
 // 7. 방 소개
 router.patch('/rooms/:roomId/description', updateDescription);

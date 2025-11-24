@@ -1,5 +1,5 @@
-const { success, error, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, RoomFreeService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, sequelize } = require('../models');
+const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Refund, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 const { calculateProgress } = require('../utils/roomProgress');
@@ -543,8 +543,8 @@ const getPropertyDetail = async (req, res) => {
           as: 'amenity'
         },
         {
-          model: RoomFreeService,
-          as: 'freeService'
+          model: EzService,
+          as: 'ezService'
         },
         {
           model: User,
@@ -630,15 +630,11 @@ const getPropertyDetail = async (req, res) => {
         petsAllowed: room.amenity.petsAllowed
       } : null,
 
-      // 무료 부가서비스
-      freeServices: room.freeService ? {
-        cleaningService: room.freeService.cleaningService,
-        hairDryerRental: room.freeService.hairDryerRental,
-        beddingService: room.freeService.beddingService,
-        amenityKit: room.freeService.amenityKit,
-        towelSetRental: room.freeService.towelSetRental,
-        autoPasswordChange: room.freeService.autoPasswordChange,
-        roomPassword: room.freeService.roomPassword
+      // 이지서비스 (호스트 제공 무료 부가서비스)
+      ezService: room.ezService ? {
+        cleaningService: room.ezService.cleaningService,
+        autoPasswordChange: room.ezService.autoPasswordChange,
+        roomPassword: room.ezService.roomPassword
       } : null,
 
       // 방 소개
@@ -1311,6 +1307,366 @@ const getRoomStatusHistory = async (req, res) => {
   }
 };
 
+/**
+ * 모든 환불 요청 목록 조회 (관리자)
+ * GET /api/admin/refunds
+ */
+const getRefunds = async (req, res) => {
+  try {
+    const { status, page = 1, limit = 20 } = req.query;
+
+    const whereClause = {};
+    if (status) {
+      whereClause.refundStatus = status;
+    }
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const { count, rows: refunds } = await Refund.findAndCountAll({
+      where: whereClause,
+      include: [
+        {
+          model: Contract,
+          as: 'contract',
+          attributes: ['id', 'roomId', 'hostId', 'guestId', 'checkInDate', 'checkOutDate'],
+          include: [
+            {
+              model: Room,
+              as: 'room',
+              attributes: ['id', 'roomName', 'address']
+            },
+            {
+              model: User,
+              as: 'guest',
+              attributes: ['id', 'name', 'phoneNumber', 'email']
+            }
+          ]
+        }
+      ],
+      order: [['requestedAt', 'DESC']],
+      limit: parseInt(limit),
+      offset
+    });
+
+    return success(
+      res,
+      {
+        total: count,
+        refunds: refunds.map(refund => ({
+          id: refund.id,
+          refundStatus: refund.refundStatus,
+
+          // 계약 정보
+          contract: {
+            id: refund.contract.id,
+            checkInDate: refund.contract.checkInDate,
+            checkOutDate: refund.contract.checkOutDate,
+            room: {
+              id: refund.contract.room.id,
+              roomName: refund.contract.room.roomName,
+              address: refund.contract.room.address
+            },
+            guest: {
+              id: refund.contract.guest.id,
+              name: refund.contract.guest.name,
+              phoneNumber: refund.contract.guest.phoneNumber,
+              email: refund.contract.guest.email
+            }
+          },
+
+          // 환불 계산 정보
+          policyTypeUsed: refund.policyTypeUsed,
+          daysBeforeCheckin: refund.daysBeforeCheckin,
+          isSameDayCancellation: refund.isSameDayCancellation,
+
+          // 환불 금액
+          totalRefundAmount: refund.totalRefundAmount,
+          finalRefundAmount: refund.finalRefundAmount,
+
+          // 환불 방법
+          refundMethod: refund.refundMethod,
+
+          // 사유
+          cancellationReason: refund.cancellationReason,
+
+          // 타임스탬프
+          requestedAt: refund.requestedAt,
+          approvedAt: refund.approvedAt,
+          rejectedAt: refund.rejectedAt,
+          completedAt: refund.completedAt
+        })),
+        pagination: {
+          currentPage: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: Math.ceil(count / parseInt(limit)),
+          hasMore: offset + refunds.length < count
+        }
+      },
+      '환불 요청 목록을 조회했습니다.'
+    );
+  } catch (err) {
+    console.error('환불 목록 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 환불 상세 조회 (관리자)
+ * GET /api/admin/refunds/:refundId
+ */
+const getRefundDetail = async (req, res) => {
+  try {
+    const { refundId } = req.params;
+
+    const refund = await Refund.findByPk(refundId, {
+      include: [
+        {
+          model: Contract,
+          as: 'contract',
+          include: [
+            {
+              model: Room,
+              as: 'room',
+              attributes: ['id', 'roomName', 'address', 'refundPolicy']
+            },
+            {
+              model: User,
+              as: 'host',
+              attributes: ['id', 'name', 'phoneNumber', 'email']
+            },
+            {
+              model: User,
+              as: 'guest',
+              attributes: ['id', 'name', 'phoneNumber', 'email']
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!refund) {
+      return error(res, { code: 3006, message: '환불 요청을 찾을 수 없습니다' }, 404);
+    }
+
+    return success(
+      res,
+      {
+        refund: {
+          id: refund.id,
+          refundStatus: refund.refundStatus,
+
+          // 계약 정보
+          contract: {
+            id: refund.contract.id,
+            checkInDate: refund.contract.checkInDate,
+            checkOutDate: refund.contract.checkOutDate,
+            totalDays: refund.contract.totalDays,
+            room: refund.contract.room,
+            host: refund.contract.host,
+            guest: refund.contract.guest
+          },
+
+          // 환불 계산 정보
+          policyTypeUsed: refund.policyTypeUsed,
+          cancellationDate: refund.cancellationDate,
+          checkInDate: refund.checkInDate,
+          daysBeforeCheckin: refund.daysBeforeCheckin,
+          isSameDayCancellation: refund.isSameDayCancellation,
+
+          // 원본 금액
+          originalRentalFee: refund.originalRentalFee,
+          originalCleaningFee: refund.originalCleaningFee,
+          originalMaintenanceFee: refund.originalMaintenanceFee,
+          originalTotalAmount: refund.originalTotalAmount,
+
+          // 환불 금액
+          rentalFeeRefundRate: refund.rentalFeeRefundRate,
+          rentalFeeRefundAmount: refund.rentalFeeRefundAmount,
+          cleaningFeeRefundAmount: refund.cleaningFeeRefundAmount,
+          maintenanceFeeRefundAmount: refund.maintenanceFeeRefundAmount,
+          totalRefundAmount: refund.totalRefundAmount,
+
+          // 수수료 및 공제액
+          platformFeeDeducted: refund.platformFeeDeducted,
+          penaltyAmount: refund.penaltyAmount,
+          finalRefundAmount: refund.finalRefundAmount,
+
+          // 환불 방법
+          refundMethod: refund.refundMethod,
+          refundAccountInfo: refund.refundAccountInfo,
+
+          // 사유 및 메시지
+          cancellationReason: refund.cancellationReason,
+          rejectionReason: refund.rejectionReason,
+          adminNotes: refund.adminNotes,
+
+          // 타임스탬프
+          requestedAt: refund.requestedAt,
+          approvedAt: refund.approvedAt,
+          rejectedAt: refund.rejectedAt,
+          completedAt: refund.completedAt,
+          createdAt: refund.createdAt,
+          updatedAt: refund.updatedAt
+        }
+      },
+      '환불 요청 상세를 조회했습니다.'
+    );
+  } catch (err) {
+    console.error('환불 상세 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 환불 승인 (관리자)
+ * PATCH /api/admin/refunds/:refundId/approve
+ */
+const approveRefund = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { refundId } = req.params;
+    const { admin_notes } = req.body;
+    const adminId = req.admin.id;
+
+    // 환불 요청 조회
+    const refund = await Refund.findByPk(refundId, { transaction });
+
+    if (!refund) {
+      await transaction.rollback();
+      return error(res, { code: 3006, message: '환불 요청을 찾을 수 없습니다' }, 404);
+    }
+
+    // 승인 가능한 상태인지 확인
+    if (refund.refundStatus !== 'REQUESTED') {
+      await transaction.rollback();
+      return error(
+        res,
+        {
+          code: 4503,
+          message: '요청 상태의 환불만 승인할 수 있습니다',
+          currentStatus: refund.refundStatus
+        },
+        400
+      );
+    }
+
+    // 환불 승인 처리
+    await refund.update(
+      {
+        refundStatus: 'APPROVED',
+        adminNotes: admin_notes || null,
+        approvedAt: new Date()
+      },
+      { transaction }
+    );
+
+    // TODO: 실제 환불 처리 로직 (PG사 API 연동)
+    // await processRefundPayment(refund);
+
+    await transaction.commit();
+
+    return updated(
+      res,
+      {
+        refundId: refund.id,
+        refundStatus: refund.refundStatus,
+        approvedAt: refund.approvedAt,
+        finalRefundAmount: refund.finalRefundAmount
+      },
+      '환불이 승인되었습니다. 실제 환불 처리는 영업일 기준 3-5일 소요됩니다.'
+    );
+  } catch (err) {
+    await transaction.rollback();
+    console.error('환불 승인 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 환불 거절 (관리자)
+ * PATCH /api/admin/refunds/:refundId/reject
+ */
+const rejectRefund = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { refundId } = req.params;
+    const { rejection_reason, admin_notes } = req.body;
+    const adminId = req.admin.id;
+
+    // 거절 사유 확인
+    if (!rejection_reason || rejection_reason.trim() === '') {
+      await transaction.rollback();
+      return error(
+        res,
+        { code: 4504, message: '거절 사유를 입력해주세요' },
+        400
+      );
+    }
+
+    // 환불 요청 조회
+    const refund = await Refund.findByPk(refundId, { transaction });
+
+    if (!refund) {
+      await transaction.rollback();
+      return error(res, { code: 3006, message: '환불 요청을 찾을 수 없습니다' }, 404);
+    }
+
+    // 거절 가능한 상태인지 확인
+    if (refund.refundStatus !== 'REQUESTED') {
+      await transaction.rollback();
+      return error(
+        res,
+        {
+          code: 4505,
+          message: '요청 상태의 환불만 거절할 수 있습니다',
+          currentStatus: refund.refundStatus
+        },
+        400
+      );
+    }
+
+    // 환불 거절 처리
+    await refund.update(
+      {
+        refundStatus: 'REJECTED',
+        rejectionReason: rejection_reason,
+        adminNotes: admin_notes || null,
+        rejectedAt: new Date()
+      },
+      { transaction }
+    );
+
+    // 계약 상태 복원 (환불 요청 전 상태로)
+    const contract = await Contract.findByPk(refund.contractId, { transaction });
+    if (contract) {
+      // 환불 거절 시 계약 상태를 PAYMENT_COMPLETED 또는 IN_PROGRESS로 복원
+      // (실제 비즈니스 로직에 따라 조정 필요)
+      await contract.update({
+        status: 'PAYMENT_COMPLETED'
+      }, { transaction });
+    }
+
+    await transaction.commit();
+
+    return updated(
+      res,
+      {
+        refundId: refund.id,
+        refundStatus: refund.refundStatus,
+        rejectionReason: refund.rejectionReason,
+        rejectedAt: refund.rejectedAt
+      },
+      '환불 요청이 거절되었습니다.'
+    );
+  } catch (err) {
+    await transaction.rollback();
+    console.error('환불 거절 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
 module.exports = {
   // 대시보드
   getDashboardStats,
@@ -1340,5 +1696,11 @@ module.exports = {
 
   // 예약 관리
   getReservations,
-  getReservationDetail
+  getReservationDetail,
+
+  // 환불 관리
+  getRefunds,
+  getRefundDetail,
+  approveRefund,
+  rejectRefund
 };
