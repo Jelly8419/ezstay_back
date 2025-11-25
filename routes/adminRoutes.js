@@ -217,4 +217,27 @@ router.patch('/support/inquiries/:id/status', inquiryController.updateInquirySta
 // 문의 삭제 (관리자)
 router.delete('/support/inquiries/:id', inquiryController.deleteInquiryAdmin);
 
+/**
+ * 환불 관리
+ */
+// 환불 요청 목록 조회
+router.get('/refunds', adminController.getRefunds);
+
+// 환불 상세 조회
+router.get('/refunds/:refundId', adminController.getRefundDetail);
+
+// 환불 승인 (super_admin, admin만 가능)
+router.patch(
+  '/refunds/:refundId/approve',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.approveRefund
+);
+
+// 환불 거절 (super_admin, admin만 가능)
+router.patch(
+  '/refunds/:refundId/reject',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.rejectRefund
+);
+
 module.exports = router;

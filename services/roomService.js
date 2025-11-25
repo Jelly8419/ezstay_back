@@ -5,6 +5,179 @@ const { safeRedisOperation } = require('../config/redis');
 const appConfig = require('../config/app.config');
 
 /**
+ * 빠른할인 적용 여부 계산 (조건만 체크)
+ * @param {object} room - 방 정보 객체
+ * @param {string} checkInDate - 입실일 (YYYY-MM-DD) 또는 null
+ * @returns {object} 빠른할인 적용 가능 여부 및 기본 정보
+ */
+const checkQuickDiscountEligibility = (room, checkInDate) => {
+  const result = {
+    isEligible: false,
+    quickMoveIn: room.quickMoveIn || null,
+    quickMoveInDiscount: room.quickMoveInDiscount || null, // 고정금액 (원)
+    daysUntilCheckIn: null
+  };
+
+  // 빠른할인 조건이 없으면 패스
+  if (!room.quickMoveIn || !room.quickMoveInDiscount) {
+    return result;
+  }
+
+  // 입실일이 없으면 오늘 기준으로 계산
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  let targetDate;
+  if (checkInDate) {
+    targetDate = new Date(checkInDate);
+    targetDate.setHours(0, 0, 0, 0);
+  } else {
+    targetDate = today;
+  }
+
+  // 입실일까지 남은 일수 계산
+  const diffTime = targetDate.getTime() - today.getTime();
+  const daysUntilCheckIn = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  result.daysUntilCheckIn = daysUntilCheckIn;
+
+  // 과거 날짜면 할인 미적용
+  if (daysUntilCheckIn < 0) {
+    return result;
+  }
+
+  // 빠른할인 적용 조건: 입실일이 quickMoveIn일 이내
+  if (daysUntilCheckIn <= room.quickMoveIn) {
+    result.isEligible = true;
+  }
+
+  return result;
+};
+
+/**
+ * 장기할인 적용 여부 계산 (조건만 체크)
+ * @param {object} room - 방 정보 객체
+ * @param {string} checkInDate - 입실일 (YYYY-MM-DD)
+ * @param {string} checkOutDate - 퇴실일 (YYYY-MM-DD)
+ * @returns {object} 장기할인 적용 가능 여부 및 기본 정보
+ */
+const checkLongTermDiscountEligibility = (room, checkInDate, checkOutDate) => {
+  const result = {
+    isEligible: false,
+    longTermWeeks: room.longTermWeeks || null,
+    longTermDiscount: room.longTermDiscount || null, // 비율 (%)
+    stayWeeks: null
+  };
+
+  // 장기할인 조건이 없으면 패스
+  if (!room.longTermWeeks || !room.longTermDiscount) {
+    return result;
+  }
+
+  // 체크인/체크아웃 날짜가 없으면 계산 불가
+  if (!checkInDate || !checkOutDate) {
+    return result;
+  }
+
+  const checkIn = new Date(checkInDate);
+  const checkOut = new Date(checkOutDate);
+  const diffDays = Math.ceil((checkOut - checkIn) / (1000 * 60 * 60 * 24));
+  const stayWeeks = Math.floor(diffDays / 7);
+  result.stayWeeks = stayWeeks;
+
+  // 장기할인 적용 조건: 숙박 기간이 longTermWeeks 이상
+  if (stayWeeks >= room.longTermWeeks) {
+    result.isEligible = true;
+  }
+
+  return result;
+};
+
+/**
+ * 최종 할인 계산 (빠른할인 → 장기할인 순차 적용)
+ *
+ * 할인 적용 순서:
+ * 1. 빠른할인: 고정금액 할인 (dailyRent - quickMoveInDiscount원)
+ * 2. 장기할인: 비율 할인 (빠른할인 적용 후 금액에서 longTermDiscount% 할인)
+ *
+ * @param {object} room - 방 정보 객체 (dailyRent 필수)
+ * @param {string} checkInDate - 입실일 (YYYY-MM-DD)
+ * @param {string} checkOutDate - 퇴실일 (YYYY-MM-DD)
+ * @returns {object} 최종 할인 적용 결과
+ */
+const calculateDiscounts = (room, checkInDate, checkOutDate) => {
+  const quickEligibility = checkQuickDiscountEligibility(room, checkInDate);
+  const longTermEligibility = checkLongTermDiscountEligibility(room, checkInDate, checkOutDate);
+
+  let currentRent = room.dailyRent || 0;
+  let quickDiscountAmount = 0;
+  let longTermDiscountAmount = 0;
+  const appliedDiscounts = [];
+
+  // 1단계: 빠른할인 적용 (고정금액)
+  if (quickEligibility.isEligible && quickEligibility.quickMoveInDiscount) {
+    quickDiscountAmount = quickEligibility.quickMoveInDiscount; // 고정금액
+    currentRent = Math.max(0, currentRent - quickDiscountAmount);
+    appliedDiscounts.push('quick');
+  }
+
+  // 2단계: 장기할인 적용 (빠른할인 적용 후 금액에서 % 할인)
+  if (longTermEligibility.isEligible && longTermEligibility.longTermDiscount && currentRent > 0) {
+    const discountRate = longTermEligibility.longTermDiscount / 100;
+    longTermDiscountAmount = Math.floor(currentRent * discountRate); // 소수점 절사
+    currentRent = currentRent - longTermDiscountAmount;
+    appliedDiscounts.push('longTerm');
+  }
+
+  const totalDiscountAmount = quickDiscountAmount + longTermDiscountAmount;
+
+  return {
+    originalDailyRent: room.dailyRent,
+    finalDailyRent: currentRent,
+    totalDiscountAmount: totalDiscountAmount,
+    appliedDiscounts: appliedDiscounts, // ['quick'], ['longTerm'], ['quick', 'longTerm'], []
+    quick: {
+      quickMoveIn: quickEligibility.quickMoveIn,
+      quickMoveInDiscount: quickEligibility.quickMoveInDiscount,
+      isApplicable: quickEligibility.isEligible,
+      discountAmount: quickDiscountAmount,
+      daysUntilCheckIn: quickEligibility.daysUntilCheckIn
+    },
+    longTerm: {
+      longTermWeeks: longTermEligibility.longTermWeeks,
+      longTermDiscount: longTermEligibility.longTermDiscount,
+      isApplicable: longTermEligibility.isEligible,
+      discountAmount: longTermDiscountAmount,
+      stayWeeks: longTermEligibility.stayWeeks
+    }
+  };
+};
+
+// 하위 호환성을 위한 래퍼 함수들
+const calculateQuickDiscount = (room, checkInDate) => {
+  const result = calculateDiscounts(room, checkInDate, null);
+  return {
+    isQuickDiscountApplicable: result.quick.isApplicable,
+    quickMoveIn: result.quick.quickMoveIn,
+    quickMoveInDiscount: result.quick.quickMoveInDiscount,
+    discountedDailyRent: result.quick.isApplicable ? (room.dailyRent - result.quick.discountAmount) : null,
+    discountAmount: result.quick.discountAmount || null,
+    daysUntilCheckIn: result.quick.daysUntilCheckIn
+  };
+};
+
+const calculateLongTermDiscount = (room, checkInDate, checkOutDate) => {
+  const result = calculateDiscounts(room, checkInDate, checkOutDate);
+  return {
+    isLongTermDiscountApplicable: result.longTerm.isApplicable,
+    longTermWeeks: result.longTerm.longTermWeeks,
+    longTermDiscount: result.longTerm.longTermDiscount,
+    discountedDailyRent: result.longTerm.isApplicable ? (room.dailyRent - result.longTerm.discountAmount) : null,
+    discountAmount: result.longTerm.discountAmount || null,
+    stayWeeks: result.longTerm.stayWeeks
+  };
+};
+
+/**
  * Room Service Layer
  * 방 조회 관련 비즈니스 로직 처리
  */
@@ -267,35 +440,55 @@ const fetchRoomsFromDB = async (coords, excludeRoomIds, limit) => {
 };
 
 /**
- * 방 목록을 지도용 포맷으로 변환
+ * 방 목록을 지도용 포맷으로 변환 (할인 적용 여부 계산 포함)
  * @param {Array} rooms - 방 목록
+ * @param {string} checkInDate - 입실일 (YYYY-MM-DD) 또는 null
+ * @param {string} checkOutDate - 퇴실일 (YYYY-MM-DD) 또는 null
  * @returns {object} 변환된 응답 데이터
  */
-const transformRoomsForMap = (rooms) => {
-  const mapData = rooms.map(room => ({
-    id: room.id,
-    roomName: room.roomName,
-    address: room.address,
-    latitude: parseFloat(room.latitude),
-    longitude: parseFloat(room.longitude),
-    dailyRent: room.dailyRent,
-    area: parseFloat(room.area),
-    roomCount: room.roomCount,
-    bathroomCount: room.bathroomCount,
-    buildingType: room.buildingType,
-    photos: room.photos && room.photos.length > 0
-      ? room.photos.map(photo => ({
-          url: photo.url,
-          order: photo.order
-        }))
-      : [],
-    discounts: {
-      quickMoveIn: room.quickMoveIn || null,
-      quickMoveInDiscount: room.quickMoveInDiscount || null,
-      longTermWeeks: room.longTermWeeks || null,
-      longTermDiscount: room.longTermDiscount || null
-    }
-  }));
+const transformRoomsForMap = (rooms, checkInDate = null, checkOutDate = null) => {
+  const mapData = rooms.map(room => {
+    // 할인 계산 (빠른할인 → 장기할인 순차 적용)
+    const discountResult = calculateDiscounts(room, checkInDate, checkOutDate);
+
+    return {
+      id: room.id,
+      roomName: room.roomName,
+      address: room.address,
+      latitude: parseFloat(room.latitude),
+      longitude: parseFloat(room.longitude),
+      dailyRent: room.dailyRent,
+      finalDailyRent: discountResult.finalDailyRent,
+      totalDiscountAmount: discountResult.totalDiscountAmount,
+      appliedDiscounts: discountResult.appliedDiscounts, // ['quick', 'longTerm'] 등
+      area: parseFloat(room.area),
+      roomCount: room.roomCount,
+      bathroomCount: room.bathroomCount,
+      buildingType: room.buildingType,
+      photos: room.photos && room.photos.length > 0
+        ? room.photos.map(photo => ({
+            url: photo.url,
+            order: photo.order
+          }))
+        : [],
+      discounts: {
+        quick: {
+          quickMoveIn: discountResult.quick.quickMoveIn,
+          quickMoveInDiscount: discountResult.quick.quickMoveInDiscount,
+          isApplicable: discountResult.quick.isApplicable,
+          discountAmount: discountResult.quick.discountAmount,
+          daysUntilCheckIn: discountResult.quick.daysUntilCheckIn
+        },
+        longTerm: {
+          longTermWeeks: discountResult.longTerm.longTermWeeks,
+          longTermDiscount: discountResult.longTerm.longTermDiscount,
+          isApplicable: discountResult.longTerm.isApplicable,
+          discountAmount: discountResult.longTerm.discountAmount,
+          stayWeeks: discountResult.longTerm.stayWeeks
+        }
+      }
+    };
+  });
 
   return {
     count: mapData.length,
@@ -393,5 +586,9 @@ module.exports = {
   transformRoomsForMap,
   getCachedRooms,
   cacheRooms,
-  prefetchAdjacentAreas
+  prefetchAdjacentAreas,
+  calculateDiscounts,
+  // 하위 호환성
+  calculateQuickDiscount,
+  calculateLongTermDiscount
 };

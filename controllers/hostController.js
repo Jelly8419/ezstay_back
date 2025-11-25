@@ -1,4 +1,4 @@
-const { Room, RoomPhoto, RoomAmenity, RoomFreeService, sequelize } = require('../models');
+const { Room, RoomPhoto, RoomAmenity, EzService, sequelize } = require('../models');
 const { ErrorCodes, success, error, created, updated } = require('../utils/responseHelper');
 const { convertRoadAddressToCoordinates } = require('../utils/geocoding');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -347,6 +347,10 @@ const updateAmenities = async (req, res) => {
 };
 
 // 6. 무료 부가서비스 설정
+/**
+ * 이지서비스 업데이트 (구 updateFreeServices)
+ * 렌탈 아이템은 플랫폼 직접 판매로 전환되어 제거됨
+ */
 const updateFreeServices = async (req, res) => {
   const transaction = await sequelize.transaction();
 
@@ -355,10 +359,6 @@ const updateFreeServices = async (req, res) => {
     const hostId = req.user.id;
     const {
       cleaningService,
-      hairDryerRental,
-      beddingService,
-      amenityKit,
-      towelSetRental,
       autoPasswordChange,
       roomPassword
     } = req.body;
@@ -371,13 +371,9 @@ const updateFreeServices = async (req, res) => {
       return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
-    await RoomFreeService.upsert({
+    await EzService.upsert({
       roomId: room.id,
       cleaningService: cleaningService || false,
-      hairDryerRental: hairDryerRental || false,
-      beddingService: beddingService || false,
-      amenityKit: amenityKit || false,
-      towelSetRental: towelSetRental || false,
       autoPasswordChange: autoPasswordChange || false,
       roomPassword
     }, { transaction });
@@ -453,7 +449,7 @@ const submitReview = async (req, res) => {
       include: [
         { model: RoomPhoto, as: 'photos' },
         { model: RoomAmenity, as: 'amenity' },
-        { model: RoomFreeService, as: 'freeService' }
+        { model: EzService, as: 'ezService' }
       ]
     });
 
@@ -596,8 +592,8 @@ const getMyRooms = async (req, res) => {
           attributes: ['roomId']
         },
         {
-          model: RoomFreeService,
-          as: 'freeService',
+          model: EzService,
+          as: 'ezService',
           attributes: ['roomId']
         }
       ],
@@ -666,8 +662,8 @@ const getRoom = async (req, res) => {
           as: 'amenity'
         },
         {
-          model: RoomFreeService,
-          as: 'freeService'
+          model: EzService,
+          as: 'ezService'
         }
       ]
     });
@@ -729,15 +725,11 @@ const getRoom = async (req, res) => {
         petsAllowed: room.amenity.petsAllowed
       } : null,
 
-      // 무료 부가서비스
-      freeServices: room.freeService ? {
-        cleaningService: room.freeService.cleaningService,
-        hairDryerRental: room.freeService.hairDryerRental,
-        beddingService: room.freeService.beddingService,
-        amenityKit: room.freeService.amenityKit,
-        towelSetRental: room.freeService.towelSetRental,
-        autoPasswordChange: room.freeService.autoPasswordChange,
-        roomPassword: room.freeService.roomPassword
+      // 이지서비스 (호스트 제공 무료 부가서비스)
+      ezService: room.ezService ? {
+        cleaningService: room.ezService.cleaningService,
+        autoPasswordChange: room.ezService.autoPasswordChange,
+        roomPassword: room.ezService.roomPassword
       } : null,
 
       // 방 소개

@@ -1,4 +1,4 @@
-const { Room, RoomPhoto, RoomAmenity, RoomFreeService, User, RentalItem, Contract } = require('../models');
+const { Room, RoomPhoto, RoomAmenity, EzService, User, RentalItem, Contract } = require('../models');
 const { Op } = require('sequelize');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
 const { safeRedisOperation } = require('../config/redis');
@@ -58,6 +58,9 @@ const getRooms = async (req, res) => {
 
 const getRoomById = async (req, res) => {
   try {
+    // 쿼리 파라미터에서 입실일/퇴실일 추출 (할인 계산용)
+    const { checkIn, checkOut } = req.query;
+
     const room = await Room.findOne({
       where: {
         id: req.params.id,
@@ -103,11 +106,10 @@ const getRoomById = async (req, res) => {
           // wifiPassword는 자동으로 포함되지만 아래에서 제거됨
         },
         {
-          model: RoomFreeService,
-          as: 'freeService',
+          model: EzService,
+          as: 'ezService',
           attributes: [
-            'cleaningService', 'hairDryerRental', 'beddingService',
-            'amenityKit', 'towelSetRental', 'autoPasswordChange'
+            'cleaningService', 'autoPasswordChange'
             // ⚠️ roomPassword 제외 (보안)
           ],
           required: false
@@ -115,7 +117,7 @@ const getRoomById = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'profileImageUrl'],
+          attributes: ['id', 'name', 'profileImageUrl', 'phoneVerified'],
           required: false
         }
       ],
@@ -167,72 +169,56 @@ const getRoomById = async (req, res) => {
     roomData.deposit = 300000; // 보증금 30만원 고정
     roomData.weeklyRent = roomData.dailyRent ? roomData.dailyRent * 7 : null; // 주간 임대료 계산
 
-    // === 대여 물품 재고 정보 추가 ===
-    // freeService에서 true인 항목에 대해서만 해당 카테고리의 물품 목록 조회
+    // === 할인 정보 계산 (빠른할인 → 장기할인 순차 적용) ===
+    const discountResult = roomService.calculateDiscounts(roomData, checkIn, checkOut);
+
+    roomData.finalDailyRent = discountResult.finalDailyRent;
+    roomData.totalDiscountAmount = discountResult.totalDiscountAmount;
+    roomData.appliedDiscounts = discountResult.appliedDiscounts; // ['quick', 'longTerm'] 등
+    roomData.discounts = {
+      quick: {
+        quickMoveIn: discountResult.quick.quickMoveIn,
+        quickMoveInDiscount: discountResult.quick.quickMoveInDiscount,
+        isApplicable: discountResult.quick.isApplicable,
+        discountAmount: discountResult.quick.discountAmount,
+        daysUntilCheckIn: discountResult.quick.daysUntilCheckIn
+      },
+      longTerm: {
+        longTermWeeks: discountResult.longTerm.longTermWeeks,
+        longTermDiscount: discountResult.longTerm.longTermDiscount,
+        isApplicable: discountResult.longTerm.isApplicable,
+        discountAmount: discountResult.longTerm.discountAmount,
+        stayWeeks: discountResult.longTerm.stayWeeks
+      }
+    };
+    // === 할인 정보 계산 끝 ===
+
+    // === 렌탈 아이템 정보 추가 ===
+    // 플랫폼에서 직접 판매하는 렌탈 아이템 (호스트 동의 불필요)
+    // 모든 활성화된 렌탈 아이템을 표시
     const availableRentalItems = {};
 
-    if (roomData.freeService) {
-      const freeService = roomData.freeService;
+    // 모든 카테고리의 렌탈 아이템 조회
+    const rentalCategories = ['hair_dryer', 'bedding_set', 'amenity_kit', 'towel_set'];
+    const categoryKeys = {
+      'hair_dryer': 'hairDryers',
+      'bedding_set': 'beddingSets',
+      'amenity_kit': 'amenityKits',
+      'towel_set': 'towelSets'
+    };
 
-      // RentalItem.FREE_SERVICE_MAPPING을 참조하여 해당하는 물품 조회
-      // hair_dryer_rental: true → 'hair_dryer' 카테고리 물품 조회
-      if (freeService.hairDryerRental) {
-        const hairDryers = await RentalItem.getAvailableItemsByType('hair_dryer');
-        if (hairDryers.length > 0) {
-          availableRentalItems.hairDryers = hairDryers.map(item => ({
-            id: item.id,
-            name: item.name,
-            description: item.description,
-            price: parseFloat(item.price),
-            availableStock: item.availableStock,
-            imageUrl: item.imageUrl
-          }));
-        }
-      }
-
-      // bedding_service: true → 'bedding_set' 카테고리 물품 조회
-      if (freeService.beddingService) {
-        const beddingSets = await RentalItem.getAvailableItemsByType('bedding_set');
-        if (beddingSets.length > 0) {
-          availableRentalItems.beddingSets = beddingSets.map(item => ({
-            id: item.id,
-            name: item.name,
-            description: item.description,
-            price: parseFloat(item.price),
-            availableStock: item.availableStock,
-            imageUrl: item.imageUrl
-          }));
-        }
-      }
-
-      // amenity_kit: true → 'amenity_kit' 카테고리 물품 조회
-      if (freeService.amenityKit) {
-        const amenityKits = await RentalItem.getAvailableItemsByType('amenity_kit');
-        if (amenityKits.length > 0) {
-          availableRentalItems.amenityKits = amenityKits.map(item => ({
-            id: item.id,
-            name: item.name,
-            description: item.description,
-            price: parseFloat(item.price),
-            availableStock: item.availableStock,
-            imageUrl: item.imageUrl
-          }));
-        }
-      }
-
-      // towel_set_rental: true → 'towel_set' 카테고리 물품 조회
-      if (freeService.towelSetRental) {
-        const towelSets = await RentalItem.getAvailableItemsByType('towel_set');
-        if (towelSets.length > 0) {
-          availableRentalItems.towelSets = towelSets.map(item => ({
-            id: item.id,
-            name: item.name,
-            description: item.description,
-            price: parseFloat(item.price),
-            availableStock: item.availableStock,
-            imageUrl: item.imageUrl
-          }));
-        }
+    for (const category of rentalCategories) {
+      const items = await RentalItem.getAvailableItemsByType(category);
+      if (items.length > 0) {
+        const key = categoryKeys[category];
+        availableRentalItems[key] = items.map(item => ({
+          id: item.id,
+          name: item.name,
+          description: item.description,
+          price: parseFloat(item.price),
+          availableStock: item.availableStock,
+          imageUrl: item.imageUrl
+        }));
       }
     }
 
@@ -313,8 +299,8 @@ const getRoomsForMap = async (req, res) => {
     // DB에서 방 목록 조회
     const rooms = await roomService.fetchRoomsFromDB(coords, excludeRoomIds, limit);
 
-    // 응답 데이터 가공
-    const responseData = roomService.transformRoomsForMap(rooms);
+    // 응답 데이터 가공 (할인 적용 여부 계산 포함)
+    const responseData = roomService.transformRoomsForMap(rooms, checkIn, checkOut);
 
     // Redis 캐시 저장
     await roomService.cacheRooms(cacheKey, responseData);
