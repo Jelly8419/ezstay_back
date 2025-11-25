@@ -16,10 +16,14 @@ const SystemMessageTypes = {
   CHECK_OUT_REMINDER: 'check_out_reminder',         // 퇴실일 D-1
   CHECK_OUT_COMPLETED: 'check_out_completed',       // 퇴실 완료
 
+  // 환불 관련
+  REFUND_REQUESTED: 'refund_requested',             // 환불 요청 (관리자 승인 대기)
+  REFUND_APPROVED: 'refund_approved',               // 환불 승인
+  REFUND_COMPLETED: 'refund_completed',             // 환불 완료
+
   // 중요 알림
   IMPORTANT_NOTICE: 'important_notice',             // 중요 공지
-  REVIEW_REQUEST: 'review_request',                 // 리뷰 요청
-  REFUND_COMPLETED: 'refund_completed'              // 환불 완료
+  REVIEW_REQUEST: 'review_request'                  // 리뷰 요청
 };
 
 /**
@@ -38,9 +42,11 @@ const getSystemMessageTemplate = (type, data = {}) => {
     [SystemMessageTypes.CHECK_IN_REMINDER]: `입실일이 1일 남았습니다. 잊지 말고 체크인 준비 해주세요.`,
     [SystemMessageTypes.CHECK_OUT_REMINDER]: `퇴실일이 1일 남았습니다. 체크아웃 준비를 해주세요.`,
     [SystemMessageTypes.CHECK_OUT_COMPLETED]: `퇴실이 완료되었습니다.`,
+    [SystemMessageTypes.REFUND_REQUESTED]: `환불 요청이 접수되었습니다.\n금액: ${data.refundAmount || '계산 중'}원\n관리자 승인 후 처리 예정입니다.`,
+    [SystemMessageTypes.REFUND_APPROVED]: `환불이 자동 승인되었습니다.\n금액: ${data.refundAmount || '계산 중'}원\n영업일 기준 5일 내 처리됩니다.`,
+    [SystemMessageTypes.REFUND_COMPLETED]: `환불이 완료되었습니다.\n금액: ${data.amount ? data.amount.toLocaleString() + '원' : '확인 필요'}`,
     [SystemMessageTypes.IMPORTANT_NOTICE]: `${data.notice || '중요 공지사항이 있습니다'}`,
-    [SystemMessageTypes.REVIEW_REQUEST]: `숙소 이용은 어떠셨나요?\n리뷰를 남겨주시면 큰 도움이 됩니다 ⭐`,
-    [SystemMessageTypes.REFUND_COMPLETED]: `환불이 완료되었습니다.\n금액: ${data.amount ? data.amount.toLocaleString() + '원' : '확인 필요'}`
+    [SystemMessageTypes.REVIEW_REQUEST]: `숙소 이용은 어떠셨나요?\n리뷰를 남겨주시면 큰 도움이 됩니다 ⭐`
   };
 
   return templates[type] || '시스템 메시지';

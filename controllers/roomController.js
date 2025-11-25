@@ -58,6 +58,9 @@ const getRooms = async (req, res) => {
 
 const getRoomById = async (req, res) => {
   try {
+    // 쿼리 파라미터에서 입실일/퇴실일 추출 (할인 계산용)
+    const { checkIn, checkOut } = req.query;
+
     const room = await Room.findOne({
       where: {
         id: req.params.id,
@@ -114,7 +117,7 @@ const getRoomById = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'profileImageUrl'],
+          attributes: ['id', 'name', 'profileImageUrl', 'phoneVerified'],
           required: false
         }
       ],
@@ -165,6 +168,30 @@ const getRoomById = async (req, res) => {
     // ✅ PRD 요구사항: 고정값 및 계산 필드 추가
     roomData.deposit = 300000; // 보증금 30만원 고정
     roomData.weeklyRent = roomData.dailyRent ? roomData.dailyRent * 7 : null; // 주간 임대료 계산
+
+    // === 할인 정보 계산 (빠른할인 → 장기할인 순차 적용) ===
+    const discountResult = roomService.calculateDiscounts(roomData, checkIn, checkOut);
+
+    roomData.finalDailyRent = discountResult.finalDailyRent;
+    roomData.totalDiscountAmount = discountResult.totalDiscountAmount;
+    roomData.appliedDiscounts = discountResult.appliedDiscounts; // ['quick', 'longTerm'] 등
+    roomData.discounts = {
+      quick: {
+        quickMoveIn: discountResult.quick.quickMoveIn,
+        quickMoveInDiscount: discountResult.quick.quickMoveInDiscount,
+        isApplicable: discountResult.quick.isApplicable,
+        discountAmount: discountResult.quick.discountAmount,
+        daysUntilCheckIn: discountResult.quick.daysUntilCheckIn
+      },
+      longTerm: {
+        longTermWeeks: discountResult.longTerm.longTermWeeks,
+        longTermDiscount: discountResult.longTerm.longTermDiscount,
+        isApplicable: discountResult.longTerm.isApplicable,
+        discountAmount: discountResult.longTerm.discountAmount,
+        stayWeeks: discountResult.longTerm.stayWeeks
+      }
+    };
+    // === 할인 정보 계산 끝 ===
 
     // === 렌탈 아이템 정보 추가 ===
     // 플랫폼에서 직접 판매하는 렌탈 아이템 (호스트 동의 불필요)
@@ -272,8 +299,8 @@ const getRoomsForMap = async (req, res) => {
     // DB에서 방 목록 조회
     const rooms = await roomService.fetchRoomsFromDB(coords, excludeRoomIds, limit);
 
-    // 응답 데이터 가공
-    const responseData = roomService.transformRoomsForMap(rooms);
+    // 응답 데이터 가공 (할인 적용 여부 계산 포함)
+    const responseData = roomService.transformRoomsForMap(rooms, checkIn, checkOut);
 
     // Redis 캐시 저장
     await roomService.cacheRooms(cacheKey, responseData);

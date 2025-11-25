@@ -8,7 +8,10 @@ const {
   getContractDetail,
   approveContract,
   rejectContract,
-  cancelContractByGuest
+  cancelContractByGuest,
+  calculateRefundPreview,
+  requestRefund,
+  getContractRefunds
 } = require('../controllers/contractController');
 
 /**
@@ -98,5 +101,39 @@ router.patch('/:contractId/reject', authenticateToken, rejectContract);
  * }
  */
 router.patch('/:contractId/cancel', authenticateToken, cancelContractByGuest);
+
+/**
+ * 환불 금액 미리 계산 (게스트가 취소하기 전에 확인)
+ * POST /api/contracts/:contractId/calculate-refund
+ *
+ * Request Body (optional):
+ * {
+ *   "cancellation_date": "2025-01-25T10:00:00Z" (선택사항, 기본값: 현재 시간)
+ * }
+ */
+router.post('/:contractId/calculate-refund', authenticateToken, calculateRefundPreview);
+
+/**
+ * 환불 요청 (게스트가 계약 취소 및 환불 요청)
+ * POST /api/contracts/:contractId/request-refund
+ *
+ * Request Body:
+ * {
+ *   "cancellation_reason": "개인 사정으로 입주가 어려워졌습니다.",
+ *   "refund_method": "ORIGINAL_PAYMENT",
+ *   "refund_account_info": {
+ *     "bank_name": "신한은행",
+ *     "account_number": "110-123-456789",
+ *     "account_holder": "홍길동"
+ *   }
+ * }
+ */
+router.post('/:contractId/request-refund', authenticateToken, requestRefund);
+
+/**
+ * 환불 이력 조회 (게스트/호스트)
+ * GET /api/contracts/:contractId/refunds
+ */
+router.get('/:contractId/refunds', authenticateToken, getContractRefunds);
 
 module.exports = router;
