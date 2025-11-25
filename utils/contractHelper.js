@@ -305,6 +305,48 @@ async function cancelRentalItemReservations(contractId, transaction) {
 }
 
 /**
+ * EZ청소서비스 청소비 계산
+ * - 기본금: 50,000원
+ * - 10평 초과 시: 10평당 20,000원 추가
+ *
+ * @param {Object} room - 방 정보 (area, cleaningFee, ezService 포함)
+ * @returns {number} 청소비
+ *
+ * @example
+ * // area 1~10평: 50,000원
+ * // area 11~20평: 50,000 + 20,000 = 70,000원
+ * // area 21~30평: 50,000 + 40,000 = 90,000원
+ */
+function calculateCleaningFee(room) {
+  const EZ_CLEANING_BASE_FEE = 50000;        // 기본금 5만원
+  const EZ_CLEANING_EXTRA_PER_10_PYEONG = 20000;  // 10평당 추가 2만원
+  const EZ_CLEANING_BASE_AREA = 10;          // 기준 면적 10평
+
+  // EZ청소서비스 사용 여부 확인
+  const usesEzCleaningService = room.ezService?.cleaningService || false;
+
+  if (!usesEzCleaningService) {
+    // EZ청소서비스 미사용 시 기존 cleaningFee 사용
+    return room.cleaningFee || 0;
+  }
+
+  // EZ청소서비스 사용 시 면적 기반 계산
+  const area = room.area || 0;
+
+  if (area <= EZ_CLEANING_BASE_AREA) {
+    // 10평 이하: 기본금만
+    return EZ_CLEANING_BASE_FEE;
+  }
+
+  // 10평 초과: 기본금 + 초과분 계산 (올림)
+  // 11~20평: 1단위(+2만원), 21~30평: 2단위(+4만원)
+  const extraPyeong = area - EZ_CLEANING_BASE_AREA;
+  const extraUnits = Math.ceil(extraPyeong / 10);  // 10평 단위로 계산 (올림)
+
+  return EZ_CLEANING_BASE_FEE + (extraUnits * EZ_CLEANING_EXTRA_PER_10_PYEONG);
+}
+
+/**
  * 날짜 검증
  * @param {Date} checkInDate - 체크인 날짜
  * @param {Date} checkOutDate - 체크아웃 날짜
@@ -356,6 +398,7 @@ function validateDates(checkInDate, checkOutDate) {
 module.exports = {
   calculateRentalItemsFee,
   calculateDiscount,
+  calculateCleaningFee,
   validateRentalItemsStock,
   reserveRentalItems,
   cancelRentalItemReservations,
