@@ -3,6 +3,7 @@ const { success, error, created, updated, ErrorCodes } = require('../utils/respo
 const {
   calculateRentalItemsFee,
   calculateDiscount,
+  calculateCleaningFee,
   validateRentalItemsStock,
   reserveRentalItems,
   cancelRentalItemReservations,
@@ -153,10 +154,11 @@ const createContractRequest = async (req, res) => {
     }
 
     // 7. 금액 재계산 및 검증
+    // EZ청소서비스 사용 시 면적 기반 계산: 기본 5만원 + 10평 초과 시 10평당 2만원
     const serverCalculated = {
       rentalFee: room.dailyRent * totalDays,
       maintenanceFee: (room.dailyMaintenanceFee || 0) * totalDays,
-      cleaningFee: room.cleaningFee || 0,
+      cleaningFee: calculateCleaningFee(room),
       rentalItemsFee: await calculateRentalItemsFee(rentalItems, totalDays)
     };
 
