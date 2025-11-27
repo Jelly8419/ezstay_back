@@ -148,7 +148,7 @@ const Room = sequelize.define('Room', {
   quickMoveInDiscount: {
     type: DataTypes.INTEGER,
     allowNull: true,
-    comment: '빠른 입주 할인율 (%)'
+    comment: '빠른 입주 할인 금액 (원, 고정 금액)'
   },
   includeElectricity: {
     type: DataTypes.BOOLEAN,

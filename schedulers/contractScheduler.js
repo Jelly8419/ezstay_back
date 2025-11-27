@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { Contract, ChatRoom, sequelize } = require('../models');
+const { Contract, ChatRoom, ContractStatusLog, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
@@ -32,24 +32,63 @@ async function updateApprovalExpired() {
     //     2025-10-24 00:00:00부터 만료
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // 오늘 0시
 
-    const result = await Contract.update(
-      {
-        status: 'APPROVAL_EXPIRED',
-        updatedAt: now
+    // 만료될 계약 조회 (로그 기록용)
+    const expiredContracts = await Contract.findAll({
+      where: {
+        status: 'PENDING_APPROVAL',
+        [Op.or]: [
+          { createdAt: { [Op.lte]: threeDaysAgo } },
+          { checkInDate: { [Op.lt]: todayStart } }
+        ]
       },
-      {
-        where: {
-          status: 'PENDING_APPROVAL',
-          [Op.or]: [
-            // 생성일로부터 72시간 경과
-            { createdAt: { [Op.lte]: threeDaysAgo } },
-            // 입실날짜가 오늘보다 이전 (어제 이전)
-            { checkInDate: { [Op.lt]: todayStart } }
-          ]
+      attributes: ['id', 'createdAt', 'checkInDate'],
+      transaction
+    });
+
+    // 각 계약별 상태 업데이트 및 로그 기록
+    for (const contract of expiredContracts) {
+      const timeSinceCreation = now - new Date(contract.createdAt);
+      const hoursSinceCreation = Math.floor(timeSinceCreation / (1000 * 60 * 60));
+      const isTimeExpired = hoursSinceCreation >= 72;
+
+      // 만료 사유 결정
+      const cancellationReason = isTimeExpired
+        ? '요청 후 72시간 경과로 인한 자동 만료'
+        : '입주일 경과로 인한 자동 만료';
+
+      // 계약 상태 업데이트 (cancellation_reason 포함)
+      await Contract.update(
+        {
+          status: 'APPROVAL_EXPIRED',
+          cancellationReason,
+          updatedAt: now
+        },
+        {
+          where: { id: contract.id },
+          transaction
+        }
+      );
+
+      // 로그 기록
+      await ContractStatusLog.createLog({
+        contractId: contract.id,
+        fromStatus: 'PENDING_APPROVAL',
+        toStatus: 'APPROVAL_EXPIRED',
+        changedBy: 'SYSTEM',
+        changedByUserId: null,
+        reason: cancellationReason,
+        metadata: {
+          expirationRule: isTimeExpired ? '72H_TIMEOUT' : 'CHECKIN_DATE_PASSED',
+          createdAt: contract.createdAt,
+          checkInDate: contract.checkInDate,
+          hoursSinceCreation,
+          expiredAt: now
         },
         transaction
-      }
-    );
+      });
+    }
+
+    const result = [expiredContracts.length, expiredContracts.length];
 
     await transaction.commit();
 
@@ -81,7 +120,7 @@ async function updatePaymentExpired() {
     // 입실날짜 당일 23:59:59까지는 만료 안 됨
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // 오늘 0시
 
-    // 먼저 만료될 계약들을 조회 (시스템 메시지 발송용)
+    // 먼저 만료될 계약들을 조회 (시스템 메시지 발송용 + 로그 기록용)
     const expiredContracts = await Contract.findAll({
       where: {
         status: 'APPROVED',
@@ -92,6 +131,7 @@ async function updatePaymentExpired() {
           { checkInDate: { [Op.lt]: todayStart } }
         ]
       },
+      attributes: ['id', 'approvedAt', 'checkInDate'],
       include: [
         {
           model: ChatRoom,
@@ -119,6 +159,32 @@ async function updatePaymentExpired() {
         transaction
       }
     );
+
+    // 각 계약별 로그 기록
+    for (const contract of expiredContracts) {
+      const timeSinceApproval = now - new Date(contract.approvedAt);
+      const hoursSinceApproval = Math.floor(timeSinceApproval / (1000 * 60 * 60));
+      const isPaymentTimeExpired = hoursSinceApproval >= 24;
+
+      await ContractStatusLog.createLog({
+        contractId: contract.id,
+        fromStatus: 'APPROVED',
+        toStatus: 'PAYMENT_EXPIRED',
+        changedBy: 'SYSTEM',
+        changedByUserId: null,
+        reason: isPaymentTimeExpired
+          ? '결제 기한 만료 (24시간 경과)'
+          : '입실일 당일 종료로 인한 자동 만료',
+        metadata: {
+          expirationRule: isPaymentTimeExpired ? '24H_TIMEOUT' : 'CHECKIN_DATE_PASSED',
+          approvedAt: contract.approvedAt,
+          checkInDate: contract.checkInDate,
+          hoursSinceApproval,
+          expiredAt: now
+        },
+        transaction
+      });
+    }
 
     await transaction.commit();
 
@@ -162,6 +228,17 @@ async function updateInProgress() {
   try {
     const now = new Date();
 
+    // 체크인 대상 계약 조회 (로그 기록용)
+    const checkInContracts = await Contract.findAll({
+      where: {
+        status: 'PAYMENT_COMPLETED',
+        checkInDate: { [Op.lte]: now }
+      },
+      attributes: ['id', 'checkInDate'],
+      transaction
+    });
+
+    // 계약 상태 업데이트
     const result = await Contract.update(
       {
         status: 'IN_PROGRESS',
@@ -176,6 +253,23 @@ async function updateInProgress() {
         transaction
       }
     );
+
+    // 각 계약별 로그 기록
+    for (const contract of checkInContracts) {
+      await ContractStatusLog.createLog({
+        contractId: contract.id,
+        fromStatus: 'PAYMENT_COMPLETED',
+        toStatus: 'IN_PROGRESS',
+        changedBy: 'SYSTEM',
+        changedByUserId: null,
+        reason: '입실 시간이 도래하여 자동으로 계약 진행 중 상태로 변경',
+        metadata: {
+          scheduledCheckInDate: contract.checkInDate,
+          actualCheckInAt: now
+        },
+        transaction
+      });
+    }
 
     await transaction.commit();
 
@@ -203,6 +297,17 @@ async function updateCompleted() {
   try {
     const now = new Date();
 
+    // 체크아웃 대상 계약 조회 (로그 기록용)
+    const checkOutContracts = await Contract.findAll({
+      where: {
+        status: 'IN_PROGRESS',
+        checkOutDate: { [Op.lte]: now }
+      },
+      attributes: ['id', 'checkInDate', 'checkOutDate', 'totalDays'],
+      transaction
+    });
+
+    // 계약 상태 업데이트
     const result = await Contract.update(
       {
         status: 'COMPLETED',
@@ -217,6 +322,25 @@ async function updateCompleted() {
         transaction
       }
     );
+
+    // 각 계약별 로그 기록
+    for (const contract of checkOutContracts) {
+      await ContractStatusLog.createLog({
+        contractId: contract.id,
+        fromStatus: 'IN_PROGRESS',
+        toStatus: 'COMPLETED',
+        changedBy: 'SYSTEM',
+        changedByUserId: null,
+        reason: '퇴실 시간이 도래하여 자동으로 계약 완료 처리',
+        metadata: {
+          checkInDate: contract.checkInDate,
+          scheduledCheckOutDate: contract.checkOutDate,
+          actualCheckOutAt: now,
+          totalDays: contract.totalDays
+        },
+        transaction
+      });
+    }
 
     await transaction.commit();
 

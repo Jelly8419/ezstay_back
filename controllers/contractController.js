@@ -1,4 +1,4 @@
-const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog } = require('../models');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const {
   calculateRentalItemsFee,
@@ -12,6 +12,7 @@ const {
 const { createChatRoomMetadata, sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 const { calculateRefund } = require('../utils/refundCalculator');
+const { generateOrderId } = require('../utils/orderIdGenerator');
 
 /**
  * 계약 요청 생성 (게스트 -> 호스트)
@@ -93,6 +94,38 @@ const createContractRequest = async (req, res) => {
       );
     }
 
+    // 3-1. 환불정책 스냅샷 조회 (계약 시점의 정책 보존)
+    let refundPolicySnapshot = null;
+    if (room.refundPolicy) {
+      const policyType = await RefundPolicyType.findOne({
+        where: { policyType: room.refundPolicy, isActive: true },
+        transaction
+      });
+
+      const policyRules = await RefundPolicyRule.findAll({
+        where: { policyType: room.refundPolicy },
+        order: [['daysBeforeMin', 'DESC']],
+        transaction
+      });
+
+      if (policyType) {
+        refundPolicySnapshot = {
+          policyType: policyType.policyType,
+          displayName: policyType.displayName,
+          description: policyType.description,
+          specialRules: policyType.specialRules,
+          rules: policyRules.map(rule => ({
+            daysBeforeMin: rule.daysBeforeMin,
+            daysBeforeMax: rule.daysBeforeMax,
+            refundRate: parseFloat(rule.refundRate),
+            isSameDayCancellation: rule.isSameDayCancellation,
+            description: rule.description
+          })),
+          capturedAt: new Date().toISOString()
+        };
+      }
+    }
+
     // 4. 날짜 검증
     const dateValidation = validateDates(checkInDate, checkOutDate);
     if (!dateValidation.valid) {
@@ -169,27 +202,37 @@ const createContractRequest = async (req, res) => {
       serverCalculated.cleaningFee +
       serverCalculated.rentalItemsFee;
 
-    // 할인 금액 계산
-    const discountInfo = await calculateDiscount(discountCode, subtotalServer, totalDays, room);
+    // 할인 금액 계산 (PRICING_CALC.md 기준)
+    // - 빠른 입주 할인: 고정 금액, 먼저 적용
+    // - 장기계약 할인: %, 빠른입주 할인 적용 후 남은 임대료에 적용
+    const discountInfo = await calculateDiscount(
+      discountCode,
+      serverCalculated.rentalFee,  // baseRent (임대료)
+      totalDays,
+      checkInDate,
+      room
+    );
     const discountAmountServer = discountInfo.discountAmount;
     const discountTypeServer = discountInfo.discountType;
 
     // 할인 적용 후 금액
     const afterDiscount = subtotalServer - discountAmountServer;
 
-    // 플랫폼 수수료 계산 (임대료 + 관리비 + 청소비의 10%)
-    // 단, 이지서비스에서 청소 허용인 경우 청소비 제외
+    // 플랫폼 수수료 계산 (9.9%)
+    // - 기준: 임대료 + 관리비 + 청소비(EZ서비스 사용시 제외) - 총할인
+    // - EZ청소서비스 사용 시 청소비는 수수료 계산에서 제외
     const hasFreeCleaningService = room.ezService?.cleaningService || false;
     const feeBase = serverCalculated.rentalFee +
                     serverCalculated.maintenanceFee +
-                    (hasFreeCleaningService ? 0 : serverCalculated.cleaningFee);
-    serverCalculated.platformFee = Math.round(feeBase * 0.1);
+                    (hasFreeCleaningService ? 0 : serverCalculated.cleaningFee) -
+                    discountAmountServer;
+    serverCalculated.platformFee = Math.floor(feeBase * 0.099);
 
     // 실이용 금액 (할인 적용 + 수수료 포함)
     serverCalculated.totalUsageFee = afterDiscount + serverCalculated.platformFee;
 
-    // 보증금 (33만원 고정)
-    serverCalculated.deposit = 330000;
+    // 보증금 (30만원 고정)
+    serverCalculated.deposit = 300000;
 
     // 최종 결제 금액
     serverCalculated.finalTotal = serverCalculated.totalUsageFee + serverCalculated.deposit;
@@ -232,9 +275,13 @@ const createContractRequest = async (req, res) => {
       );
     }
 
-    // 8. 계약 요청 생성
+    // 8. 주문번호 생성 (yymmdd + 00001)
+    const orderId = await generateOrderId(transaction);
+
+    // 9. 계약 요청 생성
     const contract = await Contract.create(
       {
+        orderId,
         roomId,
         hostId: room.hostId,
         guestId,
@@ -272,6 +319,10 @@ const createContractRequest = async (req, res) => {
         // 가격 스냅샷 (분쟁 대비)
         pricingSnapshot: pricingSnapshot || {},
 
+        // 환불정책 스냅샷 (계약 시점의 정책 보존)
+        refundPolicyType: room.refundPolicy || null,
+        refundPolicySnapshot: refundPolicySnapshot,
+
         // 특별 요청
         specialRequests: specialRequests || {},
 
@@ -282,11 +333,30 @@ const createContractRequest = async (req, res) => {
     );
 
     // 9. 렌탈 아이템 임시 예약 (재고 차감)
-    if (rentalItems && Object.keys(rentalItems).length > 0) {
+    if (rentalItems && Array.isArray(rentalItems) && rentalItems.length > 0) {
       await reserveRentalItems(contract.id, rentalItems, checkInDate, checkOutDate, transaction);
     }
 
-    // 10. TODO: 호스트에게 알림 전송 (추후 구현)
+    // 10. 상태 변경 로그 기록
+    await ContractStatusLog.createLog({
+      contractId: contract.id,
+      fromStatus: null,  // 최초 생성
+      toStatus: 'PENDING_APPROVAL',
+      changedBy: 'GUEST',
+      changedByUserId: guestId,
+      reason: '게스트가 계약 승인을 요청했습니다',
+      metadata: {
+        roomId: contract.roomId,
+        checkInDate: contract.checkInDate,
+        checkOutDate: contract.checkOutDate,
+        totalDays: contract.totalDays,
+        finalTotalAmount: contract.finalTotalAmount
+      },
+      req,
+      transaction
+    });
+
+    // 11. TODO: 호스트에게 알림 전송 (추후 구현)
     // await sendNotificationToHost(room.hostId, { ... });
 
     await transaction.commit();
@@ -295,6 +365,7 @@ const createContractRequest = async (req, res) => {
       res,
       {
         contractId: contract.id,
+        orderId: contract.orderId,
         status: contract.status,
         hostId: room.hostId,
         checkInDate: contract.checkInDate,
@@ -317,13 +388,24 @@ const createContractRequest = async (req, res) => {
       );
     }
 
+    // 주문번호 한도 초과 에러
+    if (err.message.includes('주문번호 한도')) {
+      return error(
+        res,
+        { code: 4320, message: '오늘 주문번호 발급 한도를 초과했습니다. 고객센터로 문의해주세요.' },
+        400
+      );
+    }
+
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
 };
 
 /**
- * 게스트의 계약 요청 목록 조회
+ * 게스트의 계약 요청 목록 조회 (간소화 버전)
  * GET /api/contracts/guest
+ *
+ * 게스트는 리스트에서 최종 금액만 확인하고, 상세 정보는 상세 페이지에서 확인
  */
 const getGuestContracts = async (req, res) => {
   try {
@@ -366,6 +448,7 @@ const getGuestContracts = async (req, res) => {
       {
         contracts: contracts.map(contract => ({
           id: contract.id,
+          orderId: contract.orderId,
           status: contract.status,
           statusLabel: Contract.STATUS_LABELS[contract.status],
 
@@ -373,24 +456,9 @@ const getGuestContracts = async (req, res) => {
           checkInDate: contract.checkInDate,
           checkOutDate: contract.checkOutDate,
           totalDays: contract.totalDays,
-          totalWeeks: contract.totalWeeks,
 
-          // 금액 정보
-          rentalFee: contract.rentalFee,
-          maintenanceFee: contract.maintenanceFee,
-          cleaningFee: contract.cleaningFee,
-          rentalItemsFee: contract.rentalItemsFee,
-          platformFee: contract.platformFee,
-          discountAmount: contract.discountAmount,
-          discountType: contract.discountType,
-          discountCode: contract.discountCode,
-          subtotal: contract.subtotal,
-          totalUsageFee: contract.totalUsageFee,
-          deposit: contract.deposit,
+          // 💰 최종 금액만 표시 (리스트 간소화)
           finalTotalAmount: contract.finalTotalAmount,
-
-          // 렌탈 아이템
-          rentalItems: contract.rentalItems,
 
           // 방 정보
           room: {
@@ -421,8 +489,10 @@ const getGuestContracts = async (req, res) => {
 };
 
 /**
- * 호스트가 받은 계약 요청 목록 조회
+ * 호스트가 받은 계약 요청 목록 조회 (상세 버전)
  * GET /api/contracts/host
+ *
+ * 호스트는 수익 관리를 위해 금액 상세 정보를 모두 확인할 수 있음
  */
 const getHostContracts = async (req, res) => {
   try {
@@ -465,6 +535,7 @@ const getHostContracts = async (req, res) => {
       {
         contracts: contracts.map(contract => ({
           id: contract.id,
+          orderId: contract.orderId,
           status: contract.status,
           statusLabel: Contract.STATUS_LABELS[contract.status],
 
@@ -474,7 +545,7 @@ const getHostContracts = async (req, res) => {
           totalDays: contract.totalDays,
           totalWeeks: contract.totalWeeks,
 
-          // 금액 정보
+          // 💰 금액 상세 정보 (호스트 수익 관리용)
           rentalFee: contract.rentalFee,
           maintenanceFee: contract.maintenanceFee,
           cleaningFee: contract.cleaningFee,
@@ -487,6 +558,9 @@ const getHostContracts = async (req, res) => {
           totalUsageFee: contract.totalUsageFee,
           deposit: contract.deposit,
           finalTotalAmount: contract.finalTotalAmount,
+
+          // 📊 호스트 실수령액 (플랫폼 수수료 차감 후)
+          hostEarnings: contract.totalUsageFee - contract.platformFee,
 
           // 렌탈 아이템
           rentalItems: contract.rentalItems,
@@ -572,6 +646,7 @@ const getContractDetail = async (req, res) => {
       {
         contract: {
           id: contract.id,
+          orderId: contract.orderId,
           status: contract.status,
           statusLabel: Contract.STATUS_LABELS[contract.status],
 
@@ -597,6 +672,7 @@ const getContractDetail = async (req, res) => {
 
           // 렌탈 아이템
           rentalItems: contract.rentalItems,
+          recommendedItems: contract.recommendedItems,
 
           // 결제 정보
           paymentMethod: contract.paymentMethod,
@@ -612,6 +688,10 @@ const getContractDetail = async (req, res) => {
 
           // 약관 동의
           termsAgreed: contract.termsAgreed,
+
+          // 환불 정책 (계약 시점 스냅샷)
+          refundPolicyType: contract.refundPolicyType,
+          refundPolicySnapshot: contract.refundPolicySnapshot,
 
           // 방 정보
           room: {
@@ -671,6 +751,7 @@ const approveContract = async (req, res) => {
 
   try {
     const { contractId } = req.params;
+    const { recommendedItems } = req.body;
     const hostId = req.user.id;
 
     // 계약 조회
@@ -697,14 +778,73 @@ const approveContract = async (req, res) => {
       );
     }
 
+    // 권장 렌탈 아이템 검증 (선택사항)
+    let recommendedItemsData = null;
+    if (recommendedItems && recommendedItems.items && recommendedItems.items.length > 0) {
+      const { RentalItem } = require('../models');
+
+      // 각 아이템이 실제 존재하는지 검증
+      const itemIds = recommendedItems.items.map(item => item.itemId);
+      const validItems = await RentalItem.findAll({
+        where: { id: itemIds, isActive: true },
+        attributes: ['id', 'itemType', 'name', 'price'],
+        transaction
+      });
+
+      if (validItems.length !== itemIds.length) {
+        await transaction.rollback();
+        return error(
+          res,
+          { code: 4011, message: '유효하지 않은 렌탈 아이템이 포함되어 있습니다' },
+          400
+        );
+      }
+
+      // 권장 아이템 데이터 구성
+      recommendedItemsData = {
+        items: recommendedItems.items.map(item => {
+          const validItem = validItems.find(v => v.id === item.itemId);
+          return {
+            itemId: item.itemId,
+            itemType: validItem.itemType,
+            name: validItem.name,
+            quantity: item.quantity || 1,
+            price: validItem.price
+          };
+        }),
+        recommendedBy: hostId,
+        recommendedAt: new Date()
+      };
+    }
+
     // 계약 승인 처리
-    await contract.update(
-      {
-        status: 'APPROVED',
-        approvedAt: new Date()
+    const updateData = {
+      status: 'APPROVED',
+      approvedAt: new Date()
+    };
+
+    if (recommendedItemsData) {
+      updateData.recommendedItems = recommendedItemsData;
+    }
+
+    await contract.update(updateData, { transaction });
+
+    // 상태 변경 로그 기록
+    await ContractStatusLog.createLog({
+      contractId: contract.id,
+      fromStatus: 'PENDING_APPROVAL',
+      toStatus: 'APPROVED',
+      changedBy: 'HOST',
+      changedByUserId: hostId,
+      reason: '호스트가 계약을 승인했습니다',
+      metadata: {
+        approvedAt: contract.approvedAt,
+        hasRecommendedItems: !!recommendedItemsData,
+        recommendedItemsCount: recommendedItemsData?.items?.length || 0
       },
-      { transaction }
-    );
+      req,
+      transaction
+    });
 
     // 채팅방 자동 생성
     try {
@@ -878,6 +1018,21 @@ const rejectContract = async (req, res) => {
       { transaction }
     );
 
+    // 상태 변경 로그 기록
+    await ContractStatusLog.createLog({
+      contractId: contract.id,
+      fromStatus: 'PENDING_APPROVAL',
+      toStatus: 'REJECTED',
+      changedBy: 'HOST',
+      changedByUserId: hostId,
+      reason: hostMessage,
+      metadata: {
+        rejectedAt: contract.rejectedAt
+      },
+      req,
+      transaction
+    });
+
     // 채팅방이 있다면 시스템 메시지 발송 (거절 시에는 채팅방이 없을 수 있음)
     const chatRoom = await ChatRoom.findOne({
       where: { contractId },
@@ -975,6 +1130,22 @@ const cancelContractByGuest = async (req, res) => {
       },
       { transaction }
     );
+
+    // 상태 변경 로그 기록
+    await ContractStatusLog.createLog({
+      contractId: contract.id,
+      fromStatus: 'PENDING_APPROVAL',
+      toStatus: 'CANCELLED_BY_GUEST',
+      changedBy: 'GUEST',
+      changedByUserId: guestId,
+      reason: cancellationReason || '게스트가 계약 요청을 취소했습니다',
+      metadata: {
+        cancellationType: 'BEFORE_PAYMENT',
+        cancelledAt: contract.cancelledAt
+      },
+      req,
+      transaction
+    });
 
     // 채팅방이 있다면 시스템 메시지 발송 (승인 대기 중 취소 시 채팅방이 없을 수 있음)
     const chatRoom = await ChatRoom.findOne({
@@ -1202,11 +1373,34 @@ const requestRefund = async (req, res) => {
     }, { transaction });
 
     // 계약 상태 업데이트
+    const previousStatus = contract.status;
     await contract.update({
       status: contractStatus,
       cancelledAt: new Date(),
       cancellationReason: cancellation_reason || null
     }, { transaction });
+
+    // 상태 변경 로그 기록
+    await ContractStatusLog.createLog({
+      contractId: contract.id,
+      fromStatus: previousStatus,
+      toStatus: contractStatus,
+      changedBy: 'GUEST',
+      changedByUserId: userId,
+      reason: cancellation_reason || '게스트가 환불을 요청했습니다',
+      metadata: {
+        refundId: refund.id,
+        autoApproved: autoApprove,
+        cancellationType: isBeforeCheckIn ? 'AFTER_PAYMENT' : 'DURING_STAY',
+        totalRefundAmount: refund.totalRefundAmount,
+        finalRefundAmount: refund.finalRefundAmount,
+        penaltyAmount: refund.penaltyAmount,
+        policyTypeUsed: refund.policyTypeUsed,
+        daysBeforeCheckin: refundData.daysBeforeCheckin
+      },
+      req,
+      transaction
+    });
 
     // 채팅방에 시스템 메시지 발송
     const chatRoom = await ChatRoom.findOne({

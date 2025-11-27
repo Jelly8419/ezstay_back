@@ -3,46 +3,23 @@ const { Op } = require('sequelize');
 
 /**
  * 렌탈 아이템 비용 계산
- * @param {Object} rentalItems - 렌탈 아이템 정보 {hairDryerId, beddingSetId, beddingSetQuantity, ...}
+ * @param {Array} rentalItems - 렌탈 아이템 배열 [{ itemId, quantity }]
  * @param {number} totalDays - 총 숙박 일수
  * @returns {Promise<number>} 총 렌탈 비용
  */
 async function calculateRentalItemsFee(rentalItems, totalDays) {
-  if (!rentalItems || Object.keys(rentalItems).length === 0) {
+  // 배열 형식 체크
+  if (!rentalItems || !Array.isArray(rentalItems) || rentalItems.length === 0) {
     return 0;
   }
 
   let totalFee = 0;
-  const itemsToCheck = [];
-
-  // 각 렌탈 아이템 타입별로 처리
-  if (rentalItems.hairDryerId) {
-    itemsToCheck.push({ id: rentalItems.hairDryerId, quantity: 1 });
-  }
-  if (rentalItems.beddingSetId && rentalItems.beddingSetQuantity) {
-    itemsToCheck.push({
-      id: rentalItems.beddingSetId,
-      quantity: rentalItems.beddingSetQuantity
-    });
-  }
-  if (rentalItems.amenityKitId && rentalItems.amenityKitQuantity) {
-    itemsToCheck.push({
-      id: rentalItems.amenityKitId,
-      quantity: rentalItems.amenityKitQuantity
-    });
-  }
-  if (rentalItems.towelSetId && rentalItems.towelSetQuantity) {
-    itemsToCheck.push({
-      id: rentalItems.towelSetId,
-      quantity: rentalItems.towelSetQuantity
-    });
-  }
 
   // 각 아이템의 가격 조회
-  for (const item of itemsToCheck) {
-    const rentalItem = await RentalItem.findByPk(item.id);
+  for (const item of rentalItems) {
+    const rentalItem = await RentalItem.findByPk(item.itemId);
     if (!rentalItem) {
-      throw new Error(`렌탈 아이템을 찾을 수 없습니다. (ID: ${item.id})`);
+      throw new Error(`렌탈 아이템을 찾을 수 없습니다. (ID: ${item.itemId})`);
     }
     if (!rentalItem.isActive) {
       throw new Error(`${rentalItem.name}은(는) 현재 대여 불가능합니다.`);
@@ -55,98 +32,108 @@ async function calculateRentalItemsFee(rentalItems, totalDays) {
 
 /**
  * 할인 금액 계산
+ *
+ * 할인 적용 순서 (PRICING_CALC.md 참조):
+ * 1. 빠른 입주 할인 (고정 금액) - 먼저 적용
+ * 2. 장기계약 할인 (%) - 빠른 입주 할인 적용 후 남은 임대료에 적용
+ *
  * @param {string} discountCode - 할인 코드 (쿠폰 등)
- * @param {number} subtotal - 할인 전 소계
+ * @param {number} baseRent - 기본 임대료 (일 임대료 × 일수)
  * @param {number} totalDays - 총 숙박 일수
- * @param {Object} room - 방 정보 (장기 할인 정보 포함)
- * @returns {Promise<Object>} { discountAmount, discountType }
+ * @param {Date|string} checkInDate - 체크인 날짜
+ * @param {Object} room - 방 정보 (할인 정보 포함)
+ * @returns {Promise<Object>} { discountAmount, discountType, quickMoveInDiscount, longTermDiscount }
  */
-async function calculateDiscount(discountCode, subtotal, totalDays, room) {
-  let discountAmount = 0;
+async function calculateDiscount(discountCode, baseRent, totalDays, checkInDate, room) {
+  let quickMoveInDiscount = 0;
+  let longTermDiscount = 0;
   let discountType = 'NONE';
 
-  // 1. 쿠폰 코드 할인 (우선순위 가장 높음)
+  // 1. 쿠폰 코드 할인 (최우선)
   if (discountCode) {
     // TODO: 실제 쿠폰 시스템 구현 시 쿠폰 테이블에서 조회
-    // 현재는 임시로 하드코딩
     discountType = 'COUPON';
-    discountAmount = 0; // 쿠폰 로직 구현 필요
-    return { discountAmount, discountType };
+    return {
+      discountAmount: 0,
+      discountType,
+      quickMoveInDiscount: 0,
+      longTermDiscount: 0
+    };
   }
 
-  // 2. 장기 할인 (총 주수 기준)
-  const totalWeeks = Math.floor(totalDays / 7);
-  if (room.longTermWeeks && room.longTermDiscount && totalWeeks >= room.longTermWeeks) {
-    discountType = 'LONG_TERM_DISCOUNT';
-    discountAmount = Math.round(subtotal * (room.longTermDiscount / 100));
-    return { discountAmount, discountType };
-  }
+  // 2. 빠른 입주 할인 (고정 금액) - 먼저 적용
+  // 조건: 체크인 날짜가 오늘로부터 quickMoveIn일 이내
+  if (room.quickMoveIn && room.quickMoveInDiscount) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const checkIn = new Date(checkInDate);
+    checkIn.setHours(0, 0, 0, 0);
 
-  // 3. 빠른 입주 할인
-  if (room.quickMoveInDiscount && room.quickMoveIn) {
-    const now = new Date();
-    const moveInDate = new Date(room.quickMoveIn);
-    if (moveInDate >= now) {
-      discountType = 'QUICK_MOVE_IN';
-      discountAmount = Math.round(subtotal * (room.quickMoveInDiscount / 100));
-      return { discountAmount, discountType };
+    const daysUntilCheckIn = Math.ceil((checkIn - today) / (1000 * 60 * 60 * 24));
+
+    if (daysUntilCheckIn >= 0 && daysUntilCheckIn <= room.quickMoveIn) {
+      // quickMoveInDiscount는 고정 금액 (원)
+      quickMoveInDiscount = room.quickMoveInDiscount;
     }
   }
 
-  return { discountAmount: 0, discountType: 'NONE' };
+  // 3. 장기계약 할인 (%) - 빠른 입주 할인 적용 후 계산
+  // 조건: 선택 기간이 longTermWeeks주 이상
+  const totalWeeks = Math.floor(totalDays / 7);
+  if (room.longTermWeeks && room.longTermDiscount && totalWeeks >= room.longTermWeeks) {
+    // 빠른 입주 할인 적용 후 남은 임대료에 장기계약 할인율 적용
+    const adjustedRent = baseRent - quickMoveInDiscount;
+    longTermDiscount = Math.floor(adjustedRent * (room.longTermDiscount / 100));
+  }
+
+  // 총 할인액 (두 할인 모두 적용 가능)
+  const totalDiscount = quickMoveInDiscount + longTermDiscount;
+
+  // discountType 결정 (DB에 저장할 대표 타입)
+  if (quickMoveInDiscount > 0 && longTermDiscount > 0) {
+    // 둘 다 적용된 경우 금액이 더 큰 것을 대표 타입으로
+    discountType = longTermDiscount >= quickMoveInDiscount
+      ? 'LONG_TERM_DISCOUNT'
+      : 'QUICK_MOVE_IN';
+  } else if (longTermDiscount > 0) {
+    discountType = 'LONG_TERM_DISCOUNT';
+  } else if (quickMoveInDiscount > 0) {
+    discountType = 'QUICK_MOVE_IN';
+  }
+
+  return {
+    discountAmount: totalDiscount,
+    discountType,
+    quickMoveInDiscount,
+    longTermDiscount
+  };
 }
 
 /**
  * 렌탈 아이템 재고 검증
  * @param {number} roomId - 방 ID
- * @param {Object} rentalItems - 렌탈 아이템 정보
+ * @param {Array} rentalItems - 렌탈 아이템 배열 [{ itemId, quantity }]
  * @param {Date} checkInDate - 체크인 날짜
  * @param {Date} checkOutDate - 체크아웃 날짜
  * @param {Transaction} transaction - Sequelize 트랜잭션
  * @returns {Promise<Object>} { available, unavailableItems }
  */
 async function validateRentalItemsStock(roomId, rentalItems, checkInDate, checkOutDate, transaction) {
-  if (!rentalItems || Object.keys(rentalItems).length === 0) {
+  // 배열 형식 체크
+  if (!rentalItems || !Array.isArray(rentalItems) || rentalItems.length === 0) {
     return { available: true, unavailableItems: [] };
   }
 
-  const itemsToCheck = [];
   const unavailableItems = [];
 
-  // 체크할 아이템 목록 구성
-  if (rentalItems.hairDryerId) {
-    itemsToCheck.push({ id: rentalItems.hairDryerId, quantity: 1, name: '헤어드라이어' });
-  }
-  if (rentalItems.beddingSetId && rentalItems.beddingSetQuantity) {
-    itemsToCheck.push({
-      id: rentalItems.beddingSetId,
-      quantity: rentalItems.beddingSetQuantity,
-      name: '침구 세트'
-    });
-  }
-  if (rentalItems.amenityKitId && rentalItems.amenityKitQuantity) {
-    itemsToCheck.push({
-      id: rentalItems.amenityKitId,
-      quantity: rentalItems.amenityKitQuantity,
-      name: '어메니티 키트'
-    });
-  }
-  if (rentalItems.towelSetId && rentalItems.towelSetQuantity) {
-    itemsToCheck.push({
-      id: rentalItems.towelSetId,
-      quantity: rentalItems.towelSetQuantity,
-      name: '수건 세트'
-    });
-  }
-
   // 각 아이템의 재고 확인
-  for (const item of itemsToCheck) {
-    const rentalItem = await RentalItem.findByPk(item.id, { transaction });
+  for (const item of rentalItems) {
+    const rentalItem = await RentalItem.findByPk(item.itemId, { transaction });
 
     if (!rentalItem) {
       unavailableItems.push({
-        itemId: item.id,
-        itemName: item.name,
+        itemId: item.itemId,
+        itemName: '알 수 없음',
         reason: '아이템을 찾을 수 없습니다'
       });
       continue;
@@ -154,7 +141,7 @@ async function validateRentalItemsStock(roomId, rentalItems, checkInDate, checkO
 
     if (!rentalItem.isActive) {
       unavailableItems.push({
-        itemId: item.id,
+        itemId: item.itemId,
         itemName: rentalItem.name,
         reason: '현재 대여 불가능한 아이템입니다'
       });
@@ -164,7 +151,7 @@ async function validateRentalItemsStock(roomId, rentalItems, checkInDate, checkO
     // 해당 기간에 이미 예약된 수량 조회
     const reservedQuantity = await RentalItemReservation.sum('quantity', {
       where: {
-        rentalItemId: item.id,
+        rentalItemId: item.itemId,
         status: {
           [Op.in]: ['RESERVED', 'CONFIRMED']
         },
@@ -197,7 +184,7 @@ async function validateRentalItemsStock(roomId, rentalItems, checkInDate, checkO
 
     if (availableQuantity < item.quantity) {
       unavailableItems.push({
-        itemId: item.id,
+        itemId: item.itemId,
         itemName: rentalItem.name,
         requestedQuantity: item.quantity,
         availableQuantity: Math.max(0, availableQuantity),
@@ -215,56 +202,32 @@ async function validateRentalItemsStock(roomId, rentalItems, checkInDate, checkO
 /**
  * 렌탈 아이템 예약 생성 (재고 차감)
  * @param {number} contractId - 계약 ID
- * @param {Object} rentalItems - 렌탈 아이템 정보
+ * @param {Array} rentalItems - 렌탈 아이템 배열 [{ itemId, quantity }]
  * @param {Date} checkInDate - 체크인 날짜
  * @param {Date} checkOutDate - 체크아웃 날짜
  * @param {Transaction} transaction - Sequelize 트랜잭션
  * @returns {Promise<Array>} 생성된 예약 목록
  */
 async function reserveRentalItems(contractId, rentalItems, checkInDate, checkOutDate, transaction) {
-  if (!rentalItems || Object.keys(rentalItems).length === 0) {
+  // 배열 형식 체크
+  if (!rentalItems || !Array.isArray(rentalItems) || rentalItems.length === 0) {
     return [];
-  }
-
-  const itemsToReserve = [];
-
-  // 예약할 아이템 목록 구성
-  if (rentalItems.hairDryerId) {
-    itemsToReserve.push({ id: rentalItems.hairDryerId, quantity: 1 });
-  }
-  if (rentalItems.beddingSetId && rentalItems.beddingSetQuantity) {
-    itemsToReserve.push({
-      id: rentalItems.beddingSetId,
-      quantity: rentalItems.beddingSetQuantity
-    });
-  }
-  if (rentalItems.amenityKitId && rentalItems.amenityKitQuantity) {
-    itemsToReserve.push({
-      id: rentalItems.amenityKitId,
-      quantity: rentalItems.amenityKitQuantity
-    });
-  }
-  if (rentalItems.towelSetId && rentalItems.towelSetQuantity) {
-    itemsToReserve.push({
-      id: rentalItems.towelSetId,
-      quantity: rentalItems.towelSetQuantity
-    });
   }
 
   const reservations = [];
 
   // 각 아이템의 예약 생성
-  for (const item of itemsToReserve) {
-    const rentalItem = await RentalItem.findByPk(item.id, { transaction });
+  for (const item of rentalItems) {
+    const rentalItem = await RentalItem.findByPk(item.itemId, { transaction });
 
     if (!rentalItem) {
-      throw new Error(`렌탈 아이템을 찾을 수 없습니다. (ID: ${item.id})`);
+      throw new Error(`렌탈 아이템을 찾을 수 없습니다. (ID: ${item.itemId})`);
     }
 
     // 예약 레코드 생성
     const reservation = await RentalItemReservation.create({
       contractId,
-      rentalItemId: item.id,
+      rentalItemId: item.itemId,
       quantity: item.quantity,
       pricePerItem: rentalItem.price,
       totalPrice: parseFloat(rentalItem.price) * item.quantity,

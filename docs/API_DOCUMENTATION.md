@@ -1821,6 +1821,37 @@ Authorization: Bearer {access_token}
 
 모든 계약 관리 API는 JWT 인증이 필요합니다.
 
+## 계약 상태값 (Contract Status)
+
+| 상태값 | 설명 | 전이 가능 상태 |
+|--------|------|---------------|
+| `PENDING_APPROVAL` | 승인 대기 (게스트가 요청) | APPROVED, REJECTED, CANCELLED_BY_GUEST, APPROVAL_EXPIRED |
+| `APPROVED` | 승인됨 (결제 대기) | PAYMENT_COMPLETED, CANCELLED_BY_GUEST, CANCELLED_BY_HOST, CANCELLED_BY_ADMIN_*, PAYMENT_EXPIRED |
+| `REJECTED` | 거절됨 (호스트가 거절) | - (최종 상태) |
+| `PAYMENT_COMPLETED` | 결제 완료 | IN_PROGRESS, CANCELLED_BY_GUEST, CANCELLED_BY_HOST, CANCELLED_BY_ADMIN_* |
+| `IN_PROGRESS` | 계약 진행중 (체크인 완료) | COMPLETED, CANCELLED_BY_GUEST, CANCELLED_BY_HOST, CANCELLED_BY_ADMIN_* |
+| `COMPLETED` | 계약 완료 (체크아웃 완료) | - (최종 상태) |
+| `CANCELLED_BY_GUEST` | 게스트 취소 | REFUNDED |
+| `CANCELLED_BY_HOST` | 호스트 취소 | REFUNDED |
+| `CANCELLED_BY_ADMIN_WITH_REFUND` | 관리자 취소 (환불 O) | REFUNDED |
+| `CANCELLED_BY_ADMIN_NO_REFUND` | 관리자 취소 (환불 X) | - (최종 상태) |
+| `REFUNDED` | 환불 완료 | - (최종 상태) |
+| `APPROVAL_EXPIRED` | 미승인 만료 | - (최종 상태) |
+| `PAYMENT_EXPIRED` | 미결제 만료 | - (최종 상태) |
+
+## 취소 유형 (Cancellation Type)
+
+취소된 계약에 대해 추가 정보를 제공합니다.
+
+| 취소 유형 | 설명 |
+|-----------|------|
+| `BEFORE_PAYMENT` | 결제 전 취소 (환불 대상 아님) |
+| `AFTER_PAYMENT` | 결제 후 취소 (체크인 전, 환불 정책 적용) |
+| `DURING_STAY` | 입실 중 취소 (조기 퇴실, 부분 환불 가능) |
+| `AFTER_COMPLETION` | 완료 후 취소 (분쟁 등 특수 케이스) |
+
+---
+
 ## 계약 요청 생성
 **POST** `/api/contracts/request`
 
@@ -1885,8 +1916,8 @@ Authorization: Bearer {access_token}
   "discountAmount": 50000,
   "subtotal": 1280000,
   "totalUsageFee": 1258000,
-  "deposit": 330000,
-  "finalTotalAmount": 1588000,
+  "deposit": 300000,
+  "finalTotalAmount": 1558000,
   "guestMessage": "오후 3시쯤 입주 예정입니다.",
   "paymentMethod": "CREDIT_CARD",
   "termsAgreed": {
@@ -1939,7 +1970,7 @@ Authorization: Bearer {access_token}
 ## 게스트 계약 목록 조회
 **GET** `/api/contracts/guest?status=PENDING_APPROVAL`
 
-게스트가 요청한 계약 목록을 조회합니다.
+게스트가 요청한 계약 목록을 조회합니다. **리스트에서는 최종 금액만 표시**되며, 상세 정보는 상세 페이지에서 확인할 수 있습니다.
 
 ### 인증
 **필수** - Authorization 헤더에 Access Token 포함
@@ -1957,26 +1988,46 @@ Authorization: Bearer {access_token}
     "contracts": [
       {
         "id": 1,
-        "roomId": 123,
-        "roomName": "홍대 넓은 원룸",
-        "checkInDate": "2025-12-18T06:00:00.000Z",
-        "checkOutDate": "2026-01-18T02:00:00.000Z",
-        "totalDays": 31,
-        "finalTotalAmount": 1588000,
+        "orderId": "2501270001",
         "status": "PENDING_APPROVAL",
-        "createdAt": "2025-01-11T10:00:00.000Z"
+        "statusLabel": "승인 대기",
+        "checkInDate": "2025-12-18T15:00:00+09:00",
+        "checkOutDate": "2026-01-18T11:00:00+09:00",
+        "totalDays": 31,
+        "finalTotalAmount": 1558000,
+        "room": {
+          "id": 123,
+          "roomName": "강남역 도보 3분 신축 원룸",
+          "address": "서울 강남구 역삼동",
+          "area": 33.0,
+          "buildingType": "ONEROOM",
+          "thumbnailUrl": "/uploads/rooms/room_123_1.jpg"
+        },
+        "host": {
+          "id": 456,
+          "name": "김호스트",
+          "phoneNumber": "010-1234-5678"
+        },
+        "createdAt": "2025-01-27T10:00:00+09:00"
       }
     ]
-  }
+  },
+  "message": "계약 목록 조회 성공"
 }
 ```
+
+**💡 주요 변경사항** (v2.1.0):
+- 리스트에서 금액 세부 내역 제거 (간소화)
+- `finalTotalAmount`만 표시 (최종 결제 금액)
+- 금액 상세 정보는 상세 페이지(`GET /api/contracts/:contractId`)에서 확인
+- 응답 크기 약 40% 감소로 로딩 속도 향상
 
 ---
 
 ## 호스트 계약 목록 조회
 **GET** `/api/contracts/host?status=PENDING_APPROVAL`
 
-호스트가 받은 계약 요청 목록을 조회합니다.
+호스트가 받은 계약 요청 목록을 조회합니다. **수익 관리를 위해 금액 상세 정보를 모두 제공**합니다.
 
 ### 인증
 **필수** - Authorization 헤더에 Access Token 포함
@@ -1994,21 +2045,56 @@ Authorization: Bearer {access_token}
     "contracts": [
       {
         "id": 1,
-        "roomId": 123,
-        "roomName": "홍대 넓은 원룸",
-        "guestName": "홍길동",
-        "checkInDate": "2025-12-18T06:00:00.000Z",
-        "checkOutDate": "2026-01-18T02:00:00.000Z",
-        "totalDays": 31,
-        "finalTotalAmount": 1588000,
+        "orderId": "2501270001",
         "status": "PENDING_APPROVAL",
+        "statusLabel": "승인 대기",
+        "checkInDate": "2025-12-18T15:00:00+09:00",
+        "checkOutDate": "2026-01-18T11:00:00+09:00",
+        "totalDays": 31,
+        "totalWeeks": 4,
+        "rentalFee": 1000000,
+        "maintenanceFee": 200000,
+        "cleaningFee": 50000,
+        "rentalItemsFee": 30000,
+        "platformFee": 78000,
+        "discountAmount": 50000,
+        "discountType": "LONG_TERM_DISCOUNT",
+        "discountCode": null,
+        "subtotal": 1280000,
+        "totalUsageFee": 1258000,
+        "deposit": 300000,
+        "finalTotalAmount": 1558000,
+        "hostEarnings": 1180000,
+        "rentalItems": {
+          "airConditioner": { "quantity": 1, "dailyRate": 3000 }
+        },
         "guestMessage": "오후 3시쯤 입주 예정입니다.",
-        "createdAt": "2025-01-11T10:00:00.000Z"
+        "room": {
+          "id": 123,
+          "roomName": "강남역 도보 3분 신축 원룸",
+          "address": "서울 강남구 역삼동",
+          "area": 33.0,
+          "buildingType": "ONEROOM",
+          "thumbnailUrl": "/uploads/rooms/room_123_1.jpg"
+        },
+        "guest": {
+          "id": 789,
+          "name": "이게스트",
+          "phoneNumber": "010-9876-5432",
+          "email": "guest@example.com"
+        },
+        "createdAt": "2025-01-27T10:00:00+09:00"
       }
     ]
-  }
+  },
+  "message": "계약 요청 목록 조회 성공"
 }
 ```
+
+**💡 주요 변경사항** (v2.1.0):
+- `hostEarnings` 필드 추가: 호스트 실수령액 (totalUsageFee - platformFee)
+- 모든 금액 정보 유지 (수익 관리용)
+- 게스트 정보 상세 제공 (이메일 포함)
 
 ---
 
@@ -2043,11 +2129,52 @@ Authorization: Bearer {access_token}
     "rentalItemsFee": 30000,
     "platformFee": 78000,
     "discountAmount": 50000,
-    "deposit": 330000,
-    "finalTotalAmount": 1588000,
-    "status": "PENDING_APPROVAL",
+    "deposit": 300000,
+    "finalTotalAmount": 1558000,
+    "status": "APPROVED",
     "guestMessage": "오후 3시쯤 입주 예정입니다.",
     "hostMessage": null,
+    "rentalItems": {
+      "hair_dryer": { "itemId": 1, "quantity": 1, "price": 5000 }
+    },
+    "recommendedItems": {
+      "items": [
+        {
+          "itemId": 1,
+          "itemType": "hair_dryer",
+          "name": "프리미엄 헤어드라이어",
+          "quantity": 1,
+          "price": 5000
+        },
+        {
+          "itemId": 3,
+          "itemType": "bedding_set",
+          "name": "고급 침구 세트",
+          "quantity": 2,
+          "price": 15000
+        }
+      ],
+      "recommendedBy": 5,
+      "recommendedAt": "2025-01-27T10:30:00Z"
+    },
+    "refundPolicyType": "moderate",
+    "refundPolicySnapshot": {
+      "policyType": "moderate",
+      "displayName": "보통",
+      "description": "체크인 7일 전까지 전액 환불, 이후 50% 환불",
+      "specialRules": {
+        "alwaysRefund": {
+          "cleaningFee": true,
+          "maintenanceFee": false
+        }
+      },
+      "rules": [
+        { "daysBeforeMin": 7, "daysBeforeMax": null, "refundRate": 100, "isSameDayCancellation": false, "description": "7일 이상 전" },
+        { "daysBeforeMin": 3, "daysBeforeMax": 6, "refundRate": 50, "isSameDayCancellation": false, "description": "3~6일 전" },
+        { "daysBeforeMin": 0, "daysBeforeMax": 2, "refundRate": 0, "isSameDayCancellation": false, "description": "2일 이내" }
+      ],
+      "capturedAt": "2025-01-11T10:00:00.000Z"
+    },
     "room": {
       "roomName": "홍대 넓은 원룸",
       "address": "서울특별시 마포구 서교동"
@@ -2056,6 +2183,26 @@ Authorization: Bearer {access_token}
   }
 }
 ```
+
+### 환불정책 스냅샷 필드 설명
+
+계약 생성 시점의 환불정책을 보존하여, 추후 정책 변경과 관계없이 계약 당시의 정책을 적용합니다.
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| refundPolicyType | string | 환불정책 타입 (flexible, moderate, strict) |
+| refundPolicySnapshot | object | 환불정책 상세 스냅샷 |
+| refundPolicySnapshot.policyType | string | 정책 타입 |
+| refundPolicySnapshot.displayName | string | 표시명 (약하게, 보통, 엄격하게) |
+| refundPolicySnapshot.description | string | 정책 설명 |
+| refundPolicySnapshot.specialRules | object | 특별 규칙 (청소비/관리비 환불 여부) |
+| refundPolicySnapshot.rules | array | 환불율 규칙 배열 |
+| refundPolicySnapshot.rules[].daysBeforeMin | number | 최소 일수 (N일 이전) |
+| refundPolicySnapshot.rules[].daysBeforeMax | number\|null | 최대 일수 (null이면 상한 없음) |
+| refundPolicySnapshot.rules[].refundRate | number | 환불율 (0-100%) |
+| refundPolicySnapshot.rules[].isSameDayCancellation | boolean | 계약 당일 취소 규칙 여부 |
+| refundPolicySnapshot.rules[].description | string | 규칙 설명 |
+| refundPolicySnapshot.capturedAt | string | 스냅샷 캡처 시점 (ISO 8601) |
 
 ### Error Responses
 
@@ -2086,7 +2233,7 @@ Authorization: Bearer {access_token}
 ## 계약 승인 (호스트)
 **PATCH** `/api/contracts/:contractId/approve`
 
-호스트가 게스트의 계약 요청을 승인합니다. 승인 시 자동으로 채팅방이 생성됩니다.
+호스트가 게스트의 계약 요청을 승인합니다. 승인 시 자동으로 채팅방이 생성되며, 선택적으로 권장 렌탈 아이템을 지정할 수 있습니다.
 
 ### 인증
 **필수** - Authorization 헤더에 Access Token 포함 (호스트만)
@@ -2096,6 +2243,32 @@ Authorization: Bearer {access_token}
 |---------|------|------|------|
 | contractId | number | O | 계약 ID |
 
+### Request Body (선택사항)
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| recommendedItems | object | X | 권장 렌탈 아이템 정보 |
+| recommendedItems.items | array | X | 권장 아이템 목록 |
+| recommendedItems.items[].itemId | number | O | 렌탈 아이템 ID |
+| recommendedItems.items[].quantity | number | X | 수량 (기본값: 1) |
+
+### Request Example (권장 아이템 포함)
+```json
+{
+  "recommendedItems": {
+    "items": [
+      {
+        "itemId": 1,
+        "quantity": 1
+      },
+      {
+        "itemId": 3,
+        "quantity": 2
+      }
+    ]
+  }
+}
+```
+
 ### Success Response (200)
 ```json
 {
@@ -2104,7 +2277,8 @@ Authorization: Bearer {access_token}
   "data": {
     "contractId": 1,
     "status": "APPROVED",
-    "chatRoomId": 5
+    "statusLabel": "승인됨",
+    "approvedAt": "2025-01-27T10:30:00Z"
   }
 }
 ```
@@ -2166,7 +2340,7 @@ Authorization: Bearer {access_token}
 ## 계약 요청 취소 (게스트)
 **PATCH** `/api/contracts/:contractId/cancel`
 
-게스트가 승인 대기 중인 계약 요청을 취소합니다.
+게스트가 계약 요청을 취소합니다. 결제 전/후에 따라 취소 유형이 달라집니다.
 
 ### 인증
 **필수** - Authorization 헤더에 Access Token 포함 (게스트만)
@@ -2195,7 +2369,45 @@ Authorization: Bearer {access_token}
   "message": "계약 요청이 취소되었습니다.",
   "data": {
     "contractId": 1,
-    "status": "CANCELLED"
+    "status": "CANCELLED_BY_GUEST",
+    "cancellationType": "BEFORE_PAYMENT",
+    "cancelledAt": "2025-01-26T10:00:00.000Z"
+  }
+}
+```
+
+### 취소 시나리오별 응답
+
+#### 결제 전 취소 (PENDING_APPROVAL 또는 APPROVED 상태)
+```json
+{
+  "success": true,
+  "message": "계약 요청이 취소되었습니다.",
+  "data": {
+    "contractId": 1,
+    "status": "CANCELLED_BY_GUEST",
+    "cancellationType": "BEFORE_PAYMENT",
+    "cancelledAt": "2025-01-26T10:00:00.000Z"
+  }
+}
+```
+
+#### 결제 후 취소 (PAYMENT_COMPLETED 상태)
+```json
+{
+  "success": true,
+  "message": "계약이 취소되었습니다. 환불 절차가 진행됩니다.",
+  "data": {
+    "contractId": 1,
+    "status": "CANCELLED_BY_GUEST",
+    "cancellationType": "AFTER_PAYMENT",
+    "cancelledAt": "2025-01-26T10:00:00.000Z",
+    "refund": {
+      "refundId": 123,
+      "estimatedRefundAmount": 350000,
+      "penaltyAmount": 150000,
+      "refundStatus": "REQUESTED"
+    }
   }
 }
 ```
@@ -2208,7 +2420,18 @@ Authorization: Bearer {access_token}
   "success": false,
   "error": {
     "code": 4203,
-    "message": "승인 대기 중인 계약만 취소할 수 있습니다."
+    "message": "해당 상태에서는 취소할 수 없습니다."
+  }
+}
+```
+
+#### 이미 취소된 계약 (400)
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4204,
+    "message": "이미 취소된 계약입니다."
   }
 }
 ```

@@ -21,6 +21,13 @@ const Contract = sequelize.define('Contract', {
     primaryKey: true,
     autoIncrement: true
   },
+  orderId: {
+    type: DataTypes.STRING(11),
+    allowNull: false,
+    unique: true,
+    field: 'order_id',
+    comment: '계약 주문번호 (yymmdd + 5자리 숫자)'
+  },
   roomId: {
     type: DataTypes.INTEGER,
     allowNull: false,
@@ -201,6 +208,21 @@ const Contract = sequelize.define('Contract', {
     }
   },
 
+  // 호스트 권장 렌탈 아이템 (JSON 저장)
+  recommendedItems: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    field: 'recommended_items',
+    comment: '호스트가 권장하는 렌탈 아이템 목록 (JSON)',
+    get() {
+      const rawValue = this.getDataValue('recommendedItems');
+      return rawValue ? JSON.parse(rawValue) : null;
+    },
+    set(value) {
+      this.setDataValue('recommendedItems', value ? JSON.stringify(value) : null);
+    }
+  },
+
   // 결제 정보
   paymentMethod: {
     type: DataTypes.ENUM('CREDIT_CARD', 'BANK_TRANSFER', 'SIMPLE_PAY'),
@@ -285,24 +307,66 @@ const Contract = sequelize.define('Contract', {
     }
   },
 
+  // 환불정책 스냅샷 (계약 시점의 정책 보존)
+  refundPolicyType: {
+    type: DataTypes.STRING(50),
+    allowNull: true,
+    field: 'refund_policy_type',
+    comment: '계약 시점의 환불정책 타입 (약하게, 보통, 엄격하게)'
+  },
+  refundPolicySnapshot: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    field: 'refund_policy_snapshot',
+    comment: '계약 시점의 환불정책 상세 규칙 (JSON)',
+    get() {
+      const rawValue = this.getDataValue('refundPolicySnapshot');
+      return rawValue ? JSON.parse(rawValue) : null;
+    },
+    set(value) {
+      this.setDataValue('refundPolicySnapshot', value ? JSON.stringify(value) : null);
+    }
+  },
+
   // 계약 상태
   status: {
     type: DataTypes.ENUM(
-      'PENDING_APPROVAL',    // 승인 대기
-      'APPROVED',            // 승인됨 (결제 대기)
-      'REJECTED',            // 거절됨
-      'PAYMENT_COMPLETED',   // 결제 완료
-      'IN_PROGRESS',         // 계약 진행중 (체크인 완료)
-      'COMPLETED',           // 계약 완료 (체크아웃 완료)
-      'CANCELLED_BY_GUEST',  // 게스트 취소
-      'CANCELLED_BY_HOST',   // 호스트 취소
-      'REFUNDED',            // 환불 완료
-      'APPROVAL_EXPIRED',    // 미승인 만료
-      'PAYMENT_EXPIRED'      // 미결제 만료
+      'PENDING_APPROVAL',              // 승인 대기
+      'APPROVED',                      // 승인됨 (결제 대기)
+      'REJECTED',                      // 거절됨
+      'PAYMENT_COMPLETED',             // 결제 완료
+      'IN_PROGRESS',                   // 계약 진행중 (체크인 완료)
+      'COMPLETED',                     // 계약 완료 (체크아웃 완료)
+      'CANCELLED_BY_GUEST',            // 게스트 취소
+      'CANCELLED_BY_HOST',             // 호스트 취소
+      'CANCELLED_BY_ADMIN_WITH_REFUND', // 관리자 취소 (환불 O)
+      'CANCELLED_BY_ADMIN_NO_REFUND',   // 관리자 취소 (환불 X)
+      'REFUNDED',                      // 환불 완료
+      'APPROVAL_EXPIRED',              // 미승인 만료
+      'PAYMENT_EXPIRED'                // 미결제 만료
     ),
     allowNull: false,
     defaultValue: 'PENDING_APPROVAL',
     comment: '계약 상태'
+  },
+
+  // 취소 상세 정보
+  cancellationType: {
+    type: DataTypes.ENUM(
+      'BEFORE_PAYMENT',    // 결제 전 취소
+      'AFTER_PAYMENT',     // 결제 후 취소 (체크인 전)
+      'DURING_STAY',       // 입실 중 취소
+      'AFTER_COMPLETION'   // 완료 후 취소 (분쟁 등)
+    ),
+    allowNull: true,
+    field: 'cancellation_type',
+    comment: '취소 유형 (취소된 경우에만 값 존재)'
+  },
+  cancelledByAdminId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    field: 'cancelled_by_admin_id',
+    comment: '취소한 관리자 ID (관리자 취소인 경우)'
   },
 
   // 계약 진행 시점 기록
@@ -392,6 +456,18 @@ const Contract = sequelize.define('Contract', {
       fields: ['status', 'check_out_date', 'check_in_date'],
       name: 'idx_status_dates',
       comment: '지도 검색 시 예약 가능 여부 조회 최적화 (getUnavailableRoomIds)'
+    },
+    {
+      fields: ['cancellation_type'],
+      name: 'idx_cancellation_type'
+    },
+    {
+      fields: ['cancelled_by_admin_id'],
+      name: 'idx_cancelled_by_admin'
+    },
+    {
+      fields: ['refund_policy_type'],
+      name: 'idx_refund_policy_type'
     }
   ]
 });
@@ -408,9 +484,30 @@ Contract.STATUS_LABELS = {
   COMPLETED: '계약 완료',
   CANCELLED_BY_GUEST: '게스트 취소',
   CANCELLED_BY_HOST: '호스트 취소',
+  CANCELLED_BY_ADMIN_WITH_REFUND: '관리자 취소 (환불)',
+  CANCELLED_BY_ADMIN_NO_REFUND: '관리자 취소 (환불 없음)',
   REFUNDED: '환불 완료',
   APPROVAL_EXPIRED: '미승인 만료',
   PAYMENT_EXPIRED: '미결제 만료'
+};
+
+/**
+ * 취소 유형 한글명 매핑
+ */
+Contract.CANCELLATION_TYPE_LABELS = {
+  BEFORE_PAYMENT: '결제 전 취소',
+  AFTER_PAYMENT: '결제 후 취소',
+  DURING_STAY: '입실 중 취소',
+  AFTER_COMPLETION: '완료 후 취소'
+};
+
+/**
+ * 환불정책 타입 한글명 매핑
+ */
+Contract.REFUND_POLICY_TYPE_LABELS = {
+  flexible: '약하게 (유연)',
+  moderate: '보통',
+  strict: '엄격하게'
 };
 
 /**
