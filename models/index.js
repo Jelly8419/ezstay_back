@@ -13,6 +13,7 @@ const RoomFreeService = EzService;
 const { UserBankAccount } = require('./UserBankAccount');
 const RentalItem = require('./RentalItem');
 const Contract = require('./Contract');
+const ContractSequenceModel = require('./ContractSequence');
 const RentalItemReservation = require('./RentalItemReservation');
 const ChatRoom = require('./ChatRoom');
 const NoticeModel = require('./Notice');
@@ -22,6 +23,7 @@ const InquiryModel = require('./Inquiry');
 const RefundPolicyType = require('./RefundPolicyType');
 const RefundPolicyRule = require('./RefundPolicyRule');
 const Refund = require('./Refund');
+const ContractStatusLog = require('./ContractStatusLog');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -56,6 +58,9 @@ const Notice = NoticeModel(sequelize);
 const FAQCategory = FAQCategoryModel(sequelize);
 const FAQ = FAQModel(sequelize);
 const Inquiry = InquiryModel(sequelize);
+
+// 계약 관련 모델 초기화
+const ContractSequence = ContractSequenceModel(sequelize);
 
 // 방 관리 모델 초기화
 const RoomMemoModel = require('./RoomMemo');
@@ -369,6 +374,26 @@ Refund.belongsTo(Contract, {
   as: 'contract'
 });
 
+// ContractStatusLog 관계 설정
+Contract.hasMany(ContractStatusLog, {
+  foreignKey: 'contractId',
+  as: 'statusLogs'
+});
+ContractStatusLog.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract'
+});
+
+// Contract와 Admin 관계 설정 (관리자 취소 시)
+Contract.belongsTo(Admin, {
+  foreignKey: 'cancelledByAdminId',
+  as: 'cancelledByAdmin'
+});
+Admin.hasMany(Contract, {
+  foreignKey: 'cancelledByAdminId',
+  as: 'cancelledContracts'
+});
+
 // Refund와 RefundPolicyType 관계 설정
 Refund.belongsTo(RefundPolicyType, {
   foreignKey: 'policyTypeUsed',
@@ -398,6 +423,7 @@ module.exports = {
   UserBankAccount,
   RentalItem,
   Contract,
+  ContractSequence,
   RentalItemReservation,
   ChatRoom,
   Notice,
@@ -409,5 +435,6 @@ module.exports = {
   RoomStatusHistory: RoomStatusHistoryInstance,
   RefundPolicyType,
   RefundPolicyRule,
-  Refund
+  Refund,
+  ContractStatusLog
 };

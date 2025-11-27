@@ -166,7 +166,8 @@ const chatRoutes = require('./routes/chatRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const supportRoutes = require('./routes/supportRoutes');
 const refundRoutes = require('./routes/refundRoutes');
-// const rentalItemRoutes = require('./routes/rentalItemRoutes'); // TODO: 관리자 프로젝트로 이동 예정
+const rentalItemRoutes = require('./routes/rentalItemRoutes');
+const { adminRouter: rentalItemAdminRoutes } = require('./routes/rentalItemRoutes');
 
 app.use('/api/rooms', roomRoutes);
 app.use('/api/auth', authRoutes);
@@ -178,7 +179,8 @@ app.use('/api/chats', chatRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/support', supportRoutes);
 app.use('/api', refundRoutes);
-// app.use('/api/admin/rental-items', rentalItemRoutes); // TODO: 관리자 프로젝트로 이동 예정
+app.use('/api/rental-items', rentalItemRoutes);  // 게스트용 공개 API
+app.use('/api/admin/rental-items', rentalItemAdminRoutes);  // 관리자용 API
 
 app.get('/', (req, res) => {
   res.json({ message: 'Rental API Server is running!' });

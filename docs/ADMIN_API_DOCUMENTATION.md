@@ -803,9 +803,17 @@ Authorization: Bearer {accessToken}
 - `COMPLETED`: 완료 (체크아웃 완료)
 - `CANCELLED_BY_GUEST`: 게스트 취소
 - `CANCELLED_BY_HOST`: 호스트 취소
+- `CANCELLED_BY_ADMIN_WITH_REFUND`: 관리자 취소 (환불 O)
+- `CANCELLED_BY_ADMIN_NO_REFUND`: 관리자 취소 (환불 X)
 - `REFUNDED`: 환불 완료
 - `APPROVAL_EXPIRED`: 미승인 만료
 - `PAYMENT_EXPIRED`: 미결제 만료
+
+**취소 유형 (cancellationType)**:
+- `BEFORE_PAYMENT`: 결제 전 취소
+- `AFTER_PAYMENT`: 결제 후 취소 (체크인 전)
+- `DURING_STAY`: 입실 중 취소
+- `AFTER_COMPLETION`: 완료 후 취소 (분쟁 등)
 
 **사용 예시**:
 ```http
@@ -962,6 +970,165 @@ GET /api/admin/reservations?page=1&limit=20&status=PAYMENT_COMPLETED
         }
       ]
     }
+  }
+}
+```
+
+---
+
+### 3. 관리자 계약 취소 (신규)
+
+**엔드포인트**: `POST /api/admin/reservations/:contractId/cancel`
+
+**권한**: super_admin, admin
+
+**설명**: 관리자가 계약을 강제 취소합니다. 환불 여부에 따라 상태가 다르게 설정됩니다.
+
+**URL 파라미터**:
+- `contractId` (number): 계약 ID
+
+**Request Body**:
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| reason | string | O | 취소 사유 |
+| withRefund | boolean | O | 환불 여부 (true: 환불, false: 환불 없음) |
+| refundAmount | number | X | 환불 금액 (withRefund가 true인 경우, 미입력 시 전액 환불) |
+| notifyParties | boolean | X | 당사자 알림 여부 (기본값: true) |
+
+**요청 예시**:
+```json
+{
+  "reason": "이용약관 위반으로 인한 강제 취소",
+  "withRefund": false,
+  "notifyParties": true
+}
+```
+
+**응답 예시 (환불 없는 취소)**:
+```json
+{
+  "success": true,
+  "message": "계약이 취소되었습니다.",
+  "data": {
+    "contractId": 123,
+    "status": "CANCELLED_BY_ADMIN_NO_REFUND",
+    "cancellationType": "DURING_STAY",
+    "cancelledAt": "2025-01-26T10:00:00.000Z",
+    "cancelledByAdminId": 1
+  }
+}
+```
+
+**응답 예시 (환불 포함 취소)**:
+```json
+{
+  "success": true,
+  "message": "계약이 취소되었습니다. 환불이 처리됩니다.",
+  "data": {
+    "contractId": 123,
+    "status": "CANCELLED_BY_ADMIN_WITH_REFUND",
+    "cancellationType": "AFTER_PAYMENT",
+    "cancelledAt": "2025-01-26T10:00:00.000Z",
+    "cancelledByAdminId": 1,
+    "refund": {
+      "refundId": 456,
+      "refundAmount": 500000,
+      "refundStatus": "APPROVED"
+    }
+  }
+}
+```
+
+**에러 응답**:
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4205,
+    "message": "이미 취소된 계약입니다."
+  }
+}
+```
+
+---
+
+### 4. 계약 상태 변경 이력 조회 (신규)
+
+**엔드포인트**: `GET /api/admin/reservations/:contractId/logs`
+
+**권한**: 모든 관리자
+
+**설명**: 계약의 모든 상태 변경 이력을 조회합니다.
+
+**URL 파라미터**:
+- `contractId` (number): 계약 ID
+
+**Query 파라미터**:
+| 파라미터 | 타입 | 필수 | 설명 |
+|---------|------|------|------|
+| limit | number | X | 조회 개수 (기본값: 전체) |
+| order | string | X | 정렬 순서 ('ASC' 또는 'DESC', 기본값: 'DESC') |
+
+**응답 예시**:
+```json
+{
+  "success": true,
+  "message": "상태 변경 이력 조회 성공",
+  "data": {
+    "contractId": 123,
+    "logs": [
+      {
+        "id": 5,
+        "fromStatus": "IN_PROGRESS",
+        "toStatus": "CANCELLED_BY_ADMIN_NO_REFUND",
+        "changedBy": "ADMIN",
+        "changedByUser": {
+          "id": 1,
+          "name": "시스템관리자",
+          "type": "admin"
+        },
+        "reason": "이용약관 위반으로 인한 강제 취소",
+        "metadata": {
+          "cancellationType": "DURING_STAY",
+          "refundEligible": false,
+          "violationType": "TERMS_VIOLATION"
+        },
+        "ipAddress": "192.168.1.100",
+        "createdAt": "2025-01-26T10:00:00.000Z"
+      },
+      {
+        "id": 4,
+        "fromStatus": "PAYMENT_COMPLETED",
+        "toStatus": "IN_PROGRESS",
+        "changedBy": "SYSTEM",
+        "changedByUser": null,
+        "reason": "체크인 자동 처리",
+        "metadata": {
+          "checkedInAt": "2025-01-20T15:00:00.000Z"
+        },
+        "ipAddress": null,
+        "createdAt": "2025-01-20T15:00:00.000Z"
+      },
+      {
+        "id": 3,
+        "fromStatus": "APPROVED",
+        "toStatus": "PAYMENT_COMPLETED",
+        "changedBy": "GUEST",
+        "changedByUser": {
+          "id": 45,
+          "name": "홍길동",
+          "type": "user"
+        },
+        "reason": "결제 완료",
+        "metadata": {
+          "paymentMethod": "CREDIT_CARD",
+          "paidAmount": 1630000
+        },
+        "ipAddress": "203.0.113.50",
+        "createdAt": "2025-01-15T14:00:00.000Z"
+      }
+    ],
+    "totalCount": 5
   }
 }
 ```
