@@ -22,6 +22,8 @@ router.post('/kakao', kakaoLogin);
 router.get('/kakao', async (req, res) => {
   const { code } = req.query;
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  console.log('🔍 [Kakao Callback] FRONTEND_URL:', process.env.FRONTEND_URL);
+  console.log('🔍 [Kakao Callback] frontendUrl:', frontendUrl);
 
   if (code) {
     try {
