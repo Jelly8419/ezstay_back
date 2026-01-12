@@ -26,6 +26,30 @@ const register = async (req, res) => {
     return error(res, { code: 4004, message: passwordValidation.message }, 400);
   }
 
+  // === 이메일 인증 확인 (신규) ===
+  const { EmailVerificationCode } = require('../models');
+  const verifiedRecord = await EmailVerificationCode.findOne({
+    where: {
+      email,
+      verified: true
+    },
+    order: [['verifiedAt', 'DESC']]
+  });
+
+  if (!verifiedRecord) {
+    return error(res, ErrorCodes.EMAIL_NOT_VERIFIED, 400);
+  }
+
+  // 인증 후 10분 이내에만 회원가입 가능 (선택사항)
+  const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+  if (verifiedRecord.verifiedAt < tenMinutesAgo) {
+    return error(res, {
+      code: 4014,
+      message: '인증 시간이 만료되었습니다. 다시 인증해주세요.'
+    }, 400);
+  }
+  // === 이메일 인증 확인 끝 ===
+
   const existingUser = await User.findOne({ where: { email } });
   if (existingUser) {
     return error(res, ErrorCodes.DUPLICATE_EMAIL, 400);
@@ -40,7 +64,9 @@ const register = async (req, res) => {
     const hashedPassword = await hashPassword(password);
     await LocalUser.create({
       userId: newUser.id,
-      password: hashedPassword
+      password: hashedPassword,
+      emailVerified: true, // ✅ 인증 완료 상태로 생성
+      emailVerificationToken: null
     }, { transaction });
 
     const { accessToken, refreshToken } = generateTokens({
@@ -249,13 +275,20 @@ const getProfile = async (req, res) => {
   try {
     const user = req.user;
 
+    // 계좌 등록 여부 확인
+    const bankAccount = await UserBankAccount.findOne({
+      where: { userId: user.id }
+    });
+
     return success(res, {
       user: {
         id: user.id,
         email: user.email,
         name: user.name,
         profileImageUrl: user.profileImageUrl,
-        provider: user.provider
+        userType: user.userType,
+        phoneVerified: user.phoneVerified || false,
+        hasBank: !!bankAccount
       }
     });
   } catch (err) {

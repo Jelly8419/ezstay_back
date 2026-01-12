@@ -2,6 +2,7 @@ const { Sequelize } = require('sequelize');
 const { User } = require('./User');
 const { LocalUser } = require('./LocalUser');
 const { SocialUser } = require('./SocialUser');
+const { EmailVerificationCode } = require('./EmailVerificationCode');
 const AdminModel = require('./Admin');
 const AdminActionLogModel = require('./AdminActionLog');
 const { Room } = require('./Room');
@@ -24,6 +25,8 @@ const RefundPolicyType = require('./RefundPolicyType');
 const RefundPolicyRule = require('./RefundPolicyRule');
 const Refund = require('./Refund');
 const ContractStatusLog = require('./ContractStatusLog');
+const PaymentModel = require('./Payment');
+const PaymentFailureLogModel = require('./PaymentFailureLog');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -62,6 +65,10 @@ const Inquiry = InquiryModel(sequelize);
 // 계약 관련 모델 초기화
 const ContractSequence = ContractSequenceModel(sequelize);
 
+// 결제 관련 모델 초기화
+const Payment = PaymentModel(sequelize);
+const PaymentFailureLog = PaymentFailureLogModel(sequelize);
+
 // 방 관리 모델 초기화
 const RoomMemoModel = require('./RoomMemo');
 const RoomPasswordHistoryModel = require('./RoomPasswordHistory');
@@ -91,11 +98,15 @@ SocialUser.belongsTo(User, {
 
 User.hasMany(Room, {
   foreignKey: 'hostId',
-  as: 'rooms'
+  as: 'rooms',
+  onDelete: 'NO ACTION', // 사용자 삭제 시 방 데이터 보존 (법적 요구사항)
+  onUpdate: 'CASCADE'
 });
 Room.belongsTo(User, {
   foreignKey: 'hostId',
-  as: 'host'
+  as: 'host',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
 });
 
 // Room 관계 설정
@@ -135,11 +146,15 @@ Room.hasOne(EzService, {
 
 User.hasMany(UserBankAccount, {
   foreignKey: 'userId',
-  as: 'bankAccounts'
+  as: 'bankAccounts',
+  onDelete: 'NO ACTION', // 계좌 정보 보존 (금융 거래 이력)
+  onUpdate: 'CASCADE'
 });
 UserBankAccount.belongsTo(User, {
   foreignKey: 'userId',
-  as: 'user'
+  as: 'user',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
 });
 
 // Contract 관계 설정
@@ -154,20 +169,28 @@ Room.hasMany(Contract, {
 
 Contract.belongsTo(User, {
   foreignKey: 'hostId',
-  as: 'host'
+  as: 'host',
+  onDelete: 'NO ACTION', // 계약 데이터 보존 (법적 요구사항)
+  onUpdate: 'CASCADE'
 });
 User.hasMany(Contract, {
   foreignKey: 'hostId',
-  as: 'hostedContracts'
+  as: 'hostedContracts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
 });
 
 Contract.belongsTo(User, {
   foreignKey: 'guestId',
-  as: 'guest'
+  as: 'guest',
+  onDelete: 'NO ACTION', // 계약 데이터 보존 (법적 요구사항)
+  onUpdate: 'CASCADE'
 });
 User.hasMany(Contract, {
   foreignKey: 'guestId',
-  as: 'guestContracts'
+  as: 'guestContracts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
 });
 
 // RentalItemReservation 관계 설정
@@ -201,12 +224,16 @@ Contract.hasOne(ChatRoom, {
 
 ChatRoom.belongsTo(User, {
   foreignKey: 'hostId',
-  as: 'host'
+  as: 'host',
+  onDelete: 'NO ACTION', // 채팅 이력 보존
+  onUpdate: 'CASCADE'
 });
 
 ChatRoom.belongsTo(User, {
   foreignKey: 'guestId',
-  as: 'guest'
+  as: 'guest',
+  onDelete: 'NO ACTION', // 채팅 이력 보존
+  onUpdate: 'CASCADE'
 });
 
 ChatRoom.belongsTo(Room, {
@@ -265,11 +292,15 @@ Admin.hasMany(FAQ, {
 // Inquiry 관계 설정
 Inquiry.belongsTo(User, {
   foreignKey: 'userId',
-  as: 'user'
+  as: 'user',
+  onDelete: 'NO ACTION', // 문의 이력 보존 (고객 서비스)
+  onUpdate: 'CASCADE'
 });
 User.hasMany(Inquiry, {
   foreignKey: 'userId',
-  as: 'inquiries'
+  as: 'inquiries',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
 });
 
 Inquiry.belongsTo(Admin, {
@@ -384,6 +415,26 @@ ContractStatusLog.belongsTo(Contract, {
   as: 'contract'
 });
 
+// Payment 관계 설정
+Contract.hasOne(Payment, {
+  foreignKey: 'contractId',
+  as: 'payment'
+});
+Payment.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract'
+});
+
+// PaymentFailureLog 관계 설정
+Contract.hasMany(PaymentFailureLog, {
+  foreignKey: 'contractId',
+  as: 'paymentFailureLogs'
+});
+PaymentFailureLog.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract'
+});
+
 // Contract와 Admin 관계 설정 (관리자 취소 시)
 Contract.belongsTo(Admin, {
   foreignKey: 'cancelledByAdminId',
@@ -413,6 +464,7 @@ module.exports = {
   User,
   LocalUser,
   SocialUser,
+  EmailVerificationCode,
   Admin,
   AdminActionLog,
   Room,
@@ -436,5 +488,7 @@ module.exports = {
   RefundPolicyType,
   RefundPolicyRule,
   Refund,
-  ContractStatusLog
+  ContractStatusLog,
+  Payment,
+  PaymentFailureLog
 };

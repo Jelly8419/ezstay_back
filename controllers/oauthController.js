@@ -80,28 +80,14 @@ const kakaoLogin = async (req, res) => {
         tokenExpiresAt: new Date(Date.now() + expires_in * 1000)
       }, { transaction });
     } else {
-      // 이메일로 기존 사용자 확인 (다른 방법으로 가입된 경우)
-      const existingUser = await User.findOne({
-        where: { email: email }
-      });
-
-      if (existingUser) {
-        await transaction.rollback();
-        return res.status(400).json({
-          success: false,
-          message: '이미 다른 방법으로 가입된 이메일입니다.'
-        });
-      }
-
-      // 새 사용자 생성
+      // 신규 사용자 - 자동 회원가입
       user = await User.create({
         email: email,
-        name: profile.nickname,
-        profileImageUrl: profile.profile_image_url || null,
+        name: kakao_account.name,
+        profileImageUrl: profile.profile_image_url,
         userType: 'social'
       }, { transaction });
 
-      // 소셜 사용자 정보 생성
       await SocialUser.create({
         userId: user.id,
         provider: 'kakao',
@@ -111,7 +97,7 @@ const kakaoLogin = async (req, res) => {
         refreshTokenProvider: refresh_token,
         tokenExpiresAt: new Date(Date.now() + expires_in * 1000),
         additionalData: {
-          nickname: profile.nickname,
+          name: kakao_account.name,
           profileImageUrl: profile.profile_image_url,
           thumbnailImageUrl: profile.thumbnail_image_url
         }
@@ -169,8 +155,6 @@ const kakaoLogin = async (req, res) => {
     });
   }
 };
-
-
 module.exports = {
   kakaoLogin
 };
