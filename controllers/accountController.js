@@ -202,6 +202,72 @@ const getUserAccount = async (req, res) => {
   }
 };
 
+// 계좌 정보 추가/수정 (게스트 → 호스트 전환용)
+const saveAccount = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { bank_code, account_num, account_holder_name } = req.body;
+
+    // 필수 필드 검증
+    if (!bank_code || !account_num || !account_holder_name) {
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    }
+
+    // 계좌번호 형식 정리 (하이픈 제거)
+    const cleanAccountNum = account_num.replace(/-/g, '');
+
+    // 은행 코드 확인
+    const bankCode = BANK_CODES[bank_code] || bank_code;
+    if (!bankCode) {
+      return error(res, { code: 4301, message: '지원하지 않는 은행입니다.' }, 400);
+    }
+
+    // 기존 계좌 확인
+    const existingAccount = await UserBankAccount.findOne({
+      where: { userId }
+    });
+
+    const accountData = {
+      userId,
+      bankName: bank_code,
+      accountNumber: cleanAccountNum,
+      accountHolder: account_holder_name,
+      isVerified: true,
+      verifiedAt: new Date(),
+      isPrimary: true
+    };
+
+    let account;
+    let message;
+
+    if (existingAccount) {
+      // 기존 계좌 수정
+      await existingAccount.update(accountData);
+      account = existingAccount;
+      message = '계좌 정보가 수정되었습니다.';
+    } else {
+      // 신규 계좌 추가
+      account = await UserBankAccount.create(accountData);
+      message = '계좌 정보가 등록되었습니다.';
+    }
+
+    return success(res, {
+      account: {
+        id: account.id,
+        bankName: account.bankName,
+        accountHolder: account.accountHolder,
+        isVerified: account.isVerified,
+        verifiedAt: account.verifiedAt,
+        isPrimary: account.isPrimary
+      }
+    }, message);
+
+  } catch (err) {
+    console.error('계좌 저장 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, process.env.NODE_ENV === 'development' ? err.message : undefined);
+  }
+};
+
 // 계좌 정보 삭제
 const deleteAccount = async (req, res) => {
   try {
@@ -215,7 +281,7 @@ const deleteAccount = async (req, res) => {
       return error(res, { code: 3005, message: '삭제할 계좌가 없습니다.' }, 404);
     }
 
-    return deleted(res, '계좌 정보가 삭제되었습니다.');
+    return success(res, null, '계좌 정보가 삭제되었습니다.');
 
   } catch (err) {
     console.error('계좌 삭제 오류:', err);
@@ -226,5 +292,6 @@ const deleteAccount = async (req, res) => {
 module.exports = {
   verifyAccount,
   getUserAccount,
+  saveAccount,
   deleteAccount
 };

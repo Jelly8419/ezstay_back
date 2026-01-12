@@ -30,6 +30,14 @@ const ErrorCodes = {
   DUPLICATE_EMAIL: { code: 4006, message: '이미 사용 중인 이메일입니다.' },
   INVALID_PHONE: { code: 4007, message: '유효하지 않은 전화번호입니다.' },
 
+  // 이메일 인증 관련 (40xx)
+  INVALID_CODE: { code: 4008, message: '인증코드가 일치하지 않습니다.' },
+  CODE_EXPIRED: { code: 4009, message: '인증코드가 만료되었습니다.' },
+  MAX_ATTEMPTS_EXCEEDED: { code: 4010, message: '인증 시도 횟수를 초과했습니다.' },
+  CODE_NOT_FOUND: { code: 4011, message: '인증코드를 찾을 수 없습니다.' },
+  EMAIL_NOT_VERIFIED: { code: 4012, message: '이메일 인증이 필요합니다.' },
+  EMAIL_SEND_FAILED: { code: 4013, message: '이메일 발송에 실패했습니다.' },
+
   // 파일 업로드 관련 (4xxx)
   NO_FILE_UPLOADED: { code: 4101, message: '파일을 업로드해주세요.' },
   INVALID_FILE_TYPE: { code: 4102, message: '지원하지 않는 파일 형식입니다.' },
@@ -53,6 +61,17 @@ const ErrorCodes = {
   ANSWER_ALREADY_EXISTS: { code: 4306, message: '이미 답변된 문의입니다.' },
   INVALID_STATUS: { code: 4307, message: '유효하지 않은 상태 값입니다.' },
   DUPLICATE_CATEGORY_NAME: { code: 4308, message: '이미 존재하는 카테고리 이름입니다.' },
+
+  // 결제 관련 (46xx)
+  CONTRACT_NOT_FOUND: { code: 3005, message: '계약을 찾을 수 없습니다.' },
+  CONTRACT_NOT_APPROVED: { code: 4601, message: '승인된 계약이 아닙니다.' },
+  PAYMENT_NOT_AVAILABLE: { code: 4602, message: '결제 가능한 상태가 아닙니다.' },
+  ORDER_ID_MISMATCH: { code: 4603, message: '주문번호가 일치하지 않습니다.' },
+  AMOUNT_MISMATCH: { code: 4604, message: '결제 금액이 일치하지 않습니다.' },
+  PAYMENT_CONFIRMATION_FAILED: { code: 4605, message: '결제 승인에 실패했습니다.' },
+  ALREADY_PAID: { code: 4606, message: '이미 결제된 계약입니다.' },
+  PAYMENT_EXPIRED: { code: 4607, message: '결제 가능 시간이 만료되었습니다.' },
+  PAYMENT_NOT_FOUND: { code: 4608, message: '결제 정보를 찾을 수 없습니다.' },
 
   // 서버 관련 (5xxx)
   INTERNAL_ERROR: { code: 5001, message: '서버 오류가 발생했습니다.' },
