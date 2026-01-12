@@ -54,7 +54,9 @@
       "Bash(if not exist c:studyezstay_backservices mkdir c:studyezstay_backservices)",
       "Bash(rm:*)",
       "Bash(timeout:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(if not exist docs mkdir docs)",
+      "Bash(mkdir:*)"
     ],
     "deny": [],
     "ask": []

@@ -12,6 +12,10 @@
   - [게스트 본인인증 정보 저장](#게스트-본인인증-정보-저장)
   - [호스트 본인인증 + 계좌정보 저장](#호스트-본인인증--계좌정보-저장)
   - [사용자 인증 상태 조회](#사용자-인증-상태-조회)
+  - [사용자 프로필 조회](#사용자-프로필-조회)
+  - [비밀번호 변경](#비밀번호-변경)
+  - [연락처 변경](#연락처-변경)
+  - [회원 탈퇴](#회원-탈퇴)
 - [계좌 관리 API](#계좌-관리-api)
   - [계좌 실명 확인](#계좌-실명-확인)
   - [사용자 계좌 정보 조회](#사용자-계좌-정보-조회)
@@ -721,6 +725,265 @@ Authorization: Bearer {access_token}
 | phoneVerified | boolean | 본인인증 완료 여부 |
 | hasBank | boolean | 계좌 등록 여부 |
 | userMode | string | 현재 사용자 모드 ("guest" 또는 "host") |
+
+---
+
+## 사용자 프로필 조회
+**GET** `/api/user/profile`
+
+현재 로그인한 사용자의 기본 프로필 정보를 조회합니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Success Response (200)
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "email": "user@example.com",
+    "name": "홍길동",
+    "phoneNumber": "010-1234-5678",
+    "createdAt": "2025-01-01T00:00:00.000Z"
+  }
+}
+```
+
+### Response 필드 설명
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| id | number | 사용자 ID |
+| email | string | 이메일 주소 |
+| name | string | 이름 |
+| phoneNumber | string | 전화번호 |
+| createdAt | string | 가입일시 (ISO 8601 형식) |
+
+### Error Responses
+
+#### 인증 오류 (401)
+```json
+{
+  "success": false,
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "인증이 필요합니다."
+  }
+}
+```
+
+#### 사용자 없음 (404)
+```json
+{
+  "success": false,
+  "error": {
+    "code": "USER_NOT_FOUND",
+    "message": "사용자를 찾을 수 없습니다."
+  }
+}
+```
+
+---
+
+## 비밀번호 변경
+**PATCH** `/api/user/password`
+
+현재 로그인한 사용자의 비밀번호를 변경합니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Request Body
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| currentPassword | string | O | 현재 비밀번호 |
+| newPassword | string | O | 새 비밀번호 (영문, 숫자, 특수문자 조합 6~15자) |
+
+### 비밀번호 요구사항
+- 영문 포함
+- 숫자 포함
+- 특수문자 포함
+- 6자 이상 15자 이하
+
+### Request Example
+```json
+{
+  "currentPassword": "OldPass123!",
+  "newPassword": "NewPass456!"
+}
+```
+
+### Success Response (200)
+```json
+{
+  "success": true,
+  "message": "비밀번호가 성공적으로 변경되었습니다.",
+  "data": null
+}
+```
+
+### Error Responses
+
+#### 필수 필드 누락 (400)
+```json
+{
+  "success": false,
+  "error": {
+    "code": "MISSING_REQUIRED_FIELDS",
+    "message": "필수 정보가 누락되었습니다."
+  }
+}
+```
+
+#### 비밀번호 강도 부족 (400)
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4004,
+    "message": "비밀번호는 영문, 숫자, 특수문자를 포함하여 6~15자로 입력해주세요."
+  }
+}
+```
+
+#### 이메일 회원이 아님 (400)
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4005,
+    "message": "이메일 회원이 아닙니다."
+  }
+}
+```
+
+#### 현재 비밀번호 불일치 (400)
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4006,
+    "message": "현재 비밀번호가 일치하지 않습니다."
+  }
+}
+```
+
+#### 새 비밀번호가 현재 비밀번호와 동일 (400)
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4007,
+    "message": "새 비밀번호는 현재 비밀번호와 달라야 합니다."
+  }
+}
+```
+
+---
+
+## 연락처 변경
+**PATCH** `/api/user/phone`
+
+본인인증 후 연락처를 변경합니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Request Body
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| phoneNumber | string | O | 변경할 전화번호 (본인인증 후 받은 번호) |
+
+### Request Example
+```json
+{
+  "phoneNumber": "010-9876-5432"
+}
+```
+
+### Success Response (200)
+```json
+{
+  "success": true,
+  "message": "연락처가 성공적으로 변경되었습니다.",
+  "data": {
+    "phoneNumber": "010-9876-5432"
+  }
+}
+```
+
+### Error Responses
+
+#### 필수 필드 누락 (400)
+```json
+{
+  "success": false,
+  "error": {
+    "code": "MISSING_REQUIRED_FIELDS",
+    "message": "필수 정보가 누락되었습니다."
+  }
+}
+```
+
+#### 전화번호 형식 오류 (400)
+```json
+{
+  "success": false,
+  "error": {
+    "code": 4008,
+    "message": "유효하지 않은 전화번호 형식입니다."
+  }
+}
+```
+
+---
+
+## 회원 탈퇴
+**DELETE** `/api/user/account`
+
+현재 로그인한 사용자의 계정을 비활성화합니다 (Soft Delete).
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Success Response (200)
+```json
+{
+  "success": true,
+  "message": "회원 탈퇴가 완료되었습니다.",
+  "data": null
+}
+```
+
+### 참고사항
+- 실제 데이터는 삭제되지 않고 `isActive` 필드가 `false`로 설정됩니다
+- 법적 요구사항에 따라 사용자 데이터는 일정 기간 보관됩니다
+- 탈퇴 후에는 해당 계정으로 로그인할 수 없습니다
+- 리프레시 토큰도 함께 무효화됩니다
+
+### Error Responses
+
+#### 인증 오류 (401)
+```json
+{
+  "success": false,
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "인증이 필요합니다."
+  }
+}
+```
+
+#### 사용자 없음 (404)
+```json
+{
+  "success": false,
+  "error": {
+    "code": "USER_NOT_FOUND",
+    "message": "사용자를 찾을 수 없습니다."
+  }
+}
+```
 
 ---
 

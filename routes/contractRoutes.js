@@ -11,8 +11,11 @@ const {
   cancelContractByGuest,
   calculateRefundPreview,
   requestRefund,
-  getContractRefunds
+  getContractRefunds,
+  getPaymentInfo,
+  confirmPayment
 } = require('../controllers/contractController');
+const { confirmPaymentMock } = require('../controllers/mockPaymentController');
 
 /**
  * 계약 요청 생성 (게스트 -> 호스트)
@@ -135,5 +138,74 @@ router.post('/:contractId/request-refund', authenticateToken, requestRefund);
  * GET /api/contracts/:contractId/refunds
  */
 router.get('/:contractId/refunds', authenticateToken, getContractRefunds);
+
+/**
+ * 결제 정보 조회 (게스트가 결제하기 전에 호출)
+ * GET /api/contracts/:contractId/payment-info
+ *
+ * Response:
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "contractId": 123,
+ *     "orderId": "250111-00001",
+ *     "amount": 1558000,
+ *     "orderName": "강남 원룸 (31박)",
+ *     "customerEmail": "guest@example.com",
+ *     "customerName": "홍길동"
+ *   }
+ * }
+ */
+router.get('/:contractId/payment-info', authenticateToken, getPaymentInfo);
+
+/**
+ * 결제 승인 (토스페이먼츠 API 호출)
+ * POST /api/contracts/:contractId/confirm-payment
+ *
+ * Request Body:
+ * {
+ *   "paymentKey": "tvivaTV20240129141323PWvNQ",
+ *   "orderId": "250111-00001",
+ *   "amount": 1558000
+ * }
+ *
+ * Response:
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "contractId": 123,
+ *     "orderId": "250111-00001",
+ *     "status": "PAYMENT_COMPLETED",
+ *     "payment": {
+ *       "paymentKey": "tvivaTV20240129141323PWvNQ",
+ *       "method": "CARD",
+ *       "status": "DONE",
+ *       "totalAmount": 1558000,
+ *       "approvedAt": "2025-01-11T10:30:00.000Z",
+ *       "receiptUrl": "https://dashboard.tosspayments.com/receipt/..."
+ *     }
+ *   },
+ *   "message": "결제가 완료되었습니다"
+ * }
+ */
+router.post('/:contractId/confirm-payment', authenticateToken, confirmPayment);
+
+/**
+ * Mock 결제 승인 (개발/테스트 환경 전용)
+ * POST /api/contracts/:contractId/confirm-payment-mock
+ *
+ * Request Body:
+ * {
+ *   "orderId": "250111-00001",
+ *   "amount": 1558000,
+ *   "simulateFailure": false (optional, true면 실패 시뮬레이션)
+ * }
+ *
+ * 활성화 조건: process.env.PAYMENT_MOCK_MODE === 'true'
+ */
+if (process.env.PAYMENT_MOCK_MODE === 'true') {
+  router.post('/:contractId/confirm-payment-mock', authenticateToken, confirmPaymentMock);
+  console.log('⚠️ Mock 결제 모드 활성화');
+}
 
 module.exports = router;
