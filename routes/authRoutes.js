@@ -21,6 +21,8 @@ router.post('/logout', authenticateToken, logout);
 router.post('/kakao', kakaoLogin);
 router.get('/kakao', async (req, res) => {
   const { code } = req.query;
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+
   if (code) {
     try {
       // code를 body로 변환해서 kakaoLogin 호출
@@ -32,19 +34,19 @@ router.get('/kakao', async (req, res) => {
         if (data.success) {
           // 성공 시 JWT 토큰만 전달 (사용자 데이터는 토큰에 포함됨)
           const { accessToken, refreshToken } = data.data;
-          res.redirect(`http://localhost:3000/auth/callback?token=${accessToken}&refresh=${refreshToken}`);
+          res.redirect(`${frontendUrl}/auth/callback?token=${accessToken}&refresh=${refreshToken}`);
         } else {
           // 실패 시 에러 메시지와 함께 리디렉트
-          res.redirect(`http://localhost:3000/auth/callback?error=${encodeURIComponent(data.message)}`);
+          res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent(data.message)}`);
         }
       };
 
       kakaoLogin(req, res);
     } catch (error) {
-      res.redirect(`http://localhost:3000/auth/callback?error=${encodeURIComponent('로그인 중 오류가 발생했습니다.')}`);
+      res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent('로그인 중 오류가 발생했습니다.')}`);
     }
   } else {
-    res.redirect(`http://localhost:3000/auth/callback?error=${encodeURIComponent('카카오 인증 코드가 필요합니다.')}`);
+    res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent('카카오 인증 코드가 필요합니다.')}`);
   }
 });
 
