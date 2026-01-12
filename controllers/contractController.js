@@ -1,5 +1,6 @@
-const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog } = require('../models');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
+const axios = require('axios');
 const {
   calculateRentalItemsFee,
   calculateDiscount,
@@ -1541,6 +1542,265 @@ const getContractRefunds = async (req, res) => {
   }
 };
 
+/**
+ * 결제 정보 조회
+ * GET /api/contracts/:contractId/payment-info
+ */
+const getPaymentInfo = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const guestId = req.user.id;
+
+    // 계약 조회
+    const contract = await Contract.findOne({
+      where: { id: contractId, guestId },
+      include: [
+        {
+          model: Room,
+          as: 'room',
+          attributes: ['id', 'roomName']
+        },
+        {
+          model: User,
+          as: 'guest',
+          attributes: ['id', 'name', 'email']
+        }
+      ]
+    });
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    // APPROVED 상태만 결제 가능
+    if (contract.status !== 'APPROVED') {
+      return error(res, ErrorCodes.PAYMENT_NOT_AVAILABLE, 400);
+    }
+
+    // 이미 결제된 경우
+    if (contract.status === 'PAYMENT_COMPLETED') {
+      return error(res, ErrorCodes.ALREADY_PAID, 400);
+    }
+
+    return success(
+      res,
+      {
+        contractId: contract.id,
+        orderId: contract.orderId,
+        amount: contract.finalTotalAmount,
+        orderName: `${contract.room.roomName} (${contract.totalDays}박)`,
+        customerEmail: contract.guest.email,
+        customerName: contract.guest.name
+      },
+      '결제 정보를 조회했습니다.'
+    );
+  } catch (err) {
+    console.error('결제 정보 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 결제 승인 (토스페이먼츠 API 호출)
+ * POST /api/contracts/:contractId/confirm-payment
+ */
+const confirmPayment = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { contractId } = req.params;
+    const { paymentKey, orderId, amount } = req.body;
+    const guestId = req.user.id;
+
+    // 필수 파라미터 검증
+    if (!paymentKey || !orderId || !amount) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    }
+
+    // 계약 조회
+    const contract = await Contract.findOne({
+      where: { id: contractId, guestId },
+      include: [
+        {
+          model: Room,
+          as: 'room',
+          attributes: ['id', 'roomName', 'hostId']
+        }
+      ],
+      transaction
+    });
+
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    // 결제 가능 상태 확인
+    if (contract.status !== 'APPROVED') {
+      await transaction.rollback();
+      return error(res, ErrorCodes.PAYMENT_NOT_AVAILABLE, 400);
+    }
+
+    // orderId 검증
+    if (contract.orderId !== orderId) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.ORDER_ID_MISMATCH, 400);
+    }
+
+    // 금액 검증 (클라이언트 변조 방지)
+    if (contract.finalTotalAmount !== parseInt(amount, 10)) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.AMOUNT_MISMATCH, 400);
+    }
+
+    // 토스페이먼츠 API 호출
+    const tossSecretKey = process.env.TOSS_SECRET_KEY;
+    const encodedKey = Buffer.from(`${tossSecretKey}:`).toString('base64');
+
+    let tossResponse;
+    try {
+      tossResponse = await axios.post(
+        'https://api.tosspayments.com/v1/payments/confirm',
+        {
+          paymentKey,
+          orderId,
+          amount: parseInt(amount, 10)
+        },
+        {
+          headers: {
+            Authorization: `Basic ${encodedKey}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+    } catch (tossError) {
+      await transaction.rollback();
+
+      // 실패 로그 기록
+      await PaymentFailureLog.create({
+        contractId: contract.id,
+        orderId,
+        failureCode: tossError.response?.data?.code || 'UNKNOWN',
+        failureMessage: tossError.response?.data?.message || tossError.message,
+        requestData: { paymentKey, orderId, amount },
+        responseData: tossError.response?.data || null,
+        userAgent: req.headers['user-agent'],
+        ipAddress: req.ip || req.connection.remoteAddress
+      });
+
+      console.error('토스 결제 승인 실패:', tossError.response?.data || tossError.message);
+      return error(res, ErrorCodes.PAYMENT_CONFIRMATION_FAILED, 400, {
+        tossErrorCode: tossError.response?.data?.code,
+        tossErrorMessage: tossError.response?.data?.message
+      });
+    }
+
+    const paymentData = tossResponse.data;
+    const now = new Date();
+
+    // Payment 레코드 생성
+    const payment = await Payment.create({
+      contractId: contract.id,
+      paymentKey: paymentData.paymentKey,
+      orderId: paymentData.orderId,
+      method: paymentData.method || 'CARD',
+      status: paymentData.status,
+      requestedAt: new Date(paymentData.requestedAt),
+      approvedAt: paymentData.approvedAt ? new Date(paymentData.approvedAt) : now,
+      totalAmount: paymentData.totalAmount,
+      balanceAmount: paymentData.balanceAmount,
+      suppliedAmount: paymentData.suppliedAmount,
+      vat: paymentData.vat,
+      taxFreeAmount: paymentData.taxFreeAmount || 0,
+      currency: paymentData.currency || 'KRW',
+      receiptUrl: paymentData.receipt?.url || null,
+      checkoutUrl: paymentData.checkout?.url || null,
+      paymentResponse: paymentData // 전체 응답 JSON 저장
+    }, { transaction });
+
+    // 토스 method를 Contract paymentMethod ENUM으로 매핑
+    const mapPaymentMethod = (tossMethod) => {
+      const methodMap = {
+        'CARD': 'CREDIT_CARD',
+        'VIRTUAL_ACCOUNT': 'BANK_TRANSFER',
+        'TRANSFER': 'BANK_TRANSFER',
+        'MOBILE': 'SIMPLE_PAY',
+        'EASY_PAY': 'SIMPLE_PAY'
+      };
+      return methodMap[tossMethod] || 'CREDIT_CARD';
+    };
+
+    // Contract 상태 업데이트
+    await contract.update({
+      status: 'PAYMENT_COMPLETED',
+      paymentMethod: mapPaymentMethod(paymentData.method),
+      paidAt: now
+    }, { transaction });
+
+    // 상태 변경 로그 기록
+    await ContractStatusLog.createLog({
+      contractId: contract.id,
+      fromStatus: 'APPROVED',
+      toStatus: 'PAYMENT_COMPLETED',
+      changedBy: 'GUEST',
+      changedByUserId: guestId,
+      reason: '게스트가 결제를 완료했습니다',
+      metadata: {
+        paymentKey: payment.paymentKey,
+        paymentMethod: payment.method,
+        totalAmount: payment.totalAmount
+      },
+      req,
+      transaction
+    });
+
+    // 채팅방에 시스템 메시지 전송
+    const chatRoom = await ChatRoom.findOne({
+      where: { contractId: contract.id },
+      transaction
+    });
+
+    if (chatRoom && chatRoom.firebaseChatRoomId) {
+      await sendSystemMessage(
+        chatRoom.firebaseChatRoomId,
+        SystemMessageTypes.PAYMENT_COMPLETED,
+        {
+          amount: payment.totalAmount,
+          paymentMethod: payment.method
+        }
+      );
+    }
+
+    await transaction.commit();
+
+    console.log(`✅ 결제 승인 완료: contractId=${contract.id}, paymentKey=${payment.paymentKey}`);
+
+    return success(
+      res,
+      {
+        contractId: contract.id,
+        orderId: contract.orderId,
+        status: contract.status,
+        payment: {
+          paymentKey: payment.paymentKey,
+          method: payment.method,
+          status: payment.status,
+          totalAmount: payment.totalAmount,
+          approvedAt: payment.approvedAt,
+          receiptUrl: payment.receiptUrl
+        }
+      },
+      '결제가 완료되었습니다'
+    );
+
+  } catch (err) {
+    await transaction.rollback();
+    console.error('결제 승인 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   createContractRequest,
   getGuestContracts,
@@ -1551,5 +1811,7 @@ module.exports = {
   cancelContractByGuest,
   calculateRefundPreview,
   requestRefund,
-  getContractRefunds
+  getContractRefunds,
+  getPaymentInfo,
+  confirmPayment
 };

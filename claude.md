@@ -432,6 +432,67 @@ FOREIGN KEY (updatedBy) REFERENCES admins(id)
 ON DELETE SET NULL ON UPDATE CASCADE;
 ```
 
+## 데이터 보존 정책 (매우 중요!)
+
+### 회원 탈퇴 시 데이터 보존
+**절대 원칙**: 사용자 탈퇴 시 실제 데이터 삭제 금지 (법적 요구사항)
+
+#### Soft Delete 방식 사용
+```javascript
+// ✅ 올바른 방법: Soft Delete (UPDATE 쿼리)
+await User.update({
+  isActive: false,
+  refreshToken: null
+}, {
+  where: { id: userId }
+});
+
+// ❌ 절대 금지: Hard Delete (DELETE 쿼리)
+await User.destroy({ where: { id: userId } }); // 사용 금지!
+```
+
+#### 보호되는 데이터
+다음 관계는 **onDelete: 'NO ACTION'**으로 설정되어 CASCADE 삭제 방지:
+
+1. **계약 관련** (법적 보관 의무 5년)
+   - Contract (호스트/게스트 계약 정보)
+   - Payment (결제 정보)
+   - Refund (환불 이력)
+   - ContractStatusLog (계약 상태 변경 이력)
+   - PaymentFailureLog (결제 실패 로그)
+
+2. **부동산 관련** (비즈니스 데이터)
+   - Room (방 정보)
+   - RoomPhoto, RoomAmenity, EzService (방 상세 정보)
+
+3. **커뮤니케이션** (고객 서비스)
+   - ChatRoom (채팅 이력)
+   - Inquiry (문의 이력)
+
+4. **금융 정보** (감사 추적)
+   - UserBankAccount (계좌 정보)
+
+#### 법적 근거
+- **전자상거래법**: 거래 기록 5년 보관 의무
+- **개인정보보호법**: 부정 이용 방지 목적 보관 허용
+- **국세기본법**: 세무 관련 정보 5년 보관 의무
+
+#### 구현 상세
+[models/index.js](c:\study\ezstay_back\models\index.js)에서 모든 중요 관계에 다음 설정 적용:
+```javascript
+User.hasMany(Contract, {
+  foreignKey: 'hostId',
+  as: 'hostedContracts',
+  onDelete: 'NO ACTION',  // 사용자 삭제 시 계약 데이터 보존
+  onUpdate: 'CASCADE'     // 사용자 ID 변경 시 자동 업데이트
+});
+```
+
+#### 주의사항
+- `User.destroy()` 메서드 사용 절대 금지
+- 회원 탈퇴는 반드시 `DELETE /api/user/account` API 사용
+- Hard Delete 시도 시 외래키 제약 조건으로 에러 발생 (안전장치)
+
 ## 개발 시 주의사항
 
 1. **모든 컨트롤러에서 responseHelper 사용 필수**
