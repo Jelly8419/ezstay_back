@@ -1722,11 +1722,15 @@ const confirmPayment = async (req, res) => {
     // 토스 method를 Contract paymentMethod ENUM으로 매핑
     const mapPaymentMethod = (tossMethod) => {
       const methodMap = {
-        'CARD': 'CREDIT_CARD',
-        'VIRTUAL_ACCOUNT': 'BANK_TRANSFER',
-        'TRANSFER': 'BANK_TRANSFER',
-        'MOBILE': 'SIMPLE_PAY',
-        'EASY_PAY': 'SIMPLE_PAY'
+        '카드': 'CREDIT_CARD',
+        '가상계좌': 'BANK_TRANSFER',
+        '계좌이체': 'BANK_TRANSFER',
+        '휴대폰': 'SIMPLE_PAY',
+        '간편결제': 'SIMPLE_PAY',
+        '상품권': 'SIMPLE_PAY',
+        '문화상품권': 'SIMPLE_PAY',
+        '도서문화상품권': 'SIMPLE_PAY',
+        '게임문화상품권': 'SIMPLE_PAY'
       };
       return methodMap[tossMethod] || 'CREDIT_CARD';
     };

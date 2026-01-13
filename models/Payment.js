@@ -29,9 +29,19 @@ module.exports = (sequelize) => {
       comment: '주문번호 (Contract의 orderId와 동일)'
     },
     method: {
-      type: DataTypes.ENUM('CARD', 'VIRTUAL_ACCOUNT', 'TRANSFER', 'MOBILE', 'EASY_PAY'),
+      type: DataTypes.ENUM(
+        '카드',           // CARD
+        '가상계좌',       // VIRTUAL_ACCOUNT
+        '계좌이체',       // TRANSFER
+        '휴대폰',         // MOBILE_PHONE
+        '상품권',         // GIFT_CERTIFICATE
+        '간편결제',       // EASY_PAY
+        '문화상품권',     // CULTURE_GIFT_CERTIFICATE
+        '도서문화상품권', // BOOK_CULTURE_GIFT_CERTIFICATE
+        '게임문화상품권'  // GAME_CULTURE_GIFT_CERTIFICATE
+      ),
       allowNull: false,
-      comment: '결제 수단'
+      comment: '결제 수단 (토스페이먼츠 한글 응답값)'
     },
     status: {
       type: DataTypes.ENUM(

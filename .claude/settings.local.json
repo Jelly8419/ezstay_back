@@ -56,7 +56,8 @@
       "Bash(timeout:*)",
       "Bash(python:*)",
       "Bash(if not exist docs mkdir docs)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(ls:*)"
     ],
     "deny": [],
     "ask": []
