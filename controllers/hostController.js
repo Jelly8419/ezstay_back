@@ -1,8 +1,9 @@
-const { Room, RoomPhoto, RoomAmenity, EzService, sequelize } = require('../models');
-const { ErrorCodes, success, error, created, updated } = require('../utils/responseHelper');
+const { Room, RoomPhoto, RoomAmenity, EzService, Contract, sequelize } = require('../models');
+const { ErrorCodes, success, error, created, updated, deleted } = require('../utils/responseHelper');
 const { convertRoadAddressToCoordinates } = require('../utils/geocoding');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 const { calculateProgress } = require('../utils/roomProgress');
+const { Op } = require('sequelize');
 
 // 1. 기본 정보 등록
 const createRoom = async (req, res) => {
@@ -568,11 +569,28 @@ const deletePhoto = async (req, res) => {
 const getMyRooms = async (req, res) => {
   try {
     const hostId = req.user.id;
-    const { status, page = 1, limit = 10 } = req.query;
+    const { status, isActive, search, page = 1, limit = 10 } = req.query;
 
-    const where = { hostId };
+    const where = {
+      hostId,
+      deletedAt: null  // 삭제되지 않은 방만 조회
+    };
+
     if (status) {
       where.status = status;
+    }
+
+    // isActive 필터링 (게시/비공개)
+    if (isActive !== undefined) {
+      where.isActive = isActive === 'true';
+    }
+
+    // 검색 기능 (방 이름 또는 주소)
+    if (search && search.trim()) {
+      where[Op.or] = [
+        { roomName: { [Op.like]: `%${search.trim()}%` } },
+        { address: { [Op.like]: `%${search.trim()}%` } }
+      ];
     }
 
     const offset = (page - 1) * limit;
@@ -613,6 +631,7 @@ const getMyRooms = async (req, res) => {
         buildingType: room.buildingType,
         dailyRent: room.dailyRent,
         status: room.status,
+        isActive: room.isActive,
         photos: room.photos && room.photos.length > 0
           ? room.photos.map(photo => ({
               url: photo.url,
@@ -753,6 +772,214 @@ const getRoom = async (req, res) => {
   }
 };
 
+// 14. 방 상태 변경 (게시/비공개)
+const updateRoomStatus = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const hostId = req.user.id;
+    const { isActive } = req.body;
+
+    // 입력값 검증
+    if (typeof isActive !== 'boolean') {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400,
+        { field: 'isActive', message: 'isActive는 true 또는 false여야 합니다.' });
+    }
+
+    // 방 조회
+    const room = await Room.findOne({ where: { id: roomId, hostId } });
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 상태 검증: approved 상태만 게시/비공개 전환 가능
+    if (room.status !== 'approved') {
+      return error(res, ErrorCodes.ROOM_STATUS_NOT_APPROVED, 400);
+    }
+
+    // 상태 변경
+    await room.update({
+      isActive,
+      publishedAt: isActive && !room.publishedAt ? new Date() : room.publishedAt
+    });
+
+    // 캐시 무효화
+    await invalidateRoomCache();
+
+    return updated(res, {
+      roomId: room.id,
+      status: room.status,
+      isActive: room.isActive,
+      publishedAt: room.publishedAt
+    }, isActive ? '방이 게시되었습니다.' : '방이 비공개 처리되었습니다.');
+  } catch (err) {
+    console.error('Update room status error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+// 15. 방 삭제 (Soft Delete)
+const deleteRoom = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { roomId } = req.params;
+    const hostId = req.user.id;
+
+    // 방 조회
+    const room = await Room.findOne({ where: { id: roomId, hostId } });
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 이미 삭제된 방인지 확인
+    if (room.deletedAt) {
+      return error(res, ErrorCodes.ROOM_ALREADY_DELETED, 400);
+    }
+
+    // 계약 존재 여부 확인 (활성 계약만)
+    const contractCount = await Contract.count({
+      where: {
+        roomId: room.id,
+        status: { [Op.in]: ['pending', 'approved', 'active'] }
+      }
+    });
+
+    if (contractCount > 0) {
+      return error(res, ErrorCodes.ROOM_HAS_CONTRACTS, 400);
+    }
+
+    // Soft Delete
+    await room.update({
+      deletedAt: new Date()
+    }, { transaction });
+
+    await transaction.commit();
+
+    // 캐시 무효화
+    await invalidateRoomCache();
+
+    return deleted(res, '방이 삭제되었습니다.');
+  } catch (err) {
+    await transaction.rollback();
+    console.error('Delete room error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+// 16. 방 복제
+const duplicateRoom = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { roomId } = req.params;
+    const hostId = req.user.id;
+    const {
+      includePhotos = true,
+      includeAmenities = true,
+      includeEzService = true
+    } = req.body;
+
+    // 원본 방 조회 (연관 데이터 포함)
+    const originalRoom = await Room.findOne({
+      where: { id: roomId, hostId },
+      include: [
+        { model: RoomPhoto, as: 'photos', order: [['order', 'ASC']] },
+        { model: RoomAmenity, as: 'amenity' },
+        { model: EzService, as: 'ezService' }
+      ]
+    });
+
+    if (!originalRoom) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 새 방 생성
+    const newRoom = await Room.create({
+      hostId,
+      roomName: `${originalRoom.roomName} (복제)`,
+      address: originalRoom.address,
+      detailAddress: originalRoom.detailAddress,
+      latitude: originalRoom.latitude,
+      longitude: originalRoom.longitude,
+      area: originalRoom.area,
+      floor: originalRoom.floor,
+      buildingType: originalRoom.buildingType,
+      parkingAvailable: originalRoom.parkingAvailable,
+      parkingInfo: originalRoom.parkingInfo,
+      elevatorAvailable: originalRoom.elevatorAvailable,
+      roomCount: originalRoom.roomCount,
+      bathroomCount: originalRoom.bathroomCount,
+      isDuplex: originalRoom.isDuplex,
+      entrancePassword: originalRoom.entrancePassword,
+      dailyRent: originalRoom.dailyRent,
+      dailyMaintenanceFee: originalRoom.dailyMaintenanceFee,
+      longTermWeeks: originalRoom.longTermWeeks,
+      longTermDiscount: originalRoom.longTermDiscount,
+      quickMoveIn: originalRoom.quickMoveIn,
+      quickMoveInDiscount: originalRoom.quickMoveInDiscount,
+      maintenanceDetail: originalRoom.maintenanceDetail,
+      includeElectricity: originalRoom.includeElectricity,
+      includeWater: originalRoom.includeWater,
+      includeGas: originalRoom.includeGas,
+      includeInternet: originalRoom.includeInternet,
+      cleaningFee: originalRoom.cleaningFee,
+      minContractWeeks: originalRoom.minContractWeeks,
+      refundPolicy: originalRoom.refundPolicy,
+      description: originalRoom.description,
+      maxGuests: originalRoom.maxGuests,
+      status: 'draft',
+      isActive: true
+    }, { transaction });
+
+    // 사진 복제
+    if (includePhotos && originalRoom.photos && originalRoom.photos.length > 0) {
+      const photoPromises = originalRoom.photos.map(photo =>
+        RoomPhoto.create({
+          roomId: newRoom.id,
+          url: photo.url,
+          order: photo.order
+        }, { transaction })
+      );
+      await Promise.all(photoPromises);
+    }
+
+    // 편의시설 복제
+    if (includeAmenities && originalRoom.amenity) {
+      await RoomAmenity.create({
+        roomId: newRoom.id,
+        basicOptions: originalRoom.amenity.basicOptions,
+        additionalOptions: originalRoom.amenity.additionalOptions,
+        convenienceOptions: originalRoom.amenity.convenienceOptions,
+        petsAllowed: originalRoom.amenity.petsAllowed,
+        wifiPassword: originalRoom.amenity.wifiPassword
+      }, { transaction });
+    }
+
+    // 이지서비스 복제
+    if (includeEzService && originalRoom.ezService) {
+      await EzService.create({
+        roomId: newRoom.id,
+        cleaningService: originalRoom.ezService.cleaningService,
+        autoPasswordChange: originalRoom.ezService.autoPasswordChange,
+        roomPassword: originalRoom.ezService.roomPassword
+      }, { transaction });
+    }
+
+    await transaction.commit();
+
+    return created(res, {
+      roomId: newRoom.id,
+      roomName: newRoom.roomName,
+      status: newRoom.status,
+      copiedFrom: originalRoom.id
+    }, '방이 복제되었습니다. 수정 후 등록해주세요.');
+  } catch (err) {
+    await transaction.rollback();
+    console.error('Duplicate room error:', err);
+    return error(res, ErrorCodes.DUPLICATE_ROOM_FAILED, 500, err.message);
+  }
+};
+
 module.exports = {
   createRoom,
   updateBasicInfo,
@@ -765,5 +992,8 @@ module.exports = {
   reorderPhotos,
   deletePhoto,
   getMyRooms,
-  getRoom
+  getRoom,
+  updateRoomStatus,
+  deleteRoom,
+  duplicateRoom
 };

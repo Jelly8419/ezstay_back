@@ -12,7 +12,10 @@ const {
   reorderPhotos,
   deletePhoto,
   getMyRooms,
-  getRoom
+  getRoom,
+  updateRoomStatus,
+  deleteRoom,
+  duplicateRoom
 } = require('../controllers/hostController');
 const { authenticateToken } = require('../middleware/auth');
 const { uploadRoomPhotos, uploadSingleImage } = require('../middleware/upload');
@@ -56,5 +59,14 @@ router.delete('/rooms/:roomId/photos/:photoId', deletePhoto);
 
 // 11. 방 상세 정보 조회
 router.get('/rooms/:roomId', getRoom);
+
+// 12. 방 상태 변경 (게시/비공개)
+router.patch('/rooms/:roomId/status', updateRoomStatus);
+
+// 13. 방 복제
+router.post('/rooms/:roomId/duplicate', uploadLimiter, duplicateRoom);
+
+// 14. 방 삭제
+router.delete('/rooms/:roomId', deleteRoom);
 
 module.exports = router;

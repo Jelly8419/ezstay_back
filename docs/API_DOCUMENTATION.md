@@ -25,6 +25,19 @@
   - [방 목록 조회](#방-목록-조회)
   - [방 상세 정보 조회](#방-상세-정보-조회)
 - [호스트 방 등록 API](#호스트-방-등록-api)
+- [호스트 방 관리 API](#호스트-방-관리-api)
+  - [방 목록 조회 (검색 지원)](#방-목록-조회-검색-지원)
+  - [방 상태 변경 (게시/비공개)](#방-상태-변경-게시비공개)
+  - [방 삭제](#방-삭제)
+  - [방 복제](#방-복제)
+- [호스트 일정 관리 API](#호스트-일정-관리-api)
+  - [통합 일정 조회](#통합-일정-조회)
+  - [계약 불가 기간 생성](#계약-불가-기간-생성)
+  - [계약 불가 기간 삭제](#계약-불가-기간-삭제)
+  - [계약 불가 기간 부분 해제](#계약-불가-기간-부분-해제)
+  - [방의 계약 목록 조회](#방의-계약-목록-조회)
+  - [방의 계약 불가 기간 목록 조회](#방의-계약-불가-기간-목록-조회)
+  - [방 기본 정보 조회](#방-기본-정보-조회)
 - [계약 관리 API](#계약-관리-api)
   - [계약 요청 생성](#계약-요청-생성)
   - [게스트 계약 목록 조회](#게스트-계약-목록-조회)
@@ -1345,6 +1358,8 @@ GET /api/rooms?checkInDate=2025-02-01&checkOutDate=2025-02-10&page=1&limit=20
 ### 날짜 필터 사용
 - `checkIn`과 `checkOut`은 **둘 다 제공하거나 둘 다 생략**해야 합니다
 - 날짜를 제공하면 해당 기간에 **예약 가능한 방만** 반환됩니다
+  - 확정된 계약(결제 완료 또는 진행 중)이 있는 방 제외
+  - 호스트가 설정한 불가 기간(BlockedPeriod)이 있는 방 제외
 - 날짜를 생략하면 **모든 게시된 방**을 반환합니다
 - 과거 날짜로는 검색할 수 없습니다
 
@@ -2077,6 +2092,750 @@ Authorization: Bearer {access_token}
 - `404`: 리소스 없음
 - `429`: Rate Limit 초과
 - `500`: 서버 에러
+
+---
+
+# 호스트 방 관리 API
+
+호스트가 등록한 방을 관리하는 API입니다. 모든 API는 JWT 인증이 필요합니다.
+
+## 방 목록 조회 (검색 지원)
+**GET** `/api/host/rooms`
+
+호스트가 등록한 방 목록을 조회합니다. 상태 필터링, 게시 여부 필터링, 검색 기능을 지원합니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Query Parameters
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| status | string | X | 방 상태 필터링 (draft, pending_review, approved, rejected) |
+| isActive | string | X | 게시 여부 필터링 ("true" 또는 "false") |
+| search | string | X | 검색어 (방 이름 또는 주소 부분 일치) |
+| page | number | X | 페이지 번호 (기본값: 1) |
+| limit | number | X | 페이지당 개수 (기본값: 10) |
+
+### Success Response (200)
+```json
+{
+  "success": true,
+  "data": {
+    "rooms": [
+      {
+        "id": 1,
+        "roomName": "강남역 도보 5분 원룸",
+        "address": "서울시 강남구 역삼동 123-45",
+        "area": 20.5,
+        "buildingType": "원룸",
+        "dailyRent": 50000,
+        "status": "approved",
+        "isActive": true,
+        "photos": [
+          {
+            "url": "/uploads/rooms/photo1.jpg",
+            "order": 0
+          }
+        ],
+        "registrationProgress": {
+          "currentStep": 7,
+          "totalSteps": 7,
+          "completedSteps": ["basic", "pricing", "photos", "amenities", "ezService", "description", "submit"]
+        },
+        "submittedAt": "2026-01-10T10:00:00Z",
+        "approvedAt": "2026-01-11T14:00:00Z",
+        "publishedAt": "2026-01-11T14:00:00Z",
+        "createdAt": "2026-01-10T09:00:00Z",
+        "updatedAt": "2026-01-11T14:00:00Z"
+      }
+    ],
+    "pagination": {
+      "total": 15,
+      "page": 1,
+      "limit": 10,
+      "totalPages": 2
+    }
+  }
+}
+```
+
+---
+
+## 방 상태 변경 (게시/비공개)
+**PATCH** `/api/host/rooms/:roomId/status`
+
+승인된 방을 게시하거나 비공개 처리합니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Path Parameters
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| roomId | number | O | 방 ID |
+
+### Request Body
+```json
+{
+  "isActive": true
+}
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| isActive | boolean | O | true: 게시, false: 비공개 |
+
+### 비즈니스 로직
+- **승인된 방(`status: 'approved'`)만 게시/비공개 전환 가능**
+- `isActive = true` 시 `publishedAt` 자동 설정 (최초 1회)
+- `isActive = false` 시 비공개 처리 (게시중단)
+
+### Success Response (200)
+```json
+{
+  "success": true,
+  "message": "방이 게시되었습니다.",
+  "data": {
+    "roomId": 1,
+    "status": "approved",
+    "isActive": true,
+    "publishedAt": "2026-01-14T10:30:00Z"
+  }
+}
+```
+
+### Error Responses
+- **404**: 방을 찾을 수 없음
+- **403**: 권한 없음 (다른 호스트의 방)
+- **400**: 상태 변경 불가 (status가 approved가 아님)
+  ```json
+  {
+    "success": false,
+    "code": 4231,
+    "message": "게시 상태 변경은 승인된 방만 가능합니다."
+  }
+  ```
+
+---
+
+## 방 삭제
+**DELETE** `/api/host/rooms/:roomId`
+
+방을 삭제합니다. (Soft Delete)
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Path Parameters
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| roomId | number | O | 방 ID |
+
+### 비즈니스 로직
+- **활성 계약(`status: 'pending', 'approved', 'active'`)이 있는 방은 삭제 불가**
+- Soft Delete: 실제 데이터는 유지되고 `deletedAt` 타임스탬프만 기록
+- 삭제된 방은 목록 조회에서 자동 제외
+
+### Success Response (200)
+```json
+{
+  "success": true,
+  "message": "방이 삭제되었습니다.",
+  "data": null
+}
+```
+
+### Error Responses
+- **404**: 방을 찾을 수 없음
+- **403**: 권한 없음 (다른 호스트의 방)
+- **400**: 삭제 불가 (계약이 존재)
+  ```json
+  {
+    "success": false,
+    "code": 4230,
+    "message": "계약이 존재하여 삭제할 수 없습니다."
+  }
+  ```
+- **400**: 이미 삭제된 방
+  ```json
+  {
+    "success": false,
+    "code": 4232,
+    "message": "이미 삭제된 방입니다."
+  }
+  ```
+
+---
+
+## 방 복제
+**POST** `/api/host/rooms/:roomId/duplicate`
+
+기존 방을 복제하여 새로운 방을 생성합니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Rate Limiting
+- **제한**: 1시간 내 20회
+- **목적**: 과도한 복제 방지
+
+### Path Parameters
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| roomId | number | O | 원본 방 ID |
+
+### Request Body
+```json
+{
+  "includePhotos": true,
+  "includeAmenities": true,
+  "includeEzService": true
+}
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| includePhotos | boolean | X | 사진 복제 여부 (기본값: true) |
+| includeAmenities | boolean | X | 편의시설 복제 여부 (기본값: true) |
+| includeEzService | boolean | X | 이지서비스 복제 여부 (기본값: true) |
+
+### 비즈니스 로직
+- 원본 방의 모든 기본 정보 복제
+- `roomName`에 "(복제)" 접미사 자동 추가
+- 복제된 방의 상태는 `draft`
+- 사진, 편의시설, 이지서비스는 선택적 복제
+- `submittedAt`, `approvedAt`, `publishedAt`은 null로 초기화
+
+### Success Response (201)
+```json
+{
+  "success": true,
+  "message": "방이 복제되었습니다. 수정 후 등록해주세요.",
+  "data": {
+    "roomId": 123,
+    "roomName": "강남역 도보 5분 원룸 (복제)",
+    "status": "draft",
+    "copiedFrom": 1
+  }
+}
+```
+
+### Error Responses
+- **404**: 원본 방을 찾을 수 없음
+- **403**: 권한 없음 (다른 호스트의 방)
+- **500**: 복제 실패
+  ```json
+  {
+    "success": false,
+    "code": 4233,
+    "message": "방 복제에 실패했습니다."
+  }
+  ```
+
+---
+
+## 방 상태(status) 흐름도
+
+```
+draft (등록중)
+  ↓ (심사 요청)
+pending_review (심사중)
+  ↓ (관리자 승인)
+approved (승인됨)
+  ├─ isActive: true → 게시중
+  └─ isActive: false → 게시중단
+  ↓ (삭제 요청)
+deleted (deletedAt 기록)
+
+※ 승인 거절 시:
+pending_review → rejected (반려)
+```
+
+---
+
+# 호스트 일정 관리 API
+
+호스트가 자신의 방 일정을 관리하는 API입니다. 계약 일정 조회와 계약 불가 기간 설정 기능을 제공합니다.
+
+## 통합 일정 조회
+**GET** `/api/host/rooms/:roomId/schedule`
+
+호스트의 방 일정을 통합 조회합니다. 계약 일정과 계약 불가 기간을 한 번에 조회할 수 있습니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Path Parameters
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| roomId | number | O | 방 ID |
+
+### Query Parameters
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| startDate | string | X | 조회 시작 날짜 (YYYY-MM-DD, 기본값: 오늘) |
+| endDate | string | X | 조회 종료 날짜 (YYYY-MM-DD, 기본값: 오늘+12개월) |
+
+### Success Response (200)
+```json
+{
+  "success": true,
+  "message": "일정 조회 성공",
+  "data": {
+    "roomInfo": {
+      "roomId": 1,
+      "propertyName": "강남역 도보 5분 원룸",
+      "propertyAddress": "서울시 강남구 역삼동 123-45",
+      "detailAddress": "101호"
+    },
+    "contracts": [
+      {
+        "contractId": 101,
+        "guestName": "김게스트",
+        "checkInDate": "2026-02-01",
+        "checkOutDate": "2026-02-10",
+        "status": "PAYMENT_COMPLETED",
+        "totalAmount": 500000
+      },
+      {
+        "contractId": 102,
+        "guestName": "이게스트",
+        "checkInDate": "2026-02-15",
+        "checkOutDate": "2026-02-20",
+        "status": "IN_PROGRESS",
+        "totalAmount": 300000
+      }
+    ],
+    "blockedPeriods": [
+      {
+        "blockedPeriodId": 1,
+        "startDate": "2026-03-01",
+        "endDate": "2026-03-05",
+        "reason": "개인 사정으로 임대 불가"
+      },
+      {
+        "blockedPeriodId": 2,
+        "startDate": "2026-03-20",
+        "endDate": "2026-03-25",
+        "reason": "보수 작업"
+      }
+    ],
+    "totalContracts": 2,
+    "totalBlockedPeriods": 2
+  }
+}
+```
+
+### Error Responses
+- `401 Unauthorized`: 인증 실패
+- `404 Not Found`: 방을 찾을 수 없거나 권한 없음
+  ```json
+  {
+    "success": false,
+    "code": 3002,
+    "message": "방을 찾을 수 없습니다."
+  }
+  ```
+- `500 Internal Server Error`: 서버 오류
+
+---
+
+## 계약 불가 기간 생성
+**POST** `/api/host/rooms/:roomId/blocked-periods`
+
+호스트가 특정 날짜 범위를 계약 불가로 설정합니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Path Parameters
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| roomId | number | O | 방 ID |
+
+### Request Body
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| startDate | string | O | 시작 날짜 (YYYY-MM-DD) |
+| endDate | string | O | 종료 날짜 (YYYY-MM-DD) |
+| reason | string | X | 불가 사유 (최대 200자) |
+
+### Request Example
+```json
+{
+  "startDate": "2026-03-01",
+  "endDate": "2026-03-05",
+  "reason": "개인 사정으로 임대 불가"
+}
+```
+
+### Validation Rules
+1. **필수 필드 검증**: startDate, endDate는 필수
+2. **날짜 형식 검증**: YYYY-MM-DD 형식 필수
+3. **날짜 순서 검증**: endDate는 startDate보다 이후여야 함
+4. **과거 날짜 금지**: startDate는 오늘 이후여야 함
+5. **계약 충돌 검증**: 확정된 계약(PAYMENT_COMPLETED, IN_PROGRESS)과 겹치면 안 됨
+
+### Success Response (201 Created)
+```json
+{
+  "success": true,
+  "message": "계약 불가 기간이 설정되었습니다",
+  "data": {
+    "id": 1,
+    "roomId": 1,
+    "startDate": "2026-03-01",
+    "endDate": "2026-03-05",
+    "reason": "개인 사정으로 임대 불가",
+    "createdBy": 123,
+    "createdAt": "2026-01-16T10:00:00Z",
+    "updatedAt": "2026-01-16T10:00:00Z"
+  }
+}
+```
+
+### Error Responses
+- `400 Bad Request`: 입력 검증 실패
+  ```json
+  {
+    "success": false,
+    "code": 4002,
+    "message": "필수 정보를 모두 입력해주세요.",
+    "details": {
+      "field": "startDate, endDate는 필수 항목입니다."
+    }
+  }
+  ```
+  ```json
+  {
+    "success": false,
+    "code": 4303,
+    "message": "과거 날짜는 선택할 수 없습니다."
+  }
+  ```
+  ```json
+  {
+    "success": false,
+    "code": 4302,
+    "message": "종료일은 시작일보다 이후여야 합니다."
+  }
+  ```
+- `401 Unauthorized`: 인증 실패
+- `404 Not Found`: 방을 찾을 수 없거나 권한 없음
+- `409 Conflict`: 확정된 계약과 기간 충돌
+  ```json
+  {
+    "success": false,
+    "code": 4300,
+    "message": "해당 기간에 이미 확정된 계약이 있습니다.",
+    "details": {
+      "conflicts": [
+        {
+          "contractId": 101,
+          "checkInDate": "2026-03-03",
+          "checkOutDate": "2026-03-07"
+        }
+      ]
+    }
+  }
+  ```
+- `500 Internal Server Error`: 서버 오류
+
+---
+
+## 계약 불가 기간 삭제
+**DELETE** `/api/host/rooms/:roomId/blocked-periods/:blockedId`
+
+호스트가 설정한 계약 불가 기간을 삭제합니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Path Parameters
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| roomId | number | O | 방 ID |
+| blockedId | number | O | 계약 불가 기간 ID |
+
+### Success Response (200 OK)
+```json
+{
+  "success": true,
+  "message": "계약 불가 기간이 삭제되었습니다"
+}
+```
+
+### Error Responses
+- `401 Unauthorized`: 인증 실패
+- `403 Forbidden`: 소유자만 삭제 가능
+  ```json
+  {
+    "success": false,
+    "code": 2001,
+    "message": "권한이 없습니다."
+  }
+  ```
+- `404 Not Found`: 방 또는 계약 불가 기간을 찾을 수 없음
+  ```json
+  {
+    "success": false,
+    "code": 3002,
+    "message": "방을 찾을 수 없습니다."
+  }
+  ```
+  ```json
+  {
+    "success": false,
+    "code": 4304,
+    "message": "계약 불가 기간을 찾을 수 없습니다."
+  }
+  ```
+- `500 Internal Server Error`: 서버 오류
+
+---
+
+## 계약 불가 기간 부분 해제
+**POST** `/api/host/rooms/:roomId/blocked-periods/unblock`
+
+설정된 계약 불가 기간 중 특정 날짜 범위를 해제합니다. 해제 범위가 기존 불가 기간의 중간에 위치하면 자동으로 분할됩니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Path Parameters
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| roomId | number | O | 방 ID |
+
+### Request Body
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| startDate | string | O | 해제 시작 날짜 (YYYY-MM-DD) |
+| endDate | string | O | 해제 종료 날짜 (YYYY-MM-DD) |
+
+### Request Example
+```json
+{
+  "startDate": "2026-03-03",
+  "endDate": "2026-03-07"
+}
+```
+
+### 동작 방식
+1. **완전 포함**: 해제 범위가 불가 기간을 완전히 포함 → 불가 기간 삭제
+2. **시작 부분**: 해제 범위가 시작 부분과 겹침 → 불가 기간의 종료일만 남음
+3. **종료 부분**: 해제 범위가 종료 부분과 겹침 → 불가 기간의 시작일만 남음
+4. **중간 부분**: 해제 범위가 중간에 위치 → 불가 기간이 2개로 분할
+
+### Success Response (200 OK)
+```json
+{
+  "success": true,
+  "message": "계약 가능으로 전환되었습니다",
+  "data": {
+    "unlockedPeriod": {
+      "startDate": "2026-03-03",
+      "endDate": "2026-03-07"
+    },
+    "deletedPeriods": [
+      {
+        "id": 1,
+        "startDate": "2026-03-01",
+        "endDate": "2026-03-10"
+      }
+    ],
+    "createdPeriods": [
+      {
+        "id": 2,
+        "startDate": "2026-03-01",
+        "endDate": "2026-03-02",
+        "reason": "개인 사정"
+      },
+      {
+        "id": 3,
+        "startDate": "2026-03-08",
+        "endDate": "2026-03-10",
+        "reason": "개인 사정"
+      }
+    ],
+    "totalDeleted": 1,
+    "totalCreated": 2
+  }
+}
+```
+
+### Error Responses
+- `400 Bad Request`: 입력 검증 실패
+  ```json
+  {
+    "success": false,
+    "code": 4002,
+    "message": "필수 정보를 모두 입력해주세요.",
+    "details": {
+      "field": "startDate, endDate는 필수 항목입니다."
+    }
+  }
+  ```
+  ```json
+  {
+    "success": false,
+    "code": 4302,
+    "message": "종료일은 시작일보다 이후여야 합니다."
+  }
+  ```
+- `401 Unauthorized`: 인증 실패
+- `404 Not Found`: 방을 찾을 수 없거나 권한 없음
+- `500 Internal Server Error`: 서버 오류
+
+---
+
+## 방의 계약 목록 조회
+**GET** `/api/host/rooms/:roomId/contracts`
+
+방의 확정된 계약 목록만 별도로 조회합니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Path Parameters
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| roomId | number | O | 방 ID |
+
+### Query Parameters
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| startDate | string | X | 조회 시작 날짜 (YYYY-MM-DD) |
+| endDate | string | X | 조회 종료 날짜 (YYYY-MM-DD) |
+
+### Success Response (200 OK)
+```json
+{
+  "success": true,
+  "message": "계약 목록 조회 성공",
+  "data": {
+    "contracts": [
+      {
+        "contractId": 101,
+        "guestName": "김게스트",
+        "checkInDate": "2026-02-01",
+        "checkOutDate": "2026-02-10",
+        "status": "PAYMENT_COMPLETED",
+        "totalAmount": 500000,
+        "createdAt": "2026-01-15T10:00:00Z"
+      },
+      {
+        "contractId": 102,
+        "guestName": "이게스트",
+        "checkInDate": "2026-02-15",
+        "checkOutDate": "2026-02-20",
+        "status": "IN_PROGRESS",
+        "totalAmount": 300000,
+        "createdAt": "2026-01-20T14:30:00Z"
+      }
+    ],
+    "totalCount": 2
+  }
+}
+```
+
+### Error Responses
+- `401 Unauthorized`: 인증 실패
+- `404 Not Found`: 방을 찾을 수 없거나 권한 없음
+- `500 Internal Server Error`: 서버 오류
+
+---
+
+## 방의 계약 불가 기간 목록 조회
+**GET** `/api/host/rooms/:roomId/blocked-periods`
+
+방의 계약 불가 기간 목록만 별도로 조회합니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Path Parameters
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| roomId | number | O | 방 ID |
+
+### Query Parameters
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| startDate | string | X | 조회 시작 날짜 (YYYY-MM-DD) |
+| endDate | string | X | 조회 종료 날짜 (YYYY-MM-DD) |
+
+### Success Response (200 OK)
+```json
+{
+  "success": true,
+  "message": "계약 불가 기간 목록 조회 성공",
+  "data": {
+    "blockedPeriods": [
+      {
+        "blockedPeriodId": 1,
+        "startDate": "2026-03-01",
+        "endDate": "2026-03-05",
+        "reason": "개인 사정으로 임대 불가",
+        "createdAt": "2026-01-10T09:00:00Z"
+      },
+      {
+        "blockedPeriodId": 2,
+        "startDate": "2026-03-20",
+        "endDate": "2026-03-25",
+        "reason": "보수 작업",
+        "createdAt": "2026-01-15T11:30:00Z"
+      }
+    ],
+    "totalCount": 2
+  }
+}
+```
+
+### Error Responses
+- `401 Unauthorized`: 인증 실패
+- `404 Not Found`: 방을 찾을 수 없거나 권한 없음
+- `500 Internal Server Error`: 서버 오류
+
+---
+
+## 방 기본 정보 조회
+**GET** `/api/host/rooms/:roomId/schedule-info`
+
+일정 관리에 필요한 방의 기본 정보만 조회합니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Path Parameters
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| roomId | number | O | 방 ID |
+
+### Success Response (200 OK)
+```json
+{
+  "success": true,
+  "message": "방 정보 조회 성공",
+  "data": {
+    "roomId": 1,
+    "propertyName": "강남역 도보 5분 원룸",
+    "propertyAddress": "서울시 강남구 역삼동 123-45"
+  }
+}
+```
+
+### Error Responses
+- `401 Unauthorized`: 인증 실패
+- `404 Not Found`: 방을 찾을 수 없거나 권한 없음
+  ```json
+  {
+    "success": false,
+    "code": 3002,
+    "message": "방을 찾을 수 없습니다."
+  }
+  ```
+- `500 Internal Server Error`: 서버 오류
 
 ---
 

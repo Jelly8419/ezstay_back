@@ -52,6 +52,12 @@ const ErrorCodes = {
   AMENITIES_REQUIRED: { code: 4204, message: '편의시설 정보를 입력해주세요.' },
   PHOTO_IDS_REQUIRED: { code: 4205, message: '사진 ID 배열이 필요합니다.' },
 
+  // 방 관리 관련 (42xx)
+  ROOM_HAS_CONTRACTS: { code: 4230, message: '계약이 존재하여 삭제할 수 없습니다.' },
+  ROOM_STATUS_NOT_APPROVED: { code: 4231, message: '게시 상태 변경은 승인된 방만 가능합니다.' },
+  ROOM_ALREADY_DELETED: { code: 4232, message: '이미 삭제된 방입니다.' },
+  DUPLICATE_ROOM_FAILED: { code: 4233, message: '방 복제에 실패했습니다.' },
+
   // 고객센터 관련 (4xxx)
   NOTICE_NOT_FOUND: { code: 4301, message: '공지사항을 찾을 수 없습니다.' },
   FAQ_CATEGORY_NOT_FOUND: { code: 4302, message: 'FAQ 카테고리를 찾을 수 없습니다.' },
@@ -61,6 +67,13 @@ const ErrorCodes = {
   ANSWER_ALREADY_EXISTS: { code: 4306, message: '이미 답변된 문의입니다.' },
   INVALID_STATUS: { code: 4307, message: '유효하지 않은 상태 값입니다.' },
   DUPLICATE_CATEGORY_NAME: { code: 4308, message: '이미 존재하는 카테고리 이름입니다.' },
+
+  // 일정 관리 관련 (43xx)
+  CONFLICT_WITH_CONTRACT: { code: 4300, message: '해당 기간에 이미 확정된 계약이 있습니다.' },
+  CONFLICT_WITH_BLOCKED_PERIOD: { code: 4301, message: '이미 계약 불가로 설정된 기간입니다.' },
+  INVALID_DATE_RANGE: { code: 4302, message: '종료일은 시작일보다 이후여야 합니다.' },
+  PAST_DATE_NOT_ALLOWED: { code: 4303, message: '과거 날짜는 선택할 수 없습니다.' },
+  BLOCKED_PERIOD_NOT_FOUND: { code: 4304, message: '계약 불가 기간을 찾을 수 없습니다.' },
 
   // 결제 관련 (46xx)
   CONTRACT_NOT_FOUND: { code: 3005, message: '계약을 찾을 수 없습니다.' },

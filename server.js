@@ -168,12 +168,14 @@ const supportRoutes = require('./routes/supportRoutes');
 const refundRoutes = require('./routes/refundRoutes');
 const rentalItemRoutes = require('./routes/rentalItemRoutes');
 const { adminRouter: rentalItemAdminRoutes } = require('./routes/rentalItemRoutes');
+const scheduleRoutes = require('./routes/scheduleRoutes');
 
 app.use('/api/rooms', roomRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/account', accountRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/host', hostRoutes);
+app.use('/api/host', scheduleRoutes);  // 호스트 일정 관리
 app.use('/api/contracts', contractRoutes);
 app.use('/api/chats', chatRoutes);
 app.use('/api/admin', adminRoutes);
