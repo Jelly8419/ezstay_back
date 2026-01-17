@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { Op } = require('sequelize');
-const { Room, RoomPhoto, Contract } = require('../models');
+const { Room, RoomPhoto, Contract, BlockedPeriod } = require('../models');
 const { safeRedisOperation } = require('../config/redis');
 const appConfig = require('../config/app.config');
 
@@ -352,7 +352,7 @@ const calculateLimit = (zoom, userLimit) => {
 };
 
 /**
- * 예약 불가능한 방 ID 조회
+ * 예약 불가능한 방 ID 조회 (계약 + 불가 기간)
  * @param {string} checkIn - 입실일
  * @param {string} checkOut - 퇴실일
  * @returns {Promise<number[]>} 예약 불가능한 방 ID 배열
@@ -362,22 +362,42 @@ const getUnavailableRoomIds = async (checkIn, checkOut) => {
     return [];
   }
 
-  const unavailableRooms = await Contract.findAll({
-    attributes: ['roomId'],
-    where: {
-      status: {
-        [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'APPROVED']
+  // 병렬로 계약 정보와 불가 기간 조회
+  const [contractRooms, blockedRooms] = await Promise.all([
+    // 1. 확정된 계약이 있는 방
+    Contract.findAll({
+      attributes: ['roomId'],
+      where: {
+        status: {
+          [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'APPROVED']
+        },
+        [Op.and]: [
+          { checkOutDate: { [Op.gte]: checkIn } },
+          { checkInDate: { [Op.lte]: checkOut } }
+        ]
       },
-      [Op.and]: [
-        { checkOutDate: { [Op.gte]: checkIn } },
-        { checkInDate: { [Op.lte]: checkOut } }
-      ]
-    },
-    raw: true
-  });
+      raw: true
+    }),
 
-  const excludeIds = unavailableRooms.map(r => r.roomId);
-  console.log(`📅 날짜 필터 적용: ${checkIn} ~ ${checkOut} (제외된 방: ${excludeIds.length}개)`);
+    // 2. 호스트가 설정한 불가 기간이 있는 방
+    BlockedPeriod.findAll({
+      attributes: ['roomId'],
+      where: {
+        [Op.and]: [
+          { endDate: { [Op.gte]: checkIn } },
+          { startDate: { [Op.lte]: checkOut } }
+        ]
+      },
+      raw: true
+    })
+  ]);
+
+  // 중복 제거하여 제외할 방 ID 목록 생성
+  const contractIds = contractRooms.map(r => r.roomId);
+  const blockedIds = blockedRooms.map(r => r.roomId);
+  const excludeIds = [...new Set([...contractIds, ...blockedIds])];
+
+  console.log(`📅 날짜 필터 적용: ${checkIn} ~ ${checkOut} (계약: ${contractIds.length}개, 불가기간: ${blockedIds.length}개, 총 제외: ${excludeIds.length}개)`);
 
   return excludeIds;
 };

@@ -227,6 +227,18 @@ const Room = sequelize.define('Room', {
     type: DataTypes.TEXT,
     allowNull: true,
     comment: '매물 반려 사유'
+  },
+  // 게시 상태 관리
+  isActive: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+    comment: '게시 여부 (true: 게시중, false: 비공개)'
+  },
+  deletedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: 'Soft Delete 타임스탬프'
   }
 }, {
   tableName: 'rooms',
@@ -237,6 +249,11 @@ const Room = sequelize.define('Room', {
       fields: ['status', 'latitude', 'longitude'],
       name: 'idx_status_location',
       comment: '지도 영역 검색 최적화 (카카오맵 클러스터링)'
+    },
+    {
+      fields: ['deleted_at'],
+      name: 'idx_deleted_at',
+      comment: 'Soft Delete 조회 최적화'
     }
   ]
 });

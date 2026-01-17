@@ -27,6 +27,7 @@ const Refund = require('./Refund');
 const ContractStatusLog = require('./ContractStatusLog');
 const PaymentModel = require('./Payment');
 const PaymentFailureLogModel = require('./PaymentFailureLog');
+const BlockedPeriod = require('./BlockedPeriod');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -142,6 +143,33 @@ EzService.belongsTo(Room, {
 Room.hasOne(EzService, {
   foreignKey: 'roomId',
   as: 'freeService'
+});
+
+// BlockedPeriod (계약 불가 기간) 관계 설정
+Room.hasMany(BlockedPeriod, {
+  foreignKey: 'roomId',
+  as: 'blockedPeriods',
+  onDelete: 'CASCADE', // 방 삭제 시 불가 기간도 함께 삭제
+  onUpdate: 'CASCADE'
+});
+BlockedPeriod.belongsTo(Room, {
+  foreignKey: 'roomId',
+  as: 'room',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+
+BlockedPeriod.belongsTo(User, {
+  foreignKey: 'createdBy',
+  as: 'host',
+  onDelete: 'NO ACTION', // 호스트 삭제 시 불가 기간 보존
+  onUpdate: 'CASCADE'
+});
+User.hasMany(BlockedPeriod, {
+  foreignKey: 'createdBy',
+  as: 'blockedPeriods',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
 });
 
 User.hasMany(UserBankAccount, {
@@ -490,5 +518,6 @@ module.exports = {
   Refund,
   ContractStatusLog,
   Payment,
-  PaymentFailureLog
+  PaymentFailureLog,
+  BlockedPeriod
 };
