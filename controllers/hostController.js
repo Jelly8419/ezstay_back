@@ -980,6 +980,43 @@ const duplicateRoom = async (req, res) => {
   }
 };
 
+// 호스트 계좌정보 조회
+const getHostAccount = async (req, res) => {
+  try {
+    const { UserBankAccount } = require('../models');
+    const hostId = req.user.id;
+
+    const account = await UserBankAccount.findOne({
+      where: { userId: hostId },
+      attributes: ['id', 'bankName', 'accountNumber', 'accountHolder', 'isVerified', 'verifiedAt', 'isPrimary', 'createdAt']
+    });
+
+    if (!account) {
+      return error(res, { code: 3005, message: '등록된 계좌가 없습니다.' }, 404);
+    }
+
+    // 계좌번호 뒷 6자리 마스킹 (예: 1234-5678-9012 → 1234-56******)
+    const maskedAccountNumber = account.accountNumber.replace(/(\d{6})$/, '******');
+
+    return success(res, {
+      account: {
+        id: account.id,
+        bankName: account.bankName,
+        accountNumber: maskedAccountNumber,
+        accountHolder: account.accountHolder,
+        isVerified: account.isVerified,
+        verifiedAt: account.verifiedAt,
+        isPrimary: account.isPrimary,
+        createdAt: account.createdAt
+      }
+    });
+
+  } catch (err) {
+    console.error('호스트 계좌 정보 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
 module.exports = {
   createRoom,
   updateBasicInfo,
@@ -995,5 +1032,6 @@ module.exports = {
   getRoom,
   updateRoomStatus,
   deleteRoom,
-  duplicateRoom
+  duplicateRoom,
+  getHostAccount
 };
