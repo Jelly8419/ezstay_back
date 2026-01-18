@@ -1,4 +1,4 @@
-const { Room, RoomPhoto, RoomAmenity, EzService, Contract, sequelize } = require('../models');
+const { Room, RoomPhoto, RoomAmenity, EzService, Contract, UserBankAccount, sequelize } = require('../models');
 const { ErrorCodes, success, error, created, updated, deleted } = require('../utils/responseHelper');
 const { convertRoadAddressToCoordinates } = require('../utils/geocoding');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -983,7 +983,6 @@ const duplicateRoom = async (req, res) => {
 // 호스트 계좌정보 조회
 const getHostAccount = async (req, res) => {
   try {
-    const { UserBankAccount } = require('../models');
     const hostId = req.user.id;
 
     const account = await UserBankAccount.findOne({
