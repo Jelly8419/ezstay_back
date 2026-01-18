@@ -90,7 +90,8 @@ jobs:
             # package.json 변경 감지
             if git diff $CURRENT_COMMIT HEAD --name-only | grep -q "package.json"; then
               echo "📦 package.json 변경 감지 - 의존성 재설치..."
-              npm ci  # 테스트 환경: 모든 의존성 설치
+              rm -rf node_modules package-lock.json
+              npm install --legacy-peer-deps
             else
               echo "✅ package.json 변경 없음 - 의존성 설치 스킵"
             fi
@@ -110,7 +111,8 @@ jobs:
             else
               echo "❌ 헬스체크 실패 - 롤백 시작..."
               git reset --hard $CURRENT_COMMIT
-              npm ci  # 롤백 시에도 모든 의존성 설치
+              rm -rf node_modules package-lock.json
+              npm install --legacy-peer-deps  # 롤백 시에도 안전한 방식으로 의존성 설치
               pm2 reload ezstay-api
               echo "🔙 롤백 완료: $CURRENT_COMMIT"
               exit 1
