@@ -34,6 +34,8 @@ async function generateOrderId(transaction = null) {
       transaction: t
     });
 
+    let currentNumber;
+
     // 2. 없으면 생성 (첫 번째 주문)
     if (!sequence) {
       sequence = await ContractSequence.create(
@@ -43,19 +45,35 @@ async function generateOrderId(transaction = null) {
         },
         { transaction: t }
       );
+      currentNumber = 1;
     } else {
-      // 3. 있으면 증가
-      await sequence.increment('lastNumber', { transaction: t });
-      await sequence.reload({ transaction: t });
+      // 3. 있으면 증가 (원자적 연산으로 안전하게 처리)
+      const [updatedRows] = await ContractSequence.update(
+        {
+          lastNumber: sequelize.literal('last_number + 1')
+        },
+        {
+          where: { dateKey },
+          transaction: t
+        }
+      );
+
+      // 업데이트된 값을 다시 조회 (FOR UPDATE 락 유지)
+      await sequence.reload({
+        lock: t.LOCK.UPDATE,
+        transaction: t
+      });
+
+      currentNumber = sequence.lastNumber;
     }
 
     // 4. 최대값 체크 (99999 초과 방지)
-    if (sequence.lastNumber > 99999) {
+    if (currentNumber > 99999) {
       throw new Error('일일 주문번호 한도 초과 (99999건)');
     }
 
     // 5. 주문번호 생성 (5자리 0 패딩)
-    const sequenceNumber = String(sequence.lastNumber).padStart(5, '0');
+    const sequenceNumber = String(currentNumber).padStart(5, '0');
     const orderId = `${yymmdd}${sequenceNumber}`;
 
     if (shouldCommit) {

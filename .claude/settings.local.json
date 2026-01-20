@@ -56,7 +56,18 @@
       "Bash(timeout:*)",
       "Bash(python:*)",
       "Bash(if not exist docs mkdir docs)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "mcp__serena__search_for_pattern",
+      "mcp__serena__get_symbols_overview",
+      "mcp__serena__activate_project",
+      "mcp__serena__initial_instructions",
+      "mcp__serena__find_symbol",
+      "mcp__serena__think_about_collected_information",
+      "mcp__serena__insert_after_symbol",
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(if [ ! -d \"scripts/dev-tools\" ])",
+      "Bash(then mkdir -p scripts/dev-tools)",
+      "Bash(fi)"
     ],
     "deny": [],
     "ask": []
