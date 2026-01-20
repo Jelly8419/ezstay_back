@@ -217,12 +217,36 @@ KAKAO_CALLBACK_URL=http://localhost:3000/api/auth/oauth/kakao/callback
 - **프로덕션 환경**: `DB_LOGGING=false`로 설정하여 성능 최적화 및 로그 정리
 
 ## 주요 명령어
+
+### 서버 실행
 ```bash
 # 개발 서버 실행 (nodemon)
 npm run dev
 
 # 프로덕션 서버 실행
 npm start
+```
+
+### 개발 도구 (테스트 환경 전용)
+```bash
+# 계약 승인 관리
+npm run dev:approve-all         # 모든 대기중인 계약 일괄 승인
+npm run dev:approve <contractId> # 특정 계약 승인
+npm run dev:reject <contractId>  # 특정 계약 거절
+npm run dev:contract-status      # 계약 상태 조회
+
+# 사용 예시
+npm run dev:approve-all
+npm run dev:approve 123
+npm run dev:contract-status
+```
+
+**문서**: [scripts/dev-tools/README.md](scripts/dev-tools/README.md) 참조
+
+**자동 승인 모드** (선택 사항):
+```bash
+# .env 파일에 추가 (완전 자동화가 필요한 경우에만)
+AUTO_APPROVE_CONTRACTS=true
 ```
 
 ## 보안 강화 사항 (2025-10)

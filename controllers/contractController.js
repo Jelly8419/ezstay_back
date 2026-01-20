@@ -360,6 +360,30 @@ const createContractRequest = async (req, res) => {
     // 11. TODO: 호스트에게 알림 전송 (추후 구현)
     // await sendNotificationToHost(room.hostId, { ... });
 
+    // 12. [개발 환경 전용] 자동 승인 기능
+    let finalStatus = contract.status;
+    if (process.env.AUTO_APPROVE_CONTRACTS === 'true' && process.env.NODE_ENV !== 'production') {
+      await contract.update({
+        status: 'APPROVED',
+        approvedAt: new Date()
+      }, { transaction });
+
+      await ContractStatusLog.createLog({
+        contractId: contract.id,
+        fromStatus: 'PENDING_APPROVAL',
+        toStatus: 'APPROVED',
+        changedBy: 'SYSTEM',
+        changedByUserId: null,
+        reason: '[개발 환경] 자동 승인됨 (AUTO_APPROVE_CONTRACTS=true)',
+        metadata: {},
+        req,
+        transaction
+      });
+
+      finalStatus = 'APPROVED';
+      console.log(`[DEV] 계약 #${contract.id} 자동 승인됨 (AUTO_APPROVE_CONTRACTS=true)`);
+    }
+
     await transaction.commit();
 
     return created(
@@ -367,14 +391,17 @@ const createContractRequest = async (req, res) => {
       {
         contractId: contract.id,
         orderId: contract.orderId,
-        status: contract.status,
+        status: finalStatus,
         hostId: room.hostId,
         checkInDate: contract.checkInDate,
         checkOutDate: contract.checkOutDate,
         finalTotalAmount: contract.finalTotalAmount,
-        createdAt: contract.createdAt
+        createdAt: contract.createdAt,
+        autoApproved: finalStatus === 'APPROVED' && process.env.AUTO_APPROVE_CONTRACTS === 'true' // 디버깅용
       },
-      '계약 승인 요청이 전송되었습니다'
+      finalStatus === 'APPROVED'
+        ? '계약이 자동으로 승인되었습니다 (개발 모드)'
+        : '계약 승인 요청이 전송되었습니다'
     );
   } catch (err) {
     await transaction.rollback();
