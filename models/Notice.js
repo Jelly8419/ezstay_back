@@ -42,6 +42,11 @@ module.exports = (sequelize) => {
       defaultValue: 'draft',
       comment: 'draft: 임시저장, published: 게시중, archived: 보관'
     },
+    userType: {
+      type: DataTypes.ENUM('all', 'host', 'guest'),
+      defaultValue: 'all',
+      comment: '대상 사용자 타입 (all: 전체, host: 호스트, guest: 게스트)'
+    },
     createdBy: {
       type: DataTypes.INTEGER,
       allowNull: false,
@@ -73,6 +78,10 @@ module.exports = (sequelize) => {
       {
         fields: ['createdBy'],
         name: 'idx_notices_created_by'
+      },
+      {
+        fields: ['userType', 'status', 'publishedAt'],
+        name: 'idx_notices_user_type'
       }
     ]
   });

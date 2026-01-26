@@ -8,7 +8,7 @@ const { Op } = require('sequelize');
  */
 const getNotices = async (req, res) => {
   try {
-    const { page = 1, limit = 10, search } = req.query;
+    const { page = 1, limit = 10, search, userType } = req.query;
     const offset = (page - 1) * limit;
     const now = new Date();
 
@@ -19,25 +19,34 @@ const getNotices = async (req, res) => {
         { publishedAt: { [Op.lte]: now } },
         { publishedAt: null }
       ],
-      [Op.or]: [
-        { expiresAt: { [Op.gte]: now } },
-        { expiresAt: null }
+      [Op.and]: [
+        {
+          [Op.or]: [
+            { expiresAt: { [Op.gte]: now } },
+            { expiresAt: null }
+          ]
+        }
       ]
     };
 
+    // userType 필터 (all은 모든 사용자에게 보임)
+    if (userType && ['host', 'guest'].includes(userType)) {
+      whereCondition.userType = { [Op.in]: ['all', userType] };
+    }
+
     // 검색어가 있는 경우
     if (search) {
-      whereCondition[Op.and] = {
+      whereCondition[Op.and].push({
         [Op.or]: [
           { title: { [Op.like]: `%${search}%` } },
           { content: { [Op.like]: `%${search}%` } }
         ]
-      };
+      });
     }
 
     const { count, rows } = await Notice.findAndCountAll({
       where: whereCondition,
-      attributes: ['id', 'title', 'isImportant', 'viewCount', 'publishedAt', 'createdAt'],
+      attributes: ['id', 'title', 'isImportant', 'viewCount', 'userType', 'publishedAt', 'createdAt'],
       order: [
         ['isImportant', 'DESC'],
         ['publishedAt', 'DESC'],
@@ -75,7 +84,7 @@ const getNoticeById = async (req, res) => {
         id,
         status: 'published'
       },
-      attributes: ['id', 'title', 'content', 'isImportant', 'viewCount', 'publishedAt', 'createdAt']
+      attributes: ['id', 'title', 'content', 'isImportant', 'viewCount', 'userType', 'publishedAt', 'createdAt']
     });
 
     if (!notice) {
@@ -98,7 +107,7 @@ const getNoticeById = async (req, res) => {
  */
 const getNoticesAdmin = async (req, res) => {
   try {
-    const { page = 1, limit = 20, status, search } = req.query;
+    const { page = 1, limit = 20, status, userType, search } = req.query;
     const offset = (page - 1) * limit;
 
     const whereCondition = {};
@@ -106,6 +115,11 @@ const getNoticesAdmin = async (req, res) => {
     // 상태 필터
     if (status) {
       whereCondition.status = status;
+    }
+
+    // userType 필터 (관리자는 특정 타입만 필터링)
+    if (userType && ['all', 'host', 'guest'].includes(userType)) {
+      whereCondition.userType = userType;
     }
 
     // 검색어가 있는 경우
@@ -195,7 +209,7 @@ const getNoticeByIdAdmin = async (req, res) => {
  */
 const createNotice = async (req, res) => {
   try {
-    const { title, content, isImportant, publishedAt, expiresAt, status } = req.body;
+    const { title, content, isImportant, userType, publishedAt, expiresAt, status } = req.body;
     const adminId = req.admin.id;
 
     // 필수 필드 검증
@@ -209,10 +223,17 @@ const createNotice = async (req, res) => {
       return error(res, ErrorCodes.INVALID_STATUS, 400);
     }
 
+    // userType 검증
+    const validUserTypes = ['all', 'host', 'guest'];
+    if (userType && !validUserTypes.includes(userType)) {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, { field: 'userType' });
+    }
+
     const notice = await Notice.create({
       title,
       content,
       isImportant: isImportant || false,
+      userType: userType || 'all',
       publishedAt: publishedAt || null,
       expiresAt: expiresAt || null,
       status: status || 'draft',
@@ -233,7 +254,7 @@ const createNotice = async (req, res) => {
 const updateNotice = async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, content, isImportant, publishedAt, expiresAt, status } = req.body;
+    const { title, content, isImportant, userType, publishedAt, expiresAt, status } = req.body;
     const adminId = req.admin.id;
 
     const notice = await Notice.findByPk(id);
@@ -248,12 +269,19 @@ const updateNotice = async (req, res) => {
       return error(res, ErrorCodes.INVALID_STATUS, 400);
     }
 
+    // userType 검증
+    const validUserTypes = ['all', 'host', 'guest'];
+    if (userType && !validUserTypes.includes(userType)) {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, { field: 'userType' });
+    }
+
     // 업데이트할 필드만 설정
     const updateData = { updatedBy: adminId };
 
     if (title !== undefined) updateData.title = title;
     if (content !== undefined) updateData.content = content;
     if (isImportant !== undefined) updateData.isImportant = isImportant;
+    if (userType !== undefined) updateData.userType = userType;
     if (publishedAt !== undefined) updateData.publishedAt = publishedAt;
     if (expiresAt !== undefined) updateData.expiresAt = expiresAt;
     if (status !== undefined) updateData.status = status;

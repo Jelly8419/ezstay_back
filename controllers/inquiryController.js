@@ -9,7 +9,7 @@ const { Op } = require('sequelize');
 const getMyInquiries = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { page = 1, limit = 10, status, categoryType } = req.query;
+    const { page = 1, limit = 10, status, categoryType, userType } = req.query;
     const offset = (page - 1) * limit;
 
     const whereCondition = { userId };
@@ -24,9 +24,14 @@ const getMyInquiries = async (req, res) => {
       whereCondition.categoryType = categoryType;
     }
 
+    // userType 필터
+    if (userType && ['host', 'guest'].includes(userType)) {
+      whereCondition.userType = userType;
+    }
+
     const { count, rows } = await Inquiry.findAndCountAll({
       where: whereCondition,
-      attributes: ['id', 'categoryType', 'title', 'content', 'status', 'answer', 'answeredAt', 'createdAt'],
+      attributes: ['id', 'categoryType', 'userType', 'title', 'content', 'status', 'answer', 'answeredAt', 'createdAt'],
       order: [['createdAt', 'DESC']],
       limit: parseInt(limit),
       offset: parseInt(offset)
@@ -61,7 +66,7 @@ const getMyInquiryById = async (req, res) => {
         id,
         userId
       },
-      attributes: ['id', 'categoryType', 'title', 'content', 'status', 'answer', 'answeredAt', 'createdAt', 'updatedAt']
+      attributes: ['id', 'categoryType', 'userType', 'title', 'content', 'status', 'answer', 'answeredAt', 'createdAt', 'updatedAt']
     });
 
     if (!inquiry) {
@@ -81,11 +86,11 @@ const getMyInquiryById = async (req, res) => {
  */
 const createInquiry = async (req, res) => {
   try {
-    const { categoryType, title, content } = req.body;
+    const { categoryType, userType, title, content } = req.body;
     const userId = req.user.id;
 
     // 필수 필드 검증
-    if (!categoryType || !title || !content) {
+    if (!categoryType || !userType || !title || !content) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
@@ -95,9 +100,16 @@ const createInquiry = async (req, res) => {
       return error(res, ErrorCodes.VALIDATION_ERROR, 400);
     }
 
+    // userType 검증
+    const validUserTypes = ['host', 'guest'];
+    if (!validUserTypes.includes(userType)) {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, { field: 'userType' });
+    }
+
     const inquiry = await Inquiry.create({
       userId,
       categoryType,
+      userType,
       title,
       content,
       status: 'pending'
@@ -198,7 +210,7 @@ const deleteInquiry = async (req, res) => {
  */
 const getInquiriesAdmin = async (req, res) => {
   try {
-    const { page = 1, limit = 20, status, categoryType, search } = req.query;
+    const { page = 1, limit = 20, status, categoryType, userType, search } = req.query;
     const offset = (page - 1) * limit;
 
     const whereCondition = {};
@@ -211,6 +223,11 @@ const getInquiriesAdmin = async (req, res) => {
     // 카테고리 필터
     if (categoryType) {
       whereCondition.categoryType = categoryType;
+    }
+
+    // userType 필터
+    if (userType && ['host', 'guest'].includes(userType)) {
+      whereCondition.userType = userType;
     }
 
     // 검색어 (제목 또는 내용)

@@ -18,6 +18,11 @@ module.exports = (sequelize) => {
       allowNull: false,
       comment: '문의 카테고리'
     },
+    userType: {
+      type: DataTypes.ENUM('host', 'guest'),
+      allowNull: false,
+      comment: '문의자 사용자 타입 (host: 호스트, guest: 게스트)'
+    },
     title: {
       type: DataTypes.STRING(200),
       allowNull: false,
@@ -68,6 +73,10 @@ module.exports = (sequelize) => {
       {
         fields: ['categoryType'],
         name: 'idx_inquiries_category_type'
+      },
+      {
+        fields: ['userType', 'status', 'createdAt'],
+        name: 'idx_inquiries_user_type'
       }
     ]
   });
