@@ -148,6 +148,10 @@ startContractScheduler();
 const { startChatReminderScheduler } = require('./schedulers/chatReminderScheduler');
 startChatReminderScheduler();
 
+// 호스트 자동메시지 스케줄러 시작
+const { startAutoMessageScheduler } = require('./schedulers/autoMessageScheduler');
+startAutoMessageScheduler();
+
 // 관리자 액션 로그 자동 정리 스케줄러 시작
 const cleanupActionLogs = require('./schedulers/cleanupActionLogs');
 cleanupActionLogs();

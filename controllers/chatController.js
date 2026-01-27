@@ -151,10 +151,34 @@ const createChatRoom = async (req, res) => {
 /**
  * 내 채팅방 목록 조회
  * GET /api/chats/rooms
+ * Query params:
+ *   - status: 계약 상태 필터 (APPROVED, PAYMENT_COMPLETED, IN_PROGRESS, COMPLETED, CANCELLED, REJECTED 등)
+ *             CANCELLED는 모든 취소 상태를 포함 (CANCELLED_BY_GUEST, CANCELLED_BY_HOST, PAYMENT_EXPIRED 등)
  */
 const getMyChatRooms = async (req, res) => {
   try {
     const userId = req.user.id;
+    const { status } = req.query;
+
+    // 계약 상태 필터 조건 생성
+    let contractWhereClause = {};
+    if (status) {
+      // CANCELLED는 모든 취소/만료 상태를 포함하는 그룹 필터
+      if (status === 'CANCELLED') {
+        contractWhereClause.status = {
+          [Op.in]: [
+            'CANCELLED_BY_GUEST',
+            'CANCELLED_BY_HOST',
+            'CANCELLED_BY_ADMIN_WITH_REFUND',
+            'CANCELLED_BY_ADMIN_NO_REFUND',
+            'PAYMENT_EXPIRED',
+            'APPROVAL_EXPIRED'
+          ]
+        };
+      } else {
+        contractWhereClause.status = status;
+      }
+    }
 
     // MySQL에서 채팅방 목록 조회
     const chatRooms = await ChatRoom.findAll({
@@ -168,7 +192,8 @@ const getMyChatRooms = async (req, res) => {
         {
           model: Contract,
           as: 'contract',
-          attributes: ['id', 'status', 'checkInDate', 'checkOutDate']
+          attributes: ['id', 'status', 'checkInDate', 'checkOutDate'],
+          where: Object.keys(contractWhereClause).length > 0 ? contractWhereClause : undefined
         },
         {
           model: Room,

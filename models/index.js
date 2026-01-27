@@ -28,6 +28,8 @@ const ContractStatusLog = require('./ContractStatusLog');
 const PaymentModel = require('./Payment');
 const PaymentFailureLogModel = require('./PaymentFailureLog');
 const BlockedPeriod = require('./BlockedPeriod');
+const AutoMessageTemplate = require('./AutoMessageTemplate');
+const NotificationLog = require('./NotificationLog');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -487,6 +489,25 @@ RefundPolicyType.hasMany(Refund, {
   constraints: false
 });
 
+// AutoMessageTemplate 관계 설정
+AutoMessageTemplate.belongsTo(User, {
+  foreignKey: 'hostId',
+  as: 'host'
+});
+User.hasMany(AutoMessageTemplate, {
+  foreignKey: 'hostId',
+  as: 'autoMessageTemplates'
+});
+
+AutoMessageTemplate.belongsTo(Room, {
+  foreignKey: 'roomId',
+  as: 'room'
+});
+Room.hasMany(AutoMessageTemplate, {
+  foreignKey: 'roomId',
+  as: 'autoMessageTemplates'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -519,5 +540,7 @@ module.exports = {
   ContractStatusLog,
   Payment,
   PaymentFailureLog,
-  BlockedPeriod
+  BlockedPeriod,
+  AutoMessageTemplate,
+  NotificationLog
 };

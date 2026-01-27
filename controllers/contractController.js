@@ -14,6 +14,7 @@ const { createChatRoomMetadata, sendSystemMessage } = require('../config/firebas
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 const { calculateRefund } = require('../utils/refundCalculator');
 const { generateOrderId } = require('../utils/orderIdGenerator');
+const { sendContractConfirmedMessages } = require('../schedulers/autoMessageScheduler');
 
 /**
  * 계약 요청 생성 (게스트 -> 호스트)
@@ -1184,8 +1185,8 @@ const cancelContractByGuest = async (req, res) => {
     if (chatRoom) {
       sendSystemMessage(
         chatRoom.firebaseChatRoomId,
-        getSystemMessageTemplate(SystemMessageTypes.CONTRACT_CANCELED),
-        SystemMessageTypes.CONTRACT_CANCELED,
+        getSystemMessageTemplate(SystemMessageTypes.CONTRACT_CANCELED_BY_GUEST),
+        SystemMessageTypes.CONTRACT_CANCELED_BY_GUEST,
         {
           contractId: contract.id,
           cancelledBy: 'guest',
@@ -1800,6 +1801,11 @@ const confirmPayment = async (req, res) => {
     }
 
     await transaction.commit();
+
+    // 트랜잭션 커밋 후 호스트 자동메시지 발송 (비동기, 실패해도 결제 성공에 영향 없음)
+    sendContractConfirmedMessages(contract.id, contract.roomId).catch(err => {
+      console.error(`[자동메시지] 계약 확정 메시지 발송 실패 (무시됨):`, err);
+    });
 
     console.log(`✅ 결제 승인 완료: contractId=${contract.id}, paymentKey=${payment.paymentKey}`);
 

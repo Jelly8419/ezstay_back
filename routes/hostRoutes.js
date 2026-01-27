@@ -18,8 +18,17 @@ const {
   duplicateRoom,
   getHostAccount
 } = require('../controllers/hostController');
+const {
+  getAutoMessageTemplates,
+  getAutoMessageTemplate,
+  createAutoMessageTemplate,
+  updateAutoMessageTemplate,
+  deleteAutoMessageTemplate,
+  toggleAutoMessageTemplate,
+  getRoomAutoMessageTemplates
+} = require('../controllers/autoMessageController');
 const { authenticateToken } = require('../middleware/auth');
-const { uploadRoomPhotos, uploadSingleImage } = require('../middleware/upload');
+const { uploadRoomPhotos } = require('../middleware/upload');
 const { uploadLimiter } = require('../middleware/rateLimiter');
 
 // 인증 필요한 모든 라우트에 미들웨어 적용
@@ -72,5 +81,30 @@ router.post('/rooms/:roomId/duplicate', uploadLimiter, duplicateRoom);
 
 // 15. 방 삭제
 router.delete('/rooms/:roomId', deleteRoom);
+
+// ========================================
+// 자동메시지 관리 API
+// ========================================
+
+// 16. 자동메시지 템플릿 목록 조회
+router.get('/auto-messages', getAutoMessageTemplates);
+
+// 17. 자동메시지 템플릿 상세 조회
+router.get('/auto-messages/:id', getAutoMessageTemplate);
+
+// 18. 자동메시지 템플릿 생성
+router.post('/auto-messages', createAutoMessageTemplate);
+
+// 19. 자동메시지 템플릿 수정
+router.patch('/auto-messages/:id', updateAutoMessageTemplate);
+
+// 20. 자동메시지 템플릿 삭제
+router.delete('/auto-messages/:id', deleteAutoMessageTemplate);
+
+// 21. 자동메시지 템플릿 활성화/비활성화 토글
+router.patch('/auto-messages/:id/toggle', toggleAutoMessageTemplate);
+
+// 22. 특정 방의 자동메시지 템플릿 목록 조회
+router.get('/rooms/:roomId/auto-messages', getRoomAutoMessageTemplates);
 
 module.exports = router;

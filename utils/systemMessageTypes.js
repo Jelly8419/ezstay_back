@@ -7,7 +7,10 @@ const SystemMessageTypes = {
   // 계약 관련
   CONTRACT_APPROVED: 'contract_approved',           // 계약 승인 / 결제대기
   CONTRACT_REJECTED: 'contract_rejected',           // 계약 거절
-  CONTRACT_CANCELED: 'contract_canceled',           // 계약 취소
+  CONTRACT_CANCELED: 'contract_canceled',           // 계약 취소 (일반)
+  CONTRACT_CANCELED_PAYMENT_EXPIRED: 'contract_canceled_payment_expired',  // 결제 기간 만료로 취소
+  CONTRACT_CANCELED_BY_HOST: 'contract_canceled_by_host',                  // 호스트 사유로 취소
+  CONTRACT_CANCELED_BY_GUEST: 'contract_canceled_by_guest',                // 게스트 사유로 취소
   PAYMENT_COMPLETED: 'payment_completed',           // 결제 완료
   PAYMENT_EXPIRED: 'payment_expired',               // 결제 시간 만료
 
@@ -34,11 +37,14 @@ const SystemMessageTypes = {
  */
 const getSystemMessageTemplate = (type, data = {}) => {
   const templates = {
-    [SystemMessageTypes.CONTRACT_APPROVED]: `계약이 승인되었습니다. 계약 완료를 위해 마감 시한 전까지 결제를 완료해주세요. (결제 마감 시한 ${data.paymentDeadline || '확인 필요'})`,
-    [SystemMessageTypes.CONTRACT_REJECTED]: `계약이 거절되었습니다.\n사유: ${data.reason || '미제공'}`,
-    [SystemMessageTypes.CONTRACT_CANCELED]: `요청에 의해 계약이 취소되었습니다.`,
-    [SystemMessageTypes.PAYMENT_COMPLETED]: `결제가 완료되었습니다. 입주일에 맞춰 준비해주세요.`,
-    [SystemMessageTypes.PAYMENT_EXPIRED]: `결제 마감 시한이 지나, 계약이 자동 취소되었습니다.`,
+    [SystemMessageTypes.CONTRACT_APPROVED]: `계약 요청이 승인되었습니다. 결제 완료 시, 계약이 확정됩니다. (결제 마감 시한: ${data.paymentDeadline || '확인 필요'})`,
+    [SystemMessageTypes.CONTRACT_REJECTED]: `계약 요청이 거절되었습니다.`,
+    [SystemMessageTypes.CONTRACT_CANCELED]: `계약이 취소되었습니다.`,
+    [SystemMessageTypes.CONTRACT_CANCELED_PAYMENT_EXPIRED]: `결제 기간이 만료되어, 계약이 취소되었습니다.`,
+    [SystemMessageTypes.CONTRACT_CANCELED_BY_HOST]: `호스트의 사유로 계약이 취소되었습니다.`,
+    [SystemMessageTypes.CONTRACT_CANCELED_BY_GUEST]: `게스트의 사유로 계약이 취소되었습니다.`,
+    [SystemMessageTypes.PAYMENT_COMPLETED]: `계약이 확정되었습니다. (계약기간: ${data.checkInDate || '확인 필요'} ~ ${data.checkOutDate || '확인 필요'})`,
+    [SystemMessageTypes.PAYMENT_EXPIRED]: `결제 기간이 만료되어, 계약이 취소되었습니다.`,
     [SystemMessageTypes.CHECK_IN_REMINDER]: `입실일이 1일 남았습니다. 잊지 말고 체크인 준비 해주세요.`,
     [SystemMessageTypes.CHECK_OUT_REMINDER]: `퇴실일이 1일 남았습니다. 체크아웃 준비를 해주세요.`,
     [SystemMessageTypes.CHECK_OUT_COMPLETED]: `퇴실이 완료되었습니다.`,
