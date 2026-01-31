@@ -6,6 +6,7 @@ const {
   getVerificationStatus,
   getProfile,
   changePassword,
+  changeNickname,
   changePhoneNumber,
   deleteAccount
 } = require('../controllers/userController');
@@ -25,6 +26,9 @@ router.get('/profile', authenticateToken, getProfile);
 
 // 비밀번호 변경
 router.patch('/password', authenticateToken, changePassword);
+
+// 닉네임 변경
+router.patch('/nickname', authenticateToken, changeNickname);
 
 // 연락처 변경
 router.patch('/phone', authenticateToken, changePhoneNumber);

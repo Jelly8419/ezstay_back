@@ -311,6 +311,43 @@ const changePassword = async (req, res) => {
   }
 };
 
+// 닉네임 변경
+const changeNickname = async (req, res) => {
+  try {
+    const { nickname } = req.body;
+    const userId = req.user.id;
+
+    // 필수 필드 검증
+    if (!nickname || !nickname.trim()) {
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    }
+
+    const trimmedNickname = nickname.trim();
+
+    // 닉네임 길이 검증 (2~20자)
+    if (trimmedNickname.length < 2 || trimmedNickname.length > 20) {
+      return error(res, { code: 4009, message: '닉네임은 2~20자 사이여야 합니다.' }, 400);
+    }
+
+    // 사용자 정보 업데이트
+    const [updated] = await User.update({
+      nickname: trimmedNickname
+    }, {
+      where: { id: userId }
+    });
+
+    if (updated === 0) {
+      return error(res, ErrorCodes.USER_NOT_FOUND, 404);
+    }
+
+    return success(res, { nickname: trimmedNickname }, '닉네임이 성공적으로 변경되었습니다.');
+
+  } catch (err) {
+    console.error('닉네임 변경 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, process.env.NODE_ENV === 'development' ? err.message : undefined);
+  }
+};
+
 // 연락처 변경
 const changePhoneNumber = async (req, res) => {
   try {
@@ -387,6 +424,7 @@ module.exports = {
   getVerificationStatus,
   getProfile,
   changePassword,
+  changeNickname,
   changePhoneNumber,
   deleteAccount
 };
