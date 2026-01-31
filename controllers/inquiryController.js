@@ -244,7 +244,7 @@ const getInquiriesAdmin = async (req, res) => {
         {
           model: User,
           as: 'user',
-          attributes: ['id', 'name', 'email', 'phoneNumber']
+          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
         },
         {
           model: Admin,
@@ -289,7 +289,7 @@ const getInquiryByIdAdmin = async (req, res) => {
         {
           model: User,
           as: 'user',
-          attributes: ['id', 'name', 'email', 'phoneNumber']
+          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
         },
         {
           model: Admin,

@@ -26,6 +26,7 @@ const saveGuestVerification = async (req, res) => {
     // Users 테이블 업데이트 (본인인증정보 + 약관정보)
     const updatedUser = await User.update({
       name: name,
+      nickname: name,  // 본인인증 시 nickname도 동기화
       phoneNumber: phone_number,
       phoneVerified: true,
       phoneVerifiedAt: new Date(),
@@ -49,6 +50,7 @@ const saveGuestVerification = async (req, res) => {
     return success(res, {
       user: {
         name: name,
+        nickname: name,
         phoneNumber: phone_number,
         phoneVerified: true,
         userType: 'guest'
@@ -100,6 +102,7 @@ const saveHostVerification = async (req, res) => {
     // Users 테이블 업데이트 (본인인증정보 + 약관정보)
     const updatedUser = await User.update({
       name: name,
+      nickname: name,  // 본인인증 시 nickname도 동기화
       phoneNumber: phone_number,
       phoneVerified: true,
       phoneVerifiedAt: new Date(),
@@ -147,6 +150,7 @@ const saveHostVerification = async (req, res) => {
     return success(res, {
       user: {
         name: name,
+        nickname: name,
         phoneNumber: phone_number,
         phoneVerified: true,
         userType: 'host',
@@ -179,7 +183,7 @@ const getVerificationStatus = async (req, res) => {
 
     const user = await User.findByPk(userId, {
       attributes: [
-        'id', 'name', 'phoneNumber', 'phoneVerified', 'phoneVerifiedAt',
+        'id', 'name', 'nickname', 'phoneNumber', 'phoneVerified', 'phoneVerifiedAt',
         'serviceTermsAgreed', 'privacyPolicyAgreed', 'marketingConsent',
         'ageConfirmed', 'termsAgreedAt'
       ]
@@ -199,6 +203,7 @@ const getVerificationStatus = async (req, res) => {
       user: {
         id: user.id,
         name: user.name,
+        nickname: user.nickname,
         phoneNumber: user.phoneNumber,
         phoneVerified: user.phoneVerified || false,
         phoneVerifiedAt: user.phoneVerifiedAt,
@@ -230,7 +235,7 @@ const getProfile = async (req, res) => {
     const userId = req.user.id;
 
     const user = await User.findByPk(userId, {
-      attributes: ['id', 'email', 'name', 'phoneNumber', 'createdAt']
+      attributes: ['id', 'email', 'name', 'nickname', 'phoneNumber', 'createdAt']
     });
 
     if (!user) {
@@ -241,6 +246,7 @@ const getProfile = async (req, res) => {
       id: user.id,
       email: user.email,
       name: user.name,
+      nickname: user.nickname,
       phoneNumber: user.phoneNumber,
       createdAt: user.createdAt
     });

@@ -57,6 +57,10 @@ const kakaoLogin = async (req, res) => {
     const { id: kakaoId, kakao_account } = kakaoUser;
     const { email, profile } = kakao_account;
 
+    // 닉네임 추출: profile.nickname 우선, 없으면 kakao_account.name
+    const kakaoNickname = profile?.nickname || null;
+    const kakaoName = kakao_account?.name || null;
+
     // 기존 소셜 사용자 확인
     let socialUser = await SocialUser.findOne({
       where: {
@@ -83,7 +87,8 @@ const kakaoLogin = async (req, res) => {
       // 신규 사용자 - 자동 회원가입
       user = await User.create({
         email: email,
-        name: kakao_account.name,
+        name: kakaoName || kakaoNickname,           // 실명 우선, 없으면 닉네임
+        nickname: kakaoNickname || kakaoName,        // 닉네임 우선, 없으면 실명
         profileImageUrl: profile.profile_image_url,
         userType: 'social'
       }, { transaction });
@@ -135,6 +140,7 @@ const kakaoLogin = async (req, res) => {
           id: user.id,
           email: user.email,
           name: user.name,
+          nickname: user.nickname,
           profileImageUrl: user.profileImageUrl,
           userType: user.userType,
           userMode: userMode,

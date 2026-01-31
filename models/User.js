@@ -26,6 +26,11 @@ const User = sequelize.define('User', {
     type: DataTypes.STRING(100),
     allowNull: true
   },
+  nickname: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+    comment: '표시 이름 (카카오: profile.nickname, 이메일: 본인인증 name)'
+  },
   phoneNumber: {
     type: DataTypes.STRING(20),
     allowNull: true,

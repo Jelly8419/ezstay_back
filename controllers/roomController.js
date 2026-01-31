@@ -117,7 +117,7 @@ const getRoomById = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'profileImageUrl', 'phoneVerified'],
+          attributes: ['id', 'name', 'nickname', 'profileImageUrl', 'phoneVerified'],
           required: false
         }
       ],

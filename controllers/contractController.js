@@ -466,7 +466,7 @@ const getGuestContracts = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'phoneNumber']
+          attributes: ['id', 'name', 'nickname', 'phoneNumber']
         }
       ],
       order: [['createdAt', 'DESC']]
@@ -503,6 +503,7 @@ const getGuestContracts = async (req, res) => {
           host: {
             id: contract.host.id,
             name: contract.host.name,
+            nickname: contract.host.nickname,
             phoneNumber: contract.host.phoneNumber
           },
 
@@ -553,7 +554,7 @@ const getHostContracts = async (req, res) => {
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'phoneNumber', 'email']
+          attributes: ['id', 'name', 'nickname', 'phoneNumber', 'email']
         }
       ],
       order: [['createdAt', 'DESC']]
@@ -611,6 +612,7 @@ const getHostContracts = async (req, res) => {
           guest: {
             id: contract.guest.id,
             name: contract.guest.name,
+            nickname: contract.guest.nickname,
             phoneNumber: contract.guest.phoneNumber,
             email: contract.guest.email
           },
@@ -651,12 +653,12 @@ const getContractDetail = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'phoneNumber', 'email']
+          attributes: ['id', 'name', 'nickname', 'phoneNumber', 'email']
         },
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'phoneNumber', 'email']
+          attributes: ['id', 'name', 'nickname', 'phoneNumber', 'email']
         }
       ]
     });
@@ -741,6 +743,7 @@ const getContractDetail = async (req, res) => {
           host: {
             id: contract.host.id,
             name: contract.host.name,
+            nickname: contract.host.nickname,
             phoneNumber: contract.host.phoneNumber,
             email: contract.host.email
           },
@@ -749,6 +752,7 @@ const getContractDetail = async (req, res) => {
           guest: {
             id: contract.guest.id,
             name: contract.guest.name,
+            nickname: contract.guest.nickname,
             phoneNumber: contract.guest.phoneNumber,
             email: contract.guest.email
           },
@@ -888,12 +892,12 @@ const approveContract = async (req, res) => {
 
       // 호스트/게스트 정보 조회
       const host = await User.findByPk(contract.hostId, {
-        attributes: ['id', 'name', 'profileImageUrl'],
+        attributes: ['id', 'name', 'nickname', 'profileImageUrl'],
         transaction
       });
 
       const guest = await User.findByPk(contract.guestId, {
-        attributes: ['id', 'name', 'profileImageUrl'],
+        attributes: ['id', 'name', 'nickname', 'profileImageUrl'],
         transaction
       });
 
@@ -920,11 +924,13 @@ const approveContract = async (req, res) => {
         hostInfo: {
           id: host.id,
           name: host.name,
+          nickname: host.nickname,
           profileImageUrl: host.profileImageUrl
         },
         guestInfo: {
           id: guest.id,
           name: guest.name,
+          nickname: guest.nickname,
           profileImageUrl: guest.profileImageUrl
         },
         checkInDate: contract.checkInDate,
@@ -1591,7 +1597,7 @@ const getPaymentInfo = async (req, res) => {
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'email']
+          attributes: ['id', 'name', 'nickname', 'email']
         }
       ]
     });

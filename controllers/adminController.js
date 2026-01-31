@@ -132,7 +132,7 @@ const getRecentActivities = async (req, res) => {
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'email']
+          attributes: ['id', 'name', 'nickname', 'email']
         },
         {
           model: Room,
@@ -179,6 +179,7 @@ const getUsers = async (req, res) => {
       where[Op.or] = [
         { email: { [Op.like]: `%${search}%` } },
         { name: { [Op.like]: `%${search}%` } },
+        { nickname: { [Op.like]: `%${search}%` } },
         { phoneNumber: { [Op.like]: `%${search}%` } }
       ];
     }
@@ -373,7 +374,7 @@ const getProperties = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'email', 'phoneNumber']
+          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
         },
         {
           model: RoomPhoto,
@@ -418,7 +419,7 @@ const getPendingReviews = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'email', 'phoneNumber']
+          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
         },
         {
           model: RoomPhoto,
@@ -549,7 +550,7 @@ const getPropertyDetail = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'email', 'phoneNumber', 'phoneVerified'],
+          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber', 'phoneVerified'],
           include: [
             {
               model: UserBankAccount,
@@ -692,12 +693,12 @@ const getReservations = async (req, res) => {
       {
         model: User,
         as: 'guest',
-        attributes: ['id', 'name', 'email', 'phoneNumber']
+        attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
       },
       {
         model: User,
         as: 'host',
-        attributes: ['id', 'name', 'email']
+        attributes: ['id', 'name', 'nickname', 'email']
       },
       {
         model: Room,
@@ -809,7 +810,7 @@ const getRoomManagementDetail = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'email', 'phoneNumber']
+          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
         },
         {
           model: Contract,
@@ -822,7 +823,7 @@ const getRoomManagementDetail = async (req, res) => {
             {
               model: User,
               as: 'guest',
-              attributes: ['id', 'name', 'phoneNumber']
+              attributes: ['id', 'name', 'nickname', 'phoneNumber']
             }
           ],
           order: [['check_in_date', 'DESC']]
@@ -1338,7 +1339,7 @@ const getRefunds = async (req, res) => {
             {
               model: User,
               as: 'guest',
-              attributes: ['id', 'name', 'phoneNumber', 'email']
+              attributes: ['id', 'name', 'nickname', 'phoneNumber', 'email']
             }
           ]
         }
@@ -1432,12 +1433,12 @@ const getRefundDetail = async (req, res) => {
             {
               model: User,
               as: 'host',
-              attributes: ['id', 'name', 'phoneNumber', 'email']
+              attributes: ['id', 'name', 'nickname', 'phoneNumber', 'email']
             },
             {
               model: User,
               as: 'guest',
-              attributes: ['id', 'name', 'phoneNumber', 'email']
+              attributes: ['id', 'name', 'nickname', 'phoneNumber', 'email']
             }
           ]
         }

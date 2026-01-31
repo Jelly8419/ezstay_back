@@ -62,12 +62,12 @@ const createChatRoom = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'email', 'profileImageUrl']
+          attributes: ['id', 'name', 'nickname', 'email', 'profileImageUrl']
         },
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'email', 'profileImageUrl']
+          attributes: ['id', 'name', 'nickname', 'email', 'profileImageUrl']
         }
       ]
     });
@@ -126,11 +126,13 @@ const createChatRoom = async (req, res) => {
       hostInfo: {
         id: contract.host.id,
         name: contract.host.name,
+        nickname: contract.host.nickname,
         profileImageUrl: contract.host.profileImageUrl
       },
       guestInfo: {
         id: contract.guest.id,
         name: contract.guest.name,
+        nickname: contract.guest.nickname,
         profileImageUrl: contract.guest.profileImageUrl
       },
       checkInDate: contract.checkInDate,
@@ -203,12 +205,12 @@ const getMyChatRooms = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'email', 'profileImageUrl']
+          attributes: ['id', 'name', 'nickname', 'email', 'profileImageUrl']
         },
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'email', 'profileImageUrl']
+          attributes: ['id', 'name', 'nickname', 'email', 'profileImageUrl']
         }
       ],
       order: [['updatedAt', 'DESC']]
@@ -268,12 +270,12 @@ const getChatRoomDetail = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'email', 'profileImageUrl', 'phoneNumber']
+          attributes: ['id', 'name', 'nickname', 'email', 'profileImageUrl', 'phoneNumber']
         },
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'email', 'profileImageUrl', 'phoneNumber']
+          attributes: ['id', 'name', 'nickname', 'email', 'profileImageUrl', 'phoneNumber']
         }
       ]
     });
@@ -332,12 +334,12 @@ const getChatRoomByContractId = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'profileImageUrl']
+          attributes: ['id', 'name', 'nickname', 'profileImageUrl']
         },
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'profileImageUrl']
+          attributes: ['id', 'name', 'nickname', 'profileImageUrl']
         }
       ]
     });
@@ -358,12 +360,12 @@ const getChatRoomByContractId = async (req, res) => {
           {
             model: User,
             as: 'host',
-            attributes: ['id', 'name', 'profileImageUrl']
+            attributes: ['id', 'name', 'nickname', 'profileImageUrl']
           },
           {
             model: User,
             as: 'guest',
-            attributes: ['id', 'name', 'profileImageUrl']
+            attributes: ['id', 'name', 'nickname', 'profileImageUrl']
           }
         ]
       });
@@ -416,11 +418,13 @@ const getChatRoomByContractId = async (req, res) => {
           hostInfo: {
             id: contract.host.id,
             name: contract.host.name,
+            nickname: contract.host.nickname,
             profileImageUrl: contract.host.profileImageUrl
           },
           guestInfo: {
             id: contract.guest.id,
             name: contract.guest.name,
+            nickname: contract.guest.nickname,
             profileImageUrl: contract.guest.profileImageUrl
           },
           checkInDate: contract.checkInDate,
@@ -448,12 +452,12 @@ const getChatRoomByContractId = async (req, res) => {
             {
               model: User,
               as: 'host',
-              attributes: ['id', 'name', 'profileImageUrl']
+              attributes: ['id', 'name', 'nickname', 'profileImageUrl']
             },
             {
               model: User,
               as: 'guest',
-              attributes: ['id', 'name', 'profileImageUrl']
+              attributes: ['id', 'name', 'nickname', 'profileImageUrl']
             }
           ]
         });
