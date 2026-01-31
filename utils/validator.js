@@ -17,26 +17,26 @@ const validateEmail = (email) => {
 
 /**
  * 비밀번호 유효성 검증
- * - 최소 8자 이상
- * - 대문자, 소문자, 숫자 포함 (특수문자 선택)
+ * - 8~16자 이내
+ * - 영문자, 숫자, 특수문자 각 1개 이상 포함 필수
  */
 const validatePassword = (password) => {
   if (!password) {
     return { valid: false, message: '비밀번호를 입력해주세요.' };
   }
 
-  if (password.length < 8) {
-    return { valid: false, message: '비밀번호는 최소 8자 이상이어야 합니다.' };
+  if (password.length < 8 || password.length > 16) {
+    return { valid: false, message: '비밀번호는 8~16자 이내로 입력해주세요.' };
   }
 
-  const hasUpperCase = /[A-Z]/.test(password);
-  const hasLowerCase = /[a-z]/.test(password);
+  const hasLetter = /[a-zA-Z]/.test(password);
   const hasNumber = /[0-9]/.test(password);
+  const hasSpecialChar = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(password);
 
-  if (!(hasUpperCase && hasLowerCase && hasNumber)) {
+  if (!(hasLetter && hasNumber && hasSpecialChar)) {
     return {
       valid: false,
-      message: '비밀번호는 대문자, 소문자, 숫자를 포함해야 합니다.'
+      message: '비밀번호는 영문자, 숫자, 특수문자를 각각 1개 이상 포함해야 합니다.'
     };
   }
 
