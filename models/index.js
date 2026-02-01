@@ -30,6 +30,9 @@ const PaymentFailureLogModel = require('./PaymentFailureLog');
 const BlockedPeriod = require('./BlockedPeriod');
 const AutoMessageTemplate = require('./AutoMessageTemplate');
 const NotificationLog = require('./NotificationLog');
+const RentalOrder = require('./RentalOrder');
+const RentalOrderItem = require('./RentalOrderItem');
+const RentalOrderLog = require('./RentalOrderLog');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -508,6 +511,94 @@ Room.hasMany(AutoMessageTemplate, {
   as: 'autoMessageTemplates'
 });
 
+// =====================================================
+// RentalOrder 관계 설정 (렌탈 주문 시스템)
+// =====================================================
+
+// Contract ↔ RentalOrder
+Contract.hasMany(RentalOrder, {
+  foreignKey: 'contractId',
+  as: 'rentalOrders',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+RentalOrder.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// RentalOrder ↔ RentalOrderItem
+RentalOrder.hasMany(RentalOrderItem, {
+  foreignKey: 'rentalOrderId',
+  as: 'items',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+RentalOrderItem.belongsTo(RentalOrder, {
+  foreignKey: 'rentalOrderId',
+  as: 'order',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+
+// RentalOrderItem ↔ RentalItem
+RentalOrderItem.belongsTo(RentalItem, {
+  foreignKey: 'rentalItemId',
+  as: 'rentalItem',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+RentalItem.hasMany(RentalOrderItem, {
+  foreignKey: 'rentalItemId',
+  as: 'orderItems',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// RentalOrder ↔ RentalOrderLog
+RentalOrder.hasMany(RentalOrderLog, {
+  foreignKey: 'rentalOrderId',
+  as: 'logs',
+  onDelete: 'SET NULL',
+  onUpdate: 'CASCADE'
+});
+RentalOrderLog.belongsTo(RentalOrder, {
+  foreignKey: 'rentalOrderId',
+  as: 'order',
+  onDelete: 'SET NULL',
+  onUpdate: 'CASCADE'
+});
+
+// Contract ↔ RentalOrderLog (빠른 조회용)
+Contract.hasMany(RentalOrderLog, {
+  foreignKey: 'contractId',
+  as: 'rentalLogs',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+RentalOrderLog.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// RentalItemReservation ↔ RentalOrder
+RentalItemReservation.belongsTo(RentalOrder, {
+  foreignKey: 'rentalOrderId',
+  as: 'rentalOrder',
+  onDelete: 'SET NULL',
+  onUpdate: 'CASCADE'
+});
+RentalOrder.hasMany(RentalItemReservation, {
+  foreignKey: 'rentalOrderId',
+  as: 'reservations',
+  onDelete: 'SET NULL',
+  onUpdate: 'CASCADE'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -542,5 +633,8 @@ module.exports = {
   PaymentFailureLog,
   BlockedPeriod,
   AutoMessageTemplate,
-  NotificationLog
+  NotificationLog,
+  RentalOrder,
+  RentalOrderItem,
+  RentalOrderLog
 };

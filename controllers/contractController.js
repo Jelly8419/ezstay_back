@@ -1,4 +1,4 @@
-const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalItemReservation, RentalItem } = require('../models');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const axios = require('axios');
 const {
@@ -15,6 +15,11 @@ const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/syste
 const { calculateRefund } = require('../utils/refundCalculator');
 const { generateOrderId } = require('../utils/orderIdGenerator');
 const { sendContractConfirmedMessages } = require('../schedulers/autoMessageScheduler');
+const {
+  createInitialRentalOrder,
+  confirmRentalOrderPayment,
+  getContractRentalSummary
+} = require('../utils/rentalOrderHelper');
 
 /**
  * 계약 요청 생성 (게스트 -> 호스트)
@@ -334,9 +339,20 @@ const createContractRequest = async (req, res) => {
       { transaction }
     );
 
-    // 9. 렌탈 아이템 임시 예약 (재고 차감)
+    // 9. 렌탈 아이템 임시 예약 (RentalOrder 시스템으로 처리)
+    // 기존: reserveRentalItems() 사용
+    // 변경: createInitialRentalOrder() 사용하여 RentalOrder(INITIAL) 생성
+    let initialRentalOrder = null;
     if (rentalItems && Array.isArray(rentalItems) && rentalItems.length > 0) {
-      await reserveRentalItems(contract.id, rentalItems, checkInDate, checkOutDate, transaction);
+      initialRentalOrder = await createInitialRentalOrder(
+        contract.id,
+        rentalItems,
+        checkInDate,
+        checkOutDate,
+        guestId,
+        req,
+        transaction
+      );
     }
 
     // 10. 상태 변경 로그 기록
@@ -472,10 +488,55 @@ const getGuestContracts = async (req, res) => {
       order: [['createdAt', 'DESC']]
     });
 
-    return success(
-      res,
-      {
-        contracts: contracts.map(contract => ({
+    // 각 계약의 렌탈 아이템 요약 정보 조회 (병렬 처리)
+    const contractsWithRental = await Promise.all(
+      contracts.map(async (contract) => {
+        // 렌탈 아이템 데이터 결정
+        // - 결제 전(PENDING_APPROVAL, APPROVED): contracts.rental_items JSON 사용 (장바구니)
+        // - 결제 후: rental_orders 테이블에서 조회 (실제 주문)
+        let rentalItemsData = null;
+
+        // 결제 전 상태 (장바구니에서 조회)
+        const prePaymentStatuses = ['PENDING_APPROVAL', 'APPROVED'];
+
+        if (prePaymentStatuses.includes(contract.status)) {
+          // 결제 전: contracts.rental_items JSON에서 가져오기
+          const cartItems = contract.rentalItems;
+          if (cartItems && Array.isArray(cartItems) && cartItems.length > 0) {
+            rentalItemsData = {
+              source: 'cart',  // 장바구니 (아직 결제 전)
+              totalAmount: contract.rentalItemsFee || 0,
+              items: cartItems.map(item => ({
+                itemId: item.itemId,
+                name: item.name,
+                quantity: item.quantity,
+                pricePerItem: item.price,
+                totalPrice: item.totalPrice,
+                imageUrl: item.imageUrl
+              }))
+            };
+          }
+        } else {
+          // 결제 후: rental_orders에서 조회
+          const rentalSummary = await getContractRentalSummary(contract.id);
+          if (rentalSummary && rentalSummary.activeItems.length > 0) {
+            rentalItemsData = {
+              source: 'orders',  // 실제 주문
+              totalPaid: rentalSummary.totalPaid,
+              totalRefunded: rentalSummary.totalRefunded,
+              netAmount: rentalSummary.netAmount,
+              items: rentalSummary.activeItems.map(item => ({
+                name: item.name,
+                quantity: item.quantity,
+                pricePerItem: item.pricePerItem,
+                totalPrice: item.totalPrice,
+                imageUrl: item.imageUrl
+              }))
+            };
+          }
+        }
+
+        return {
           id: contract.id,
           orderId: contract.orderId,
           status: contract.status,
@@ -507,8 +568,18 @@ const getGuestContracts = async (req, res) => {
             phoneNumber: contract.host.phoneNumber
           },
 
+          // 🛒 렌탈 아이템 정보
+          rentalItems: rentalItemsData,
+
           createdAt: contract.createdAt
-        }))
+        };
+      })
+    );
+
+    return success(
+      res,
+      {
+        contracts: contractsWithRental
       },
       '계약 목록 조회 성공'
     );
@@ -672,6 +743,9 @@ const getContractDetail = async (req, res) => {
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
+    // 렌탈 주문 정보 조회
+    const rentalSummary = await getContractRentalSummary(contract.id);
+
     return success(
       res,
       {
@@ -701,9 +775,12 @@ const getContractDetail = async (req, res) => {
           deposit: contract.deposit,
           finalTotalAmount: contract.finalTotalAmount,
 
-          // 렌탈 아이템
+          // 렌탈 아이템 (레거시 - 하위호환용)
           rentalItems: contract.rentalItems,
           recommendedItems: contract.recommendedItems,
+
+          // 렌탈 주문 정보 (신규 시스템)
+          rentalOrders: rentalSummary,
 
           // 결제 정보
           paymentMethod: contract.paymentMethod,
@@ -1616,18 +1693,61 @@ const getPaymentInfo = async (req, res) => {
       return error(res, ErrorCodes.ALREADY_PAID, 400);
     }
 
-    return success(
-      res,
-      {
+    // 렌탈 주문 조회 (INITIAL 타입, PENDING 상태)
+    const initialRentalOrder = await RentalOrder.findOne({
+      where: {
         contractId: contract.id,
-        orderId: contract.orderId,
-        amount: contract.finalTotalAmount,
-        orderName: `${contract.room.roomName} (${contract.totalDays}박)`,
-        customerEmail: contract.guest.email,
-        customerName: contract.guest.name
+        orderType: 'INITIAL',
+        status: 'PENDING'
       },
-      '결제 정보를 조회했습니다.'
-    );
+      include: [{
+        model: RentalOrderItem,
+        as: 'items',
+        where: { status: 'ACTIVE' },
+        required: false,
+        include: [{
+          model: RentalItem,
+          as: 'rentalItem',
+          attributes: ['id', 'name']
+        }]
+      }]
+    });
+
+    // 응답 데이터 구성
+    const responseData = {
+      contractId: contract.id,
+      orderId: contract.orderId,
+      contractAmount: contract.finalTotalAmount,
+      orderName: `${contract.room.roomName} (${contract.totalDays}박)`,
+      customerEmail: contract.guest.email,
+      customerName: contract.guest.name
+    };
+
+    // 렌탈 주문이 있으면 정보 추가
+    if (initialRentalOrder) {
+      responseData.rentalOrder = {
+        rentalOrderId: initialRentalOrder.rentalOrderId,
+        totalAmount: parseFloat(initialRentalOrder.totalAmount),
+        items: initialRentalOrder.items?.map(item => ({
+          id: item.id,
+          name: item.rentalItem?.name,
+          quantity: item.quantity,
+          pricePerItem: parseFloat(item.pricePerItem),
+          totalPrice: parseFloat(item.totalPrice)
+        })) || []
+      };
+      responseData.rentalAmount = parseFloat(initialRentalOrder.totalAmount);
+    } else {
+      responseData.rentalAmount = 0;
+    }
+
+    // 총 결제 금액
+    responseData.totalAmount = responseData.contractAmount + responseData.rentalAmount;
+
+    // 기존 호환성 유지 (amount 필드)
+    responseData.amount = responseData.totalAmount;
+
+    return success(res, responseData, '결제 정보를 조회했습니다.');
   } catch (err) {
     console.error('결제 정보 조회 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
@@ -1789,6 +1909,26 @@ const confirmPayment = async (req, res) => {
       transaction
     });
 
+    // 렌탈 주문이 있으면 함께 결제 처리
+    const initialRentalOrder = await RentalOrder.findOne({
+      where: {
+        contractId: contract.id,
+        orderType: 'INITIAL',
+        status: 'PENDING'
+      },
+      transaction
+    });
+
+    if (initialRentalOrder) {
+      await confirmRentalOrderPayment(
+        initialRentalOrder.id,
+        paymentData.paymentKey,
+        req,
+        transaction
+      );
+      console.log(`✅ 렌탈 주문 결제 완료: rentalOrderId=${initialRentalOrder.id}`);
+    }
+
     // 채팅방에 시스템 메시지 전송
     const chatRoom = await ChatRoom.findOne({
       where: { contractId: contract.id },
@@ -1815,27 +1955,203 @@ const confirmPayment = async (req, res) => {
 
     console.log(`✅ 결제 승인 완료: contractId=${contract.id}, paymentKey=${payment.paymentKey}`);
 
-    return success(
-      res,
-      {
-        contractId: contract.id,
-        orderId: contract.orderId,
-        status: contract.status,
-        payment: {
-          paymentKey: payment.paymentKey,
-          method: payment.method,
-          status: payment.status,
-          totalAmount: payment.totalAmount,
-          approvedAt: payment.approvedAt,
-          receiptUrl: payment.receiptUrl
-        }
-      },
-      '결제가 완료되었습니다'
-    );
+    // 응답 데이터 구성
+    const responseData = {
+      contractId: contract.id,
+      orderId: contract.orderId,
+      status: contract.status,
+      payment: {
+        paymentKey: payment.paymentKey,
+        method: payment.method,
+        status: payment.status,
+        totalAmount: payment.totalAmount,
+        approvedAt: payment.approvedAt,
+        receiptUrl: payment.receiptUrl
+      }
+    };
+
+    // 렌탈 주문 정보 추가
+    if (initialRentalOrder) {
+      responseData.rentalOrder = {
+        rentalOrderId: initialRentalOrder.rentalOrderId,
+        totalAmount: parseFloat(initialRentalOrder.totalAmount),
+        status: 'PAID'
+      };
+    }
+
+    return success(res, responseData, '결제가 완료되었습니다');
 
   } catch (err) {
     await transaction.rollback();
     console.error('결제 승인 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 승인 대기 중인 계약의 렌탈 아이템 업데이트 (장바구니 기능)
+ * PATCH /api/contracts/:contractId/rental-items
+ *
+ * @description
+ * - PENDING_APPROVAL 상태에서만 사용 가능 (결제 전 장바구니 수정)
+ * - contracts.rental_items JSON 필드만 업데이트 (RentalOrder 생성 없음)
+ * - rentalItemsFee도 함께 재계산
+ * - 재고 검증 포함
+ */
+const updatePendingRentalItems = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { contractId } = req.params;
+    const { rentalItems } = req.body; // [{ itemId, quantity }, ...]
+    const guestId = req.user.id;
+
+    // 1. 계약 조회
+    const contract = await Contract.findByPk(contractId, { transaction });
+
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    // 2. 게스트 본인 확인
+    if (contract.guestId !== guestId) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    // 3. PENDING_APPROVAL 상태 확인
+    if (contract.status !== 'PENDING_APPROVAL') {
+      await transaction.rollback();
+      return error(res, {
+        code: 4710,
+        message: '승인 대기 상태에서만 렌탈 아이템을 수정할 수 있습니다'
+      }, 400, {
+        currentStatus: contract.status,
+        allowedStatus: 'PENDING_APPROVAL',
+        hint: '승인 이후에는 추가 렌탈 주문 API를 사용하세요'
+      });
+    }
+
+    // 4. 입주 5일 전 체크
+    const now = new Date();
+    const checkInDate = new Date(contract.checkInDate);
+    const modifiableUntil = new Date(checkInDate);
+    modifiableUntil.setDate(modifiableUntil.getDate() - 5);
+    modifiableUntil.setHours(23, 59, 59, 999);
+
+    if (now > modifiableUntil) {
+      await transaction.rollback();
+      return error(res, {
+        code: 4701,
+        message: '입주 5일 전까지만 렌탈 아이템을 수정할 수 있습니다'
+      }, 400, {
+        checkInDate: contract.checkInDate,
+        modifiableUntil: modifiableUntil.toISOString()
+      });
+    }
+
+    // 5. 렌탈 아이템이 비어있으면 null로 저장
+    if (!rentalItems || !Array.isArray(rentalItems) || rentalItems.length === 0) {
+      await contract.update({
+        rentalItems: null,
+        rentalItemsFee: 0
+      }, { transaction });
+
+      await transaction.commit();
+
+      return success(res, {
+        contractId: contract.id,
+        rentalItems: null,
+        rentalItemsFee: 0
+      }, '렌탈 아이템이 모두 삭제되었습니다');
+    }
+
+    // 6. 재고 검증
+    const stockValidation = await validateRentalItemsStock(
+      rentalItems,
+      contract.checkInDate,
+      contract.checkOutDate,
+      transaction
+    );
+
+    if (!stockValidation.available) {
+      await transaction.rollback();
+      return error(res, {
+        code: 4702,
+        message: '일부 렌탈 아이템의 재고가 부족합니다'
+      }, 400, {
+        unavailableItems: stockValidation.unavailableItems
+      });
+    }
+
+    // 7. 렌탈 아이템 상세 정보 조회 및 JSON 구성
+    const itemDetails = [];
+    let totalRentalFee = 0;
+
+    for (const item of rentalItems) {
+      const rentalItem = await RentalItem.findByPk(item.itemId, { transaction });
+
+      if (!rentalItem) {
+        await transaction.rollback();
+        return error(res, {
+          code: 4703,
+          message: `렌탈 아이템(ID: ${item.itemId})을 찾을 수 없습니다`
+        }, 404);
+      }
+
+      if (!rentalItem.isActive) {
+        await transaction.rollback();
+        return error(res, {
+          code: 4704,
+          message: `${rentalItem.name}은(는) 현재 대여 불가능합니다`
+        }, 400);
+      }
+
+      const itemPrice = parseFloat(rentalItem.price);
+      const itemTotalPrice = itemPrice * item.quantity;
+      totalRentalFee += itemTotalPrice;
+
+      itemDetails.push({
+        itemId: rentalItem.id,
+        name: rentalItem.name,
+        description: rentalItem.description,
+        imageUrl: rentalItem.imageUrl,
+        price: itemPrice,
+        quantity: item.quantity,
+        totalPrice: itemTotalPrice
+      });
+    }
+
+    // 8. 계약 업데이트 (rentalItems, rentalItemsFee, finalTotalAmount 재계산)
+    const newFinalTotal =
+      (contract.subtotal || 0) -
+      (contract.discountAmount || 0) +
+      (contract.platformFee || 0) +
+      (contract.deposit || 0) -
+      (contract.rentalItemsFee || 0) +  // 기존 렌탈비 제거
+      totalRentalFee;  // 새 렌탈비 추가
+
+    await contract.update({
+      rentalItems: itemDetails,
+      rentalItemsFee: totalRentalFee,
+      finalTotalAmount: newFinalTotal
+    }, { transaction });
+
+    await transaction.commit();
+
+    return success(res, {
+      contractId: contract.id,
+      rentalItems: itemDetails,
+      rentalItemsFee: totalRentalFee,
+      finalTotalAmount: newFinalTotal,
+      itemCount: itemDetails.length,
+      totalQuantity: itemDetails.reduce((sum, item) => sum + item.quantity, 0)
+    }, '렌탈 아이템이 업데이트되었습니다');
+
+  } catch (err) {
+    await transaction.rollback();
+    console.error('렌탈 아이템 업데이트 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
 };
@@ -1852,5 +2168,6 @@ module.exports = {
   requestRefund,
   getContractRefunds,
   getPaymentInfo,
-  confirmPayment
+  confirmPayment,
+  updatePendingRentalItems
 };

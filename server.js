@@ -173,6 +173,7 @@ const refundRoutes = require('./routes/refundRoutes');
 const rentalItemRoutes = require('./routes/rentalItemRoutes');
 const { adminRouter: rentalItemAdminRoutes } = require('./routes/rentalItemRoutes');
 const scheduleRoutes = require('./routes/scheduleRoutes');
+const rentalOrderRoutes = require('./routes/rentalOrderRoutes');
 
 app.use('/api/rooms', roomRoutes);
 app.use('/api/auth', authRoutes);
@@ -187,6 +188,7 @@ app.use('/api/support', supportRoutes);
 app.use('/api', refundRoutes);
 app.use('/api/rental-items', rentalItemRoutes);  // 게스트용 공개 API
 app.use('/api/admin/rental-items', rentalItemAdminRoutes);  // 관리자용 API
+app.use('/api', rentalOrderRoutes);  // 렌탈 주문 API
 
 app.get('/', (req, res) => {
   res.json({ message: 'Rental API Server is running!' });

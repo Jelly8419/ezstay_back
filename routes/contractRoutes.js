@@ -13,7 +13,8 @@ const {
   requestRefund,
   getContractRefunds,
   getPaymentInfo,
-  confirmPayment
+  confirmPayment,
+  updatePendingRentalItems
 } = require('../controllers/contractController');
 const { confirmPaymentMock } = require('../controllers/mockPaymentController');
 
@@ -76,6 +77,24 @@ router.get('/host', authenticateToken, getHostContracts);
  * GET /api/contracts/:contractId
  */
 router.get('/:contractId', authenticateToken, getContractDetail);
+
+/**
+ * 승인 대기 중인 계약의 렌탈 아이템 수정 (장바구니)
+ * PATCH /api/contracts/:contractId/rental-items
+ *
+ * @description PENDING_APPROVAL 상태에서만 사용 가능 (결제 전 장바구니)
+ * @access 게스트
+ * @body { rentalItems: [{ itemId: number, quantity: number }] }
+ *
+ * 응답:
+ * {
+ *   "contractId": 123,
+ *   "rentalItems": [{ itemId, name, price, quantity, totalPrice, ... }],
+ *   "rentalItemsFee": 50000,
+ *   "finalTotalAmount": 1608000
+ * }
+ */
+router.patch('/:contractId/rental-items', authenticateToken, updatePendingRentalItems);
 
 /**
  * 호스트가 계약 승인
