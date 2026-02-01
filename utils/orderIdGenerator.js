@@ -27,45 +27,23 @@ async function generateOrderId(transaction = null) {
       String(today.getDate()).padStart(2, '0')
     ].join('');
 
-    // 1. 오늘 날짜의 시퀀스 레코드 조회 (FOR UPDATE로 락 획득)
-    let sequence = await ContractSequence.findOne({
+    // 1. UPSERT: 레코드가 없으면 생성, 있으면 가져오기 (원자적 처리)
+    const [sequence, created] = await ContractSequence.findOrCreate({
       where: { dateKey },
-      lock: t.LOCK.UPDATE, // Row Lock (동시성 제어)
+      defaults: { lastNumber: 0 },
       transaction: t
     });
 
-    let currentNumber;
+    // 2. 원자적으로 +1 증가 (Race Condition 방지)
+    await ContractSequence.increment('lastNumber', {
+      by: 1,
+      where: { dateKey },
+      transaction: t
+    });
 
-    // 2. 없으면 생성 (첫 번째 주문)
-    if (!sequence) {
-      sequence = await ContractSequence.create(
-        {
-          dateKey,
-          lastNumber: 1
-        },
-        { transaction: t }
-      );
-      currentNumber = 1;
-    } else {
-      // 3. 있으면 증가 (원자적 연산으로 안전하게 처리)
-      const [updatedRows] = await ContractSequence.update(
-        {
-          lastNumber: sequelize.literal('last_number + 1')
-        },
-        {
-          where: { dateKey },
-          transaction: t
-        }
-      );
-
-      // 업데이트된 값을 다시 조회 (FOR UPDATE 락 유지)
-      await sequence.reload({
-        lock: t.LOCK.UPDATE,
-        transaction: t
-      });
-
-      currentNumber = sequence.lastNumber;
-    }
+    // 3. 증가된 값 다시 조회
+    await sequence.reload({ transaction: t });
+    const currentNumber = sequence.lastNumber;
 
     // 4. 최대값 체크 (99999 초과 방지)
     if (currentNumber > 99999) {
