@@ -174,7 +174,33 @@ const createContractRequest = async (req, res) => {
       }
     }
 
-    // 6. 렌탈 아이템 재고 확인
+    // 6. 렌탈 아이템 6일 정책 검증
+    // 입주일(checkInDate)로부터 현재 시점이 6일 이내라면 렌탈 아이템 신청 불가
+    if (rentalItems && Array.isArray(rentalItems) && rentalItems.length > 0) {
+      const now = new Date();
+      const checkIn = new Date(checkInDate);
+      const diffMs = checkIn.getTime() - now.getTime();
+      const diffDays = diffMs / (1000 * 60 * 60 * 24);
+
+      // 6일 이내인 경우 (예: 1월31일 14:00 입주, 1월25일 15:00 요청 → 약 5.96일 → 6일 이내)
+      if (diffDays < 6) {
+        await transaction.rollback();
+        return error(
+          res,
+          ErrorCodes.RENTAL_NOT_AVAILABLE_WITHIN_6_DAYS,
+          400,
+          {
+            checkInDate,
+            requestedAt: now.toISOString(),
+            daysUntilCheckIn: Math.floor(diffDays * 100) / 100, // 소수점 2자리
+            minimumDaysRequired: 6,
+            hint: '렌탈 아이템 없이 계약을 진행하거나, 입주 후 추가 렌탈 주문을 이용해주세요.'
+          }
+        );
+      }
+    }
+
+    // 7. 렌탈 아이템 재고 확인
     const stockValidation = await validateRentalItemsStock(
       roomId,
       rentalItems,
@@ -193,7 +219,7 @@ const createContractRequest = async (req, res) => {
       );
     }
 
-    // 7. 금액 재계산 및 검증
+    // 8. 금액 재계산 및 검증
     // EZ청소서비스 사용 시 면적 기반 계산: 기본 5만원 + 10평 초과 시 10평당 2만원
     const serverCalculated = {
       rentalFee: room.dailyRent * totalDays,
@@ -282,10 +308,10 @@ const createContractRequest = async (req, res) => {
       );
     }
 
-    // 8. 주문번호 생성 (yymmdd + 00001)
+    // 9. 주문번호 생성 (yymmdd + 00001)
     const orderId = await generateOrderId(transaction);
 
-    // 9. 계약 요청 생성
+    // 10. 계약 요청 생성
     const contract = await Contract.create(
       {
         orderId,
@@ -339,7 +365,7 @@ const createContractRequest = async (req, res) => {
       { transaction }
     );
 
-    // 9. 렌탈 아이템 임시 예약 (RentalOrder 시스템으로 처리)
+    // 11. 렌탈 아이템 임시 예약 (RentalOrder 시스템으로 처리)
     // 기존: reserveRentalItems() 사용
     // 변경: createInitialRentalOrder() 사용하여 RentalOrder(INITIAL) 생성
     let initialRentalOrder = null;
@@ -355,7 +381,7 @@ const createContractRequest = async (req, res) => {
       );
     }
 
-    // 10. 상태 변경 로그 기록
+    // 12. 상태 변경 로그 기록
     await ContractStatusLog.createLog({
       contractId: contract.id,
       fromStatus: null,  // 최초 생성
@@ -374,10 +400,10 @@ const createContractRequest = async (req, res) => {
       transaction
     });
 
-    // 11. TODO: 호스트에게 알림 전송 (추후 구현)
+    // 13. TODO: 호스트에게 알림 전송 (추후 구현)
     // await sendNotificationToHost(room.hostId, { ... });
 
-    // 12. [개발 환경 전용] 자동 승인 기능
+    // 14. [개발 환경 전용] 자동 승인 기능
     let finalStatus = contract.status;
     if (process.env.AUTO_APPROVE_CONTRACTS === 'true' && process.env.NODE_ENV !== 'production') {
       await contract.update({
@@ -1989,14 +2015,15 @@ const confirmPayment = async (req, res) => {
 };
 
 /**
- * 승인 대기 중인 계약의 렌탈 아이템 업데이트 (장바구니 기능)
+ * 결제 전 계약의 렌탈 아이템 업데이트 (장바구니 기능)
  * PATCH /api/contracts/:contractId/rental-items
  *
  * @description
- * - PENDING_APPROVAL 상태에서만 사용 가능 (결제 전 장바구니 수정)
+ * - PENDING_APPROVAL, APPROVED 상태에서 사용 가능 (결제 전 장바구니 수정)
  * - contracts.rental_items JSON 필드만 업데이트 (RentalOrder 생성 없음)
  * - rentalItemsFee도 함께 재계산
  * - 재고 검증 포함
+ * - 결제 완료 후에는 /api/contracts/:contractId/rental-orders API 사용
  */
 const updatePendingRentalItems = async (req, res) => {
   const transaction = await sequelize.transaction();
@@ -2020,16 +2047,17 @@ const updatePendingRentalItems = async (req, res) => {
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
-    // 3. PENDING_APPROVAL 상태 확인
-    if (contract.status !== 'PENDING_APPROVAL') {
+    // 3. 결제 전 상태 확인 (PENDING_APPROVAL, APPROVED만 허용)
+    const prePaymentStatuses = ['PENDING_APPROVAL', 'APPROVED'];
+    if (!prePaymentStatuses.includes(contract.status)) {
       await transaction.rollback();
       return error(res, {
         code: 4710,
-        message: '승인 대기 상태에서만 렌탈 아이템을 수정할 수 있습니다'
+        message: '결제 전 상태에서만 렌탈 아이템을 수정할 수 있습니다'
       }, 400, {
         currentStatus: contract.status,
-        allowedStatus: 'PENDING_APPROVAL',
-        hint: '승인 이후에는 추가 렌탈 주문 API를 사용하세요'
+        allowedStatuses: prePaymentStatuses,
+        hint: '결제 완료 후에는 추가 렌탈 주문 API(/api/contracts/:contractId/rental-orders)를 사용하세요'
       });
     }
 

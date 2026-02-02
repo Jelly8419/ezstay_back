@@ -17,8 +17,9 @@ const {
 const RENTAL_MODIFIABLE_DAYS_BEFORE = 5; // 입주 5일 전까지 수정 가능
 
 // 렌탈 추가/수정이 가능한 계약 상태
+// 주의: 결제 전(PENDING_APPROVAL, APPROVED)에는 contracts.rentalItems JSON을 직접 수정하는 별도 API 사용
+//       이 상수는 결제 완료 후 RentalOrder를 통한 추가 렌탈에만 적용됨
 const RENTAL_MODIFIABLE_STATUSES = [
-  'APPROVED',           // 승인됨 (첫 결제 전)
   'PAYMENT_COMPLETED',  // 결제 완료
   'IN_PROGRESS'         // 입주 중
 ];

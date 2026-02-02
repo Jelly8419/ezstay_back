@@ -638,9 +638,15 @@ function checkRentalModifiable(contract) {
 ### 6.2 허용 상태 정의
 
 ```javascript
-// 렌탈 추가/수정이 가능한 계약 상태
+// 결제 전 렌탈 수정 (contracts.rentalItems JSON 직접 수정)
+// - PENDING_APPROVAL: 승인 대기 중, 장바구니 수정 가능
+// - APPROVED: 승인됨, 결제 전까지 장바구니 수정 가능
+// → 별도 API 사용: PATCH /api/contracts/:contractId/rental-items
+
+// 결제 후 렌탈 추가/수정 (RentalOrder 시스템)
+// - 입주 5일 전까지만 가능
+// - 추가 시 별도 결제, 취소 시 환불 처리
 const RENTAL_MODIFIABLE_STATUSES = [
-  'APPROVED',           // 승인됨 (첫 결제 전)
   'PAYMENT_COMPLETED',  // 결제 완료
   'IN_PROGRESS'         // 입주 중
 ];
