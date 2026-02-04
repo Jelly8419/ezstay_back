@@ -240,4 +240,24 @@ router.patch(
   adminController.rejectRefund
 );
 
+// ============================================
+// 렌탈 주문 관리
+// ============================================
+
+// 렌탈 주문 목록 조회
+router.get('/rental-orders', adminController.getRentalOrders);
+
+// 렌탈 주문 상세 조회
+router.get('/rental-orders/:rentalOrderId', adminController.getRentalOrderDetail);
+
+// 계약별 렌탈 이력 조회
+router.get('/contracts/:contractId/rental-history', adminController.getContractRentalHistory);
+
+// 관리자 렌탈 아이템 취소 (super_admin, admin만 가능)
+router.post(
+  '/rental-orders/:rentalOrderId/items/:itemId/cancel',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.adminCancelRentalItem
+);
+
 module.exports = router;

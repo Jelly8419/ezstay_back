@@ -156,6 +156,10 @@ startAutoMessageScheduler();
 const cleanupActionLogs = require('./schedulers/cleanupActionLogs');
 cleanupActionLogs();
 
+// 렌탈 주문 만료 스케줄러 시작 (15분 미결제 자동 취소)
+const { startRentalOrderScheduler } = require('./schedulers/rentalOrderScheduler');
+startRentalOrderScheduler();
+
 // Firebase Admin SDK 초기화
 const { initializeFirebase } = require('./config/firebaseAdmin');
 initializeFirebase();

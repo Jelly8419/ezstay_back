@@ -1,4 +1,5 @@
 const { Op } = require('sequelize');
+const axios = require('axios');
 const {
   sequelize,
   Contract,
@@ -7,6 +8,8 @@ const {
   RentalOrderLog,
   RentalItem,
   RentalItemReservation,
+  RentalPayment,
+  RentalPaymentFailureLog,
   Room,
   User
 } = require('../models');
@@ -253,7 +256,7 @@ const getRentalOrderPaymentInfo = async (req, res) => {
 
     // 사용자 정보 조회
     const user = await User.findByPk(userId, {
-      attributes: ['email', 'name', 'phone']
+      attributes: ['email', 'name', 'phoneNumber']
     });
 
     // 주문명 생성
@@ -270,7 +273,7 @@ const getRentalOrderPaymentInfo = async (req, res) => {
       orderName,
       customerEmail: user.email,
       customerName: user.name,
-      customerPhone: user.phone
+      customerPhone: user.phoneNumber
     });
   } catch (err) {
     console.error('렌탈 주문 결제 정보 조회 오류:', err);
@@ -283,6 +286,7 @@ const getRentalOrderPaymentInfo = async (req, res) => {
  * POST /api/rental-orders/:rentalOrderId/confirm-payment
  */
 const confirmRentalPayment = async (req, res) => {
+  console.log('🚀 confirmRentalPayment 호출됨:', req.params.rentalOrderId);
   const transaction = await sequelize.transaction();
 
   try {
@@ -322,8 +326,8 @@ const confirmRentalPayment = async (req, res) => {
       return error(res, ErrorCodes.ORDER_ID_MISMATCH, 400);
     }
 
-    // 금액 확인
-    if (rentalOrder.totalAmount !== amount) {
+    // 금액 확인 (클라이언트 변조 방지)
+    if (rentalOrder.totalAmount !== parseInt(amount, 10)) {
       await transaction.rollback();
       return error(res, ErrorCodes.RENTAL_AMOUNT_MISMATCH, 400);
     }
@@ -334,15 +338,95 @@ const confirmRentalPayment = async (req, res) => {
       return error(res, ErrorCodes.RENTAL_ORDER_NOT_PAYABLE, 400);
     }
 
-    // TODO: 토스페이먼츠 결제 승인 API 호출
-    // const tossResponse = await confirmTossPayment(paymentKey, orderId, amount);
-    // 현재는 결제 성공으로 가정
+    // 토스페이먼츠 API 호출
+    const tossSecretKey = process.env.TOSS_SECRET_KEY;
+    const encodedKey = Buffer.from(`${tossSecretKey}:`).toString('base64');
+
+    let tossResponse;
+    try {
+      tossResponse = await axios.post(
+        'https://api.tosspayments.com/v1/payments/confirm',
+        {
+          paymentKey,
+          orderId,
+          amount: parseInt(amount, 10)
+        },
+        {
+          headers: {
+            Authorization: `Basic ${encodedKey}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+    } catch (tossError) {
+      await transaction.rollback();
+
+      // 실패 로그 기록
+      await RentalPaymentFailureLog.create({
+        rentalOrderId: rentalOrder.id,
+        contractId: rentalOrder.contractId,
+        orderId,
+        failureCode: tossError.response?.data?.code || 'UNKNOWN',
+        failureMessage: tossError.response?.data?.message || tossError.message,
+        requestData: { paymentKey, orderId, amount },
+        responseData: tossError.response?.data || null,
+        userAgent: req.headers['user-agent'],
+        ipAddress: req.ip || req.connection.remoteAddress
+      });
+
+      console.error('렌탈 토스 결제 승인 실패:', tossError.response?.data || tossError.message);
+      return error(res, ErrorCodes.PAYMENT_CONFIRMATION_FAILED, 400, {
+        tossErrorCode: tossError.response?.data?.code,
+        tossErrorMessage: tossError.response?.data?.message
+      });
+    }
+
+    const paymentData = tossResponse.data;
+    const now = new Date();
+
+    console.log('🔍 토스 결제 응답:', JSON.stringify(paymentData, null, 2));
+
+    // 토스 method를 RentalPayment ENUM으로 매핑
+    const mapPaymentMethod = (tossMethod) => {
+      const methodMap = {
+        'CARD': 'CARD',
+        'card': 'CARD',
+        '카드': 'CARD',
+        'VIRTUAL_ACCOUNT': 'VIRTUAL_ACCOUNT',
+        'TRANSFER': 'TRANSFER',
+        'MOBILE': 'MOBILE',
+        'EASY_PAY': 'EASY_PAY',
+        '간편결제': 'EASY_PAY'
+      };
+      return methodMap[tossMethod] || 'CARD';
+    };
+
+    // RentalPayment 레코드 생성
+    await RentalPayment.create({
+      rentalOrderId: rentalOrder.id,
+      contractId: rentalOrder.contractId,
+      paymentKey: paymentData.paymentKey,
+      orderId: paymentData.orderId,
+      method: mapPaymentMethod(paymentData.method),
+      status: paymentData.status,
+      requestedAt: new Date(paymentData.requestedAt),
+      approvedAt: paymentData.approvedAt ? new Date(paymentData.approvedAt) : now,
+      totalAmount: paymentData.totalAmount,
+      balanceAmount: paymentData.balanceAmount,
+      suppliedAmount: paymentData.suppliedAmount,
+      vat: paymentData.vat,
+      taxFreeAmount: paymentData.taxFreeAmount || 0,
+      currency: paymentData.currency || 'KRW',
+      receiptUrl: paymentData.receipt?.url || null,
+      checkoutUrl: paymentData.checkout?.url || null,
+      paymentResponse: paymentData
+    }, { transaction });
 
     // 결제 확정 처리
     await confirmRentalOrderPayment(
       rentalOrder,
-      paymentKey,
-      'CARD', // TODO: 실제 결제 수단
+      paymentData.paymentKey,
+      paymentData.method || 'CARD',
       userId,
       req,
       transaction
@@ -354,9 +438,10 @@ const confirmRentalPayment = async (req, res) => {
       rentalOrderId: rentalOrder.id,
       orderId: rentalOrder.orderId,
       status: 'PAID',
-      paidAmount: rentalOrder.totalAmount,
-      paidAt: rentalOrder.paidAt,
-      paymentKey
+      paidAmount: paymentData.totalAmount,
+      paidAt: now,
+      paymentKey: paymentData.paymentKey,
+      receiptUrl: paymentData.receipt?.url || null
     }, '결제가 완료되었습니다.');
   } catch (err) {
     await transaction.rollback();

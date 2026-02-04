@@ -1,5 +1,5 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Refund, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 const { calculateProgress } = require('../utils/roomProgress');
@@ -1668,6 +1668,457 @@ const rejectRefund = async (req, res) => {
   }
 };
 
+/**
+ * 렌탈 주문 목록 조회 (관리자)
+ * GET /api/admin/rental-orders
+ */
+const getRentalOrders = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      status,
+      orderType,
+      contractId,
+      startDate,
+      endDate
+    } = req.query;
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    // 검색 조건 구성
+    const where = {};
+
+    if (status) {
+      where.status = status;
+    }
+
+    if (orderType) {
+      where.orderType = orderType;
+    }
+
+    if (contractId) {
+      where.contractId = parseInt(contractId);
+    }
+
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) {
+        where.createdAt[Op.gte] = new Date(startDate);
+      }
+      if (endDate) {
+        where.createdAt[Op.lte] = new Date(endDate + 'T23:59:59');
+      }
+    }
+
+    const { count, rows: orders } = await RentalOrder.findAndCountAll({
+      where,
+      include: [
+        {
+          model: Contract,
+          as: 'contract',
+          attributes: ['id', 'orderId', 'status', 'checkInDate', 'checkOutDate'],
+          include: [
+            {
+              model: User,
+              as: 'guest',
+              attributes: ['id', 'name', 'nickname', 'email']
+            },
+            {
+              model: Room,
+              as: 'room',
+              attributes: ['id', 'roomName']
+            }
+          ]
+        },
+        {
+          model: RentalOrderItem,
+          as: 'items',
+          include: [{
+            model: RentalItem,
+            as: 'rentalItem',
+            attributes: ['id', 'name']
+          }]
+        }
+      ],
+      order: [['createdAt', 'DESC']],
+      limit: parseInt(limit),
+      offset
+    });
+
+    return success(res, {
+      orders: orders.map(order => ({
+        id: order.id,
+        rentalOrderId: order.rentalOrderId,
+        orderType: order.orderType,
+        status: order.status,
+        totalAmount: parseFloat(order.totalAmount),
+        refundedAmount: parseFloat(order.refundedAmount || 0),
+        modifiableUntil: order.modifiableUntil,
+        paidAt: order.paidAt,
+        createdAt: order.createdAt,
+        contract: order.contract ? {
+          id: order.contract.id,
+          orderId: order.contract.orderId,
+          status: order.contract.status,
+          checkInDate: order.contract.checkInDate,
+          checkOutDate: order.contract.checkOutDate,
+          guest: order.contract.guest,
+          room: order.contract.room
+        } : null,
+        items: order.items?.map(item => ({
+          id: item.id,
+          name: item.rentalItem?.name,
+          quantity: item.quantity,
+          pricePerItem: parseFloat(item.pricePerItem),
+          totalPrice: parseFloat(item.totalPrice),
+          status: item.status
+        })) || []
+      })),
+      pagination: {
+        total: count,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(count / parseInt(limit))
+      }
+    }, '렌탈 주문 목록을 조회했습니다.');
+  } catch (err) {
+    console.error('렌탈 주문 목록 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 렌탈 주문 상세 조회 (관리자)
+ * GET /api/admin/rental-orders/:rentalOrderId
+ */
+const getRentalOrderDetail = async (req, res) => {
+  try {
+    const { rentalOrderId } = req.params;
+
+    const order = await RentalOrder.findOne({
+      where: { rentalOrderId },
+      include: [
+        {
+          model: Contract,
+          as: 'contract',
+          attributes: ['id', 'orderId', 'status', 'checkInDate', 'checkOutDate', 'guestId', 'hostId'],
+          include: [
+            {
+              model: User,
+              as: 'guest',
+              attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
+            },
+            {
+              model: User,
+              as: 'host',
+              attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
+            },
+            {
+              model: Room,
+              as: 'room',
+              attributes: ['id', 'roomName', 'address']
+            }
+          ]
+        },
+        {
+          model: RentalOrderItem,
+          as: 'items',
+          include: [{
+            model: RentalItem,
+            as: 'rentalItem',
+            attributes: ['id', 'name', 'category', 'price']
+          }]
+        }
+      ]
+    });
+
+    if (!order) {
+      return error(res, ErrorCodes.RENTAL_ORDER_NOT_FOUND, 404);
+    }
+
+    // 변경 이력 조회
+    const logs = await RentalOrderLog.findAll({
+      where: { rentalOrderId: order.id },
+      order: [['createdAt', 'DESC']],
+      limit: 50
+    });
+
+    return success(res, {
+      order: {
+        id: order.id,
+        rentalOrderId: order.rentalOrderId,
+        orderType: order.orderType,
+        status: order.status,
+        totalAmount: parseFloat(order.totalAmount),
+        refundedAmount: parseFloat(order.refundedAmount || 0),
+        modifiableUntil: order.modifiableUntil,
+        paymentKey: order.paymentKey,
+        paidAt: order.paidAt,
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+        contract: order.contract ? {
+          id: order.contract.id,
+          orderId: order.contract.orderId,
+          status: order.contract.status,
+          checkInDate: order.contract.checkInDate,
+          checkOutDate: order.contract.checkOutDate,
+          guest: order.contract.guest,
+          host: order.contract.host,
+          room: order.contract.room
+        } : null,
+        items: order.items?.map(item => ({
+          id: item.id,
+          rentalItemId: item.rentalItemId,
+          name: item.rentalItem?.name,
+          category: item.rentalItem?.category,
+          quantity: item.quantity,
+          pricePerItem: parseFloat(item.pricePerItem),
+          totalPrice: parseFloat(item.totalPrice),
+          status: item.status,
+          cancelledAt: item.cancelledAt,
+          cancelReason: item.cancelReason,
+          refundAmount: item.refundAmount ? parseFloat(item.refundAmount) : null
+        })) || []
+      },
+      logs: logs.map(log => ({
+        id: log.id,
+        action: log.action,
+        actionLabel: RentalOrderLog.ACTION_LABELS[log.action],
+        description: log.description,
+        metadata: log.metadata,
+        createdAt: log.createdAt
+      }))
+    }, '렌탈 주문 상세를 조회했습니다.');
+  } catch (err) {
+    console.error('렌탈 주문 상세 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 계약별 렌탈 이력 조회 (관리자)
+ * GET /api/admin/contracts/:contractId/rental-history
+ */
+const getContractRentalHistory = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+
+    // 계약 확인
+    const contract = await Contract.findByPk(contractId, {
+      attributes: ['id', 'orderId', 'status', 'checkInDate', 'checkOutDate'],
+      include: [
+        {
+          model: User,
+          as: 'guest',
+          attributes: ['id', 'name', 'nickname']
+        },
+        {
+          model: Room,
+          as: 'room',
+          attributes: ['id', 'roomName']
+        }
+      ]
+    });
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    // 해당 계약의 모든 렌탈 주문 조회
+    const orders = await RentalOrder.findAll({
+      where: { contractId },
+      include: [{
+        model: RentalOrderItem,
+        as: 'items',
+        include: [{
+          model: RentalItem,
+          as: 'rentalItem',
+          attributes: ['id', 'name']
+        }]
+      }],
+      order: [['createdAt', 'ASC']]
+    });
+
+    // 해당 계약의 모든 렌탈 로그 조회 (타임라인용)
+    const orderIds = orders.map(o => o.id);
+    const logs = await RentalOrderLog.findAll({
+      where: { rentalOrderId: { [Op.in]: orderIds } },
+      order: [['createdAt', 'ASC']]
+    });
+
+    // 요약 통계
+    const summary = {
+      totalOrders: orders.length,
+      totalPaid: orders
+        .filter(o => o.status === 'PAID' || o.status === 'PARTIAL_REFUND')
+        .reduce((sum, o) => sum + parseFloat(o.totalAmount), 0),
+      totalRefunded: orders.reduce((sum, o) => sum + parseFloat(o.refundedAmount || 0), 0),
+      activeItems: orders.flatMap(o => o.items || []).filter(i => i.status === 'ACTIVE').length,
+      cancelledItems: orders.flatMap(o => o.items || []).filter(i => i.status === 'CANCELLED').length
+    };
+
+    return success(res, {
+      contract: {
+        id: contract.id,
+        orderId: contract.orderId,
+        status: contract.status,
+        checkInDate: contract.checkInDate,
+        checkOutDate: contract.checkOutDate,
+        guest: contract.guest,
+        room: contract.room
+      },
+      summary,
+      orders: orders.map(order => ({
+        id: order.id,
+        rentalOrderId: order.rentalOrderId,
+        orderType: order.orderType,
+        status: order.status,
+        totalAmount: parseFloat(order.totalAmount),
+        refundedAmount: parseFloat(order.refundedAmount || 0),
+        paidAt: order.paidAt,
+        createdAt: order.createdAt,
+        items: order.items?.map(item => ({
+          id: item.id,
+          name: item.rentalItem?.name,
+          quantity: item.quantity,
+          totalPrice: parseFloat(item.totalPrice),
+          status: item.status,
+          cancelledAt: item.cancelledAt
+        })) || []
+      })),
+      timeline: logs.map(log => ({
+        id: log.id,
+        rentalOrderId: log.rentalOrderId,
+        action: log.action,
+        actionLabel: RentalOrderLog.ACTION_LABELS[log.action],
+        description: log.description,
+        metadata: log.metadata,
+        createdAt: log.createdAt
+      }))
+    }, '계약 렌탈 이력을 조회했습니다.');
+  } catch (err) {
+    console.error('계약 렌탈 이력 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 관리자 렌탈 아이템 취소 (강제 취소)
+ * POST /api/admin/rental-orders/:rentalOrderId/items/:itemId/cancel
+ */
+const adminCancelRentalItem = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { rentalOrderId, itemId } = req.params;
+    const { reason, refundAmount } = req.body;
+    const adminId = req.admin.id;
+
+    if (!reason) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { field: 'reason' });
+    }
+
+    // 렌탈 주문 조회
+    const order = await RentalOrder.findOne({
+      where: { rentalOrderId },
+      transaction
+    });
+
+    if (!order) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.RENTAL_ORDER_NOT_FOUND, 404);
+    }
+
+    // 아이템 조회
+    const item = await RentalOrderItem.findOne({
+      where: { id: itemId, rentalOrderId: order.id },
+      include: [{
+        model: RentalItem,
+        as: 'rentalItem',
+        attributes: ['id', 'name']
+      }],
+      transaction
+    });
+
+    if (!item) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.RENTAL_ORDER_ITEM_NOT_FOUND, 404);
+    }
+
+    if (item.status === 'CANCELLED') {
+      await transaction.rollback();
+      return error(res, ErrorCodes.RENTAL_ITEM_ALREADY_CANCELLED, 400);
+    }
+
+    // 환불 금액 결정 (지정되지 않으면 전액)
+    const finalRefundAmount = refundAmount !== undefined
+      ? parseFloat(refundAmount)
+      : parseFloat(item.totalPrice);
+
+    // 아이템 취소 처리
+    await item.update({
+      status: 'CANCELLED',
+      cancelledAt: new Date(),
+      cancelReason: `[관리자] ${reason}`,
+      refundAmount: finalRefundAmount
+    }, { transaction });
+
+    // 주문 환불 금액 업데이트
+    await order.update({
+      refundedAmount: parseFloat(order.refundedAmount || 0) + finalRefundAmount,
+      status: 'PARTIAL_REFUND'
+    }, { transaction });
+
+    // 예약 상태 업데이트
+    await require('../models').RentalItemReservation.update(
+      { status: 'CANCELLED' },
+      {
+        where: {
+          rentalOrderId: order.id,
+          rentalOrderItemId: item.id
+        },
+        transaction
+      }
+    );
+
+    // 로그 기록
+    await RentalOrderLog.createLog({
+      rentalOrderId: order.id,
+      action: 'ADMIN_ITEM_CANCELLED',
+      description: `관리자가 아이템을 취소했습니다: ${item.rentalItem?.name || '알 수 없음'} x${item.quantity}`,
+      metadata: {
+        itemId: item.id,
+        itemName: item.rentalItem?.name,
+        quantity: item.quantity,
+        refundAmount: finalRefundAmount,
+        adminId,
+        reason
+      },
+      transaction
+    });
+
+    await transaction.commit();
+
+    return updated(res, {
+      rentalOrderId: order.rentalOrderId,
+      item: {
+        id: item.id,
+        name: item.rentalItem?.name,
+        status: 'CANCELLED',
+        refundAmount: finalRefundAmount
+      },
+      orderStatus: order.status,
+      totalRefunded: parseFloat(order.refundedAmount)
+    }, '렌탈 아이템이 취소되었습니다.');
+  } catch (err) {
+    await transaction.rollback();
+    console.error('관리자 렌탈 아이템 취소 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   // 대시보드
   getDashboardStats,
@@ -1703,5 +2154,11 @@ module.exports = {
   getRefunds,
   getRefundDetail,
   approveRefund,
-  rejectRefund
+  rejectRefund,
+
+  // 렌탈 주문 관리
+  getRentalOrders,
+  getRentalOrderDetail,
+  getContractRentalHistory,
+  adminCancelRentalItem
 };

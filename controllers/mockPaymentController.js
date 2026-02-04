@@ -1,7 +1,8 @@
-const { sequelize, Contract, Payment, ContractStatusLog, ChatRoom } = require('../models');
+const { sequelize, Contract, Payment, ContractStatusLog, ChatRoom, RentalOrder } = require('../models');
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
 const { sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes } = require('../utils/systemMessageTypes');
+const { createInitialRentalOrder, confirmRentalOrderPayment } = require('../utils/rentalOrderHelper');
 
 /**
  * Mock 결제 승인 (실제 토스 API 호출 없음)
@@ -106,6 +107,47 @@ const confirmPaymentMock = async (req, res) => {
       req,
       transaction
     });
+
+    // 렌탈 주문 처리
+    let initialRentalOrder = await RentalOrder.findOne({
+      where: {
+        contractId: contract.id,
+        orderType: 'INITIAL',
+        status: 'PENDING'
+      },
+      transaction
+    });
+
+    // rental_orders가 없지만 contracts.rental_items에 데이터가 있는 경우 (레거시 데이터 마이그레이션)
+    if (!initialRentalOrder && contract.rentalItems && Array.isArray(contract.rentalItems) && contract.rentalItems.length > 0) {
+      console.log(`📦 [MOCK] 레거시 렌탈 아이템 마이그레이션: contractId=${contract.id}`);
+
+      const rentalItemsForOrder = contract.rentalItems.map(item => ({
+        itemId: item.itemId,
+        quantity: item.quantity
+      }));
+
+      initialRentalOrder = await createInitialRentalOrder(
+        contract.id,
+        rentalItemsForOrder,
+        contract.checkInDate,
+        contract.checkOutDate,
+        guestId,
+        req,
+        transaction
+      );
+      console.log(`✅ [MOCK] 레거시 렌탈 주문 생성 완료: rentalOrderId=${initialRentalOrder.id}`);
+    }
+
+    if (initialRentalOrder) {
+      await confirmRentalOrderPayment(
+        initialRentalOrder.id,
+        mockPaymentKey,
+        req,
+        transaction
+      );
+      console.log(`✅ [MOCK] 렌탈 주문 결제 완료: rentalOrderId=${initialRentalOrder.id}`);
+    }
 
     // 채팅방에 시스템 메시지 전송
     const chatRoom = await ChatRoom.findOne({

@@ -365,21 +365,8 @@ const createContractRequest = async (req, res) => {
       { transaction }
     );
 
-    // 11. 렌탈 아이템 임시 예약 (RentalOrder 시스템으로 처리)
-    // 기존: reserveRentalItems() 사용
-    // 변경: createInitialRentalOrder() 사용하여 RentalOrder(INITIAL) 생성
-    let initialRentalOrder = null;
-    if (rentalItems && Array.isArray(rentalItems) && rentalItems.length > 0) {
-      initialRentalOrder = await createInitialRentalOrder(
-        contract.id,
-        rentalItems,
-        checkInDate,
-        checkOutDate,
-        guestId,
-        req,
-        transaction
-      );
-    }
+    // 11. 렌탈 아이템은 contracts.rental_items JSON에만 저장
+    // rental_orders 테이블은 결제 시점(confirmPayment)에 생성됨
 
     // 12. 상태 변경 로그 기록
     await ContractStatusLog.createLog({
@@ -546,18 +533,32 @@ const getGuestContracts = async (req, res) => {
           // 결제 후: rental_orders에서 조회
           const rentalSummary = await getContractRentalSummary(contract.id);
           if (rentalSummary && rentalSummary.activeItems.length > 0) {
+            // 같은 rentalItemId끼리 묶어서 quantity 합산
+            const groupedItems = new Map();
+            for (const item of rentalSummary.activeItems) {
+              const key = item.rentalItemId;
+              if (groupedItems.has(key)) {
+                const existing = groupedItems.get(key);
+                existing.quantity += item.quantity;
+                existing.totalPrice += item.totalPrice;
+              } else {
+                groupedItems.set(key, {
+                  rentalItemId: item.rentalItemId,
+                  name: item.name,
+                  quantity: item.quantity,
+                  pricePerItem: item.pricePerItem,
+                  totalPrice: item.totalPrice,
+                  imageUrl: item.imageUrl
+                });
+              }
+            }
+
             rentalItemsData = {
               source: 'orders',  // 실제 주문
               totalPaid: rentalSummary.totalPaid,
               totalRefunded: rentalSummary.totalRefunded,
               netAmount: rentalSummary.netAmount,
-              items: rentalSummary.activeItems.map(item => ({
-                name: item.name,
-                quantity: item.quantity,
-                pricePerItem: item.pricePerItem,
-                totalPrice: item.totalPrice,
-                imageUrl: item.imageUrl
-              }))
+              items: Array.from(groupedItems.values())
             };
           }
         }
@@ -1936,7 +1937,7 @@ const confirmPayment = async (req, res) => {
     });
 
     // 렌탈 주문이 있으면 함께 결제 처리
-    const initialRentalOrder = await RentalOrder.findOne({
+    let initialRentalOrder = await RentalOrder.findOne({
       where: {
         contractId: contract.id,
         orderType: 'INITIAL',
@@ -1944,6 +1945,28 @@ const confirmPayment = async (req, res) => {
       },
       transaction
     });
+
+    // rental_orders가 없지만 contracts.rental_items에 데이터가 있는 경우 (레거시 데이터 마이그레이션)
+    if (!initialRentalOrder && contract.rentalItems && Array.isArray(contract.rentalItems) && contract.rentalItems.length > 0) {
+      console.log(`📦 레거시 렌탈 아이템 마이그레이션: contractId=${contract.id}`);
+
+      // contracts.rental_items JSON 형식을 createInitialRentalOrder 형식으로 변환
+      const rentalItemsForOrder = contract.rentalItems.map(item => ({
+        itemId: item.itemId,
+        quantity: item.quantity
+      }));
+
+      initialRentalOrder = await createInitialRentalOrder(
+        contract.id,
+        rentalItemsForOrder,
+        contract.checkInDate,
+        contract.checkOutDate,
+        guestId,
+        req,
+        transaction
+      );
+      console.log(`✅ 레거시 렌탈 주문 생성 완료: rentalOrderId=${initialRentalOrder.id}`);
+    }
 
     if (initialRentalOrder) {
       await confirmRentalOrderPayment(

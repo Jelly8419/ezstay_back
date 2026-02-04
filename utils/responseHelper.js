@@ -86,6 +86,21 @@ const ErrorCodes = {
   PAYMENT_EXPIRED: { code: 4607, message: '결제 가능 시간이 만료되었습니다.' },
   PAYMENT_NOT_FOUND: { code: 4608, message: '결제 정보를 찾을 수 없습니다.' },
 
+  // 렌탈 주문 관련 (47xx)
+  RENTAL_NOT_AVAILABLE_WITHIN_6_DAYS: { code: 4700, message: '입주일 6일 이내에는 렌탈 아이템을 신청할 수 없습니다.' },
+  RENTAL_MODIFICATION_EXPIRED: { code: 4701, message: '입주 5일 전까지만 렌탈 변경이 가능합니다.' },
+  RENTAL_ORDER_NOT_FOUND: { code: 4702, message: '렌탈 주문을 찾을 수 없습니다.' },
+  RENTAL_ORDER_NOT_PAYABLE: { code: 4703, message: '결제 대기 상태의 주문만 결제할 수 있습니다.' },
+  RENTAL_ITEM_ALREADY_CANCELLED: { code: 4704, message: '이미 취소된 아이템입니다.' },
+  RENTAL_STATUS_NOT_ALLOWED: { code: 4705, message: '현재 계약 상태에서는 렌탈 변경이 불가합니다.' },
+  RENTAL_STOCK_INSUFFICIENT: { code: 4706, message: '렌탈 아이템 재고가 부족합니다.' },
+  RENTAL_ORDER_NOT_REFUNDABLE: { code: 4707, message: '결제된 주문만 환불할 수 있습니다.' },
+  RENTAL_ITEM_NOT_FOUND: { code: 4708, message: '렌탈 아이템을 찾을 수 없습니다.' },
+  RENTAL_AMOUNT_MISMATCH: { code: 4709, message: '렌탈 결제 금액이 일치하지 않습니다.' },
+  RENTAL_ORDER_NOT_CANCELLABLE: { code: 4710, message: '미결제 주문만 취소할 수 있습니다.' },
+  RENTAL_ORDER_ITEM_NOT_FOUND: { code: 4711, message: '렌탈 주문 아이템을 찾을 수 없습니다.' },
+  RENTAL_NOT_GUEST: { code: 4712, message: '계약의 게스트만 렌탈 주문을 관리할 수 있습니다.' },
+
   // 서버 관련 (5xxx)
   INTERNAL_ERROR: { code: 5001, message: '서버 오류가 발생했습니다.' },
   DATABASE_ERROR: { code: 5002, message: '데이터베이스 오류가 발생했습니다.' },

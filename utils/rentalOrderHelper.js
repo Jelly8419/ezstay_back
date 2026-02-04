@@ -1,4 +1,5 @@
 const { Op } = require('sequelize');
+const axios = require('axios');
 const {
   sequelize,
   RentalOrder,
@@ -6,6 +7,7 @@ const {
   RentalOrderLog,
   RentalItem,
   RentalItemReservation,
+  RentalPayment,
   Contract
 } = require('../models');
 
@@ -158,7 +160,10 @@ async function getContractRentalSummary(contractId, transaction = null) {
   const options = transaction ? { transaction } : {};
 
   const rentalOrders = await RentalOrder.findAll({
-    where: { contractId },
+    where: {
+      contractId,
+      status: ['PAID', 'PARTIAL_REFUND']  // 결제된 주문만 조회
+    },
     include: [{
       model: RentalOrderItem,
       as: 'items',
@@ -609,6 +614,56 @@ async function cancelRentalOrderItem(orderItem, rentalOrder, reason, actorId, ac
 
   const refundAmount = parseFloat(orderItem.totalPrice);
 
+  // 토스페이먼츠 환불 API 호출
+  const rentalPayment = await RentalPayment.findOne({
+    where: { rentalOrderId: rentalOrder.id },
+    transaction
+  });
+
+  if (!rentalPayment) {
+    throw new Error('결제 정보를 찾을 수 없습니다');
+  }
+
+  // 환불 가능 금액 확인
+  if (rentalPayment.balanceAmount < refundAmount) {
+    throw new Error(`환불 가능 금액이 부족합니다. (가능: ${rentalPayment.balanceAmount}원, 요청: ${refundAmount}원)`);
+  }
+
+  const tossSecretKey = process.env.TOSS_SECRET_KEY;
+  const encodedKey = Buffer.from(`${tossSecretKey}:`).toString('base64');
+
+  try {
+    const tossResponse = await axios.post(
+      `https://api.tosspayments.com/v1/payments/${rentalPayment.paymentKey}/cancel`,
+      {
+        cancelReason: reason || '렌탈 아이템 취소',
+        cancelAmount: refundAmount
+      },
+      {
+        headers: {
+          Authorization: `Basic ${encodedKey}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    console.log('✅ 토스 환불 성공:', {
+      paymentKey: rentalPayment.paymentKey,
+      refundAmount,
+      cancelStatus: tossResponse.data.cancels?.[0]?.cancelStatus
+    });
+
+    // RentalPayment 잔액 업데이트
+    await rentalPayment.update({
+      balanceAmount: tossResponse.data.balanceAmount,
+      status: tossResponse.data.balanceAmount === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+    }, { transaction });
+
+  } catch (tossError) {
+    console.error('❌ 토스 환불 실패:', tossError.response?.data || tossError.message);
+    throw new Error(`환불 처리 실패: ${tossError.response?.data?.message || tossError.message}`);
+  }
+
   // RentalOrderItem 취소
   await orderItem.update({
     status: 'CANCELLED',
@@ -662,9 +717,10 @@ async function cancelRentalOrderItem(orderItem, rentalOrder, reason, actorId, ac
       itemName: orderItem.rentalItem?.name || '알 수 없음',
       quantity: orderItem.quantity,
       refundAmount,
-      reason
+      reason,
+      paymentKey: rentalPayment.paymentKey
     },
-    description: `아이템 취소: ${reason || '사유 없음'}`,
+    description: `아이템 취소 및 환불: ${reason || '사유 없음'}`,
     req
   }, transaction);
 
