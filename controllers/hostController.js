@@ -791,8 +791,8 @@ const updateRoomStatus = async (req, res) => {
       return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
-    // 상태 검증: approved 상태만 게시/비공개 전환 가능
-    if (room.status !== 'approved') {
+    // 상태 검증: approved 또는 published 상태만 게시/비공개 전환 가능
+    if (room.status !== 'approved' && room.status !== 'published') {
       return error(res, ErrorCodes.ROOM_STATUS_NOT_APPROVED, 400);
     }
 
