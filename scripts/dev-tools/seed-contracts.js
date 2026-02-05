@@ -72,6 +72,50 @@ function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+/**
+ * 시나리오별 현실적인 baseDate 생성
+ *
+ * buildContractData 기준:
+ *   checkIn  = baseDate + 7일
+ *   checkOut = baseDate + 37일 (30일 계약)
+ *
+ * 따라서:
+ *   - 체크인 전 상태: baseDate를 미래로 → checkIn이 미래
+ *   - 임대중 상태: checkIn < 오늘 < checkOut → baseDate = 오늘 - 20일 정도
+ *   - 완료 상태: checkOut < 오늘 → baseDate를 충분히 과거로
+ */
+function getBaseDateForScenario(scenarioKey) {
+  const now = new Date();
+  switch (scenarioKey) {
+    // 체크인 전 상태: checkIn이 미래여야 함
+    case 'pending_approval':
+      return daysAfter(now, randomInt(3, 14));       // 체크인: 10~21일 후
+    case 'approved':
+      return daysAfter(now, randomInt(1, 10));        // 체크인: 8~17일 후
+    case 'payment_completed':
+      return daysAfter(now, randomInt(-2, 7));        // 체크인: 5~14일 후
+    case 'rejected':
+      return daysAfter(now, randomInt(-3, 7));        // 거절은 시점 무관
+
+    // 임대중: checkIn < 오늘 < checkOut
+    case 'in_progress':
+      return daysAfter(now, -randomInt(10, 25));      // 체크인: 3~18일 전, 체크아웃: 12~27일 후
+    case 'in_progress_with_rental':
+      return daysAfter(now, -randomInt(10, 25));      // 동일
+
+    // 완료/취소: checkOut < 오늘
+    case 'completed':
+      return daysAfter(now, -randomInt(45, 90));      // 체크아웃: 8~53일 전
+    case 'completed_with_full_rental':
+      return daysAfter(now, -randomInt(45, 90));      // 동일
+    case 'cancelled_with_refund':
+      return daysAfter(now, -randomInt(10, 40));      // 취소는 결제 후 발생
+
+    default:
+      return daysAfter(now, -(30 + randomInt(0, 60)));
+  }
+}
+
 /** SEED orderId 생성 (Contract: STRING(11) → S + YYMMDD + 4자리 = 11자) */
 function makeSeedOrderId(index) {
   const now = new Date();
@@ -1137,7 +1181,7 @@ async function seedCommand(opts) {
     for (let round = 0; round < opts.count; round++) {
       for (const key of scenarioKeys) {
         const scenario = SCENARIOS[key];
-        const baseDate = daysAfter(new Date(), -(30 + randomInt(0, 60))); // 30~90일 전
+        const baseDate = getBaseDateForScenario(key);
         const orderId = makeSeedOrderId(orderSeq++);
 
         const result = await scenario.create({
