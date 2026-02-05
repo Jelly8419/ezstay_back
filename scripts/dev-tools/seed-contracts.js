@@ -43,6 +43,7 @@ const {
   RentalPayment,
   RefundPolicyType,
   RefundPolicyRule,
+  ChatRoom,
 } = require('../../models');
 
 const { Op } = require('sequelize');
@@ -304,6 +305,23 @@ async function createStatusLog(contractId, fromStatus, toStatus, changedBy, chan
 }
 
 /**
+ * ChatRoom 생성 헬퍼 (승인된 계약에 채팅방 추가)
+ */
+async function createChatRoom(contractId, hostId, guestId, roomId, createdAt, isActive, transaction) {
+  const firebaseChatRoomId = `contract_${contractId}`;
+  return await ChatRoom.create({
+    contractId,
+    firebaseChatRoomId,
+    hostId,
+    guestId,
+    roomId,
+    isActive,
+    lastMessageAt: createdAt,
+    createdAt,
+  }, { transaction });
+}
+
+/**
  * Payment 생성 헬퍼
  */
 async function createPayment(contractId, orderId, totalAmount, requestedAt, approvedAt, status, transaction) {
@@ -370,7 +388,8 @@ const SCENARIOS = {
       );
       await createStatusLog(contract.id, null, 'PENDING_APPROVAL', 'GUEST', guestId, baseDate, transaction);
       await createStatusLog(contract.id, 'PENDING_APPROVAL', 'APPROVED', 'HOST', hostId, approvedAt, transaction);
-      return { contract, logs: 2 };
+      await createChatRoom(contract.id, hostId, guestId, roomId, approvedAt, true, transaction);
+      return { contract, logs: 2, chatRooms: 1 };
     }
   },
 
@@ -398,8 +417,9 @@ const SCENARIOS = {
       await createStatusLog(contract.id, 'APPROVED', 'PAYMENT_COMPLETED', 'SYSTEM', null, paidAt, transaction);
 
       await createPayment(contract.id, orderId, contractData.finalTotalAmount, approvedAt, paidAt, 'DONE', transaction);
+      await createChatRoom(contract.id, hostId, guestId, roomId, approvedAt, true, transaction);
 
-      return { contract, logs: 3, payments: 1 };
+      return { contract, logs: 3, payments: 1, chatRooms: 1 };
     }
   },
 
@@ -430,8 +450,9 @@ const SCENARIOS = {
       await createStatusLog(contract.id, 'PAYMENT_COMPLETED', 'IN_PROGRESS', 'SYSTEM', null, checkedInAt, transaction);
 
       await createPayment(contract.id, orderId, contractData.finalTotalAmount, approvedAt, paidAt, 'DONE', transaction);
+      await createChatRoom(contract.id, hostId, guestId, roomId, approvedAt, true, transaction);
 
-      return { contract, logs: 4, payments: 1 };
+      return { contract, logs: 4, payments: 1, chatRooms: 1 };
     }
   },
 
@@ -465,8 +486,9 @@ const SCENARIOS = {
       await createStatusLog(contract.id, 'IN_PROGRESS', 'COMPLETED', 'SYSTEM', null, checkedOutAt, transaction);
 
       await createPayment(contract.id, orderId, contractData.finalTotalAmount, approvedAt, paidAt, 'DONE', transaction);
+      await createChatRoom(contract.id, hostId, guestId, roomId, approvedAt, false, transaction);
 
-      return { contract, logs: 5, payments: 1 };
+      return { contract, logs: 5, payments: 1, chatRooms: 1 };
     }
   },
 
@@ -571,7 +593,10 @@ const SCENARIOS = {
       // 최종 상태를 REFUNDED로 업데이트
       await contract.update({ status: 'REFUNDED' }, { transaction });
 
-      return { contract, logs: 5, payments: 1, refunds: 1 };
+      // ChatRoom (취소됨 → 비활성)
+      await createChatRoom(contract.id, hostId, guestId, roomId, approvedAt, false, transaction);
+
+      return { contract, logs: 5, payments: 1, refunds: 1, chatRooms: 1 };
     }
   },
 
@@ -714,8 +739,11 @@ const SCENARIOS = {
         createdAt: paidAt,
       }, { transaction });
 
+      // ChatRoom (임대중 → 활성)
+      await createChatRoom(contract.id, hostId, guestId, roomId, approvedAt, true, transaction);
+
       return {
-        contract, logs: 4, payments: 1,
+        contract, logs: 4, payments: 1, chatRooms: 1,
         rentalOrders: 1, rentalOrderItems: selectedItems.length,
         rentalReservations: selectedItems.length, rentalPayments: 1, rentalLogs: 2,
       };
@@ -962,8 +990,11 @@ const SCENARIOS = {
 
       const totalRentalLogs = cancelledAmount > 0 ? 6 : 4;
 
+      // ChatRoom (완료 → 비활성)
+      await createChatRoom(contract.id, hostId, guestId, roomId, approvedAt, false, transaction);
+
       return {
-        contract, logs: 5, payments: 1,
+        contract, logs: 5, payments: 1, chatRooms: 1,
         rentalOrders: 2,
         rentalOrderItems: initialItems.length + additionalItems.length,
         rentalReservations: initialItems.length + additionalItems.length,
@@ -1206,6 +1237,7 @@ async function seedCommand(opts) {
         console.log(`      ✅ Contract ${orderId} (${scenario.label.split('(')[1]?.replace(')', '') || result.contract.status})`);
         console.log(`      ✅ ContractStatusLog ${result.logs}건`);
         if (result.payments) console.log(`      ✅ Payment ${result.payments}건`);
+        if (result.chatRooms) console.log(`      ✅ ChatRoom ${result.chatRooms}건`);
         if (result.refunds) console.log(`      ✅ Refund ${result.refunds}건`);
         if (result.rentalOrders) {
           console.log(`      ✅ RentalOrder ${result.rentalOrders}건`);
@@ -1297,6 +1329,9 @@ async function cleanCommand() {
 
     const delPayments = await Payment.destroy({ where: { contractId: { [Op.in]: contractIds } }, transaction });
     console.log(`  🗑️ Payment ${delPayments}건 삭제`);
+
+    const delChatRooms = await ChatRoom.destroy({ where: { contractId: { [Op.in]: contractIds } }, transaction });
+    console.log(`  🗑️ ChatRoom ${delChatRooms}건 삭제`);
 
     const delLogs = await ContractStatusLog.destroy({ where: { contractId: { [Op.in]: contractIds } }, transaction });
     console.log(`  🗑️ ContractStatusLog ${delLogs}건 삭제`);
