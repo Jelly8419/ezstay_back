@@ -46,7 +46,7 @@ const getNotices = async (req, res) => {
 
     const { count, rows } = await Notice.findAndCountAll({
       where: whereCondition,
-      attributes: ['id', 'title', 'isImportant', 'viewCount', 'userType', 'publishedAt', 'createdAt'],
+      attributes: ['id', 'title', 'isImportant', 'userType', 'publishedAt', 'createdAt'],
       order: [
         ['isImportant', 'DESC'],
         ['publishedAt', 'DESC'],
@@ -84,14 +84,14 @@ const getNoticeById = async (req, res) => {
         id,
         status: 'published'
       },
-      attributes: ['id', 'title', 'content', 'isImportant', 'viewCount', 'userType', 'publishedAt', 'createdAt']
+      attributes: ['id', 'title', 'content', 'isImportant', 'userType', 'publishedAt', 'createdAt']
     });
 
     if (!notice) {
       return error(res, ErrorCodes.NOTICE_NOT_FOUND, 404);
     }
 
-    // 조회수 증가
+    // 조회수 증가 (관리자 통계용)
     await notice.increment('viewCount');
 
     return success(res, notice, '공지사항을 조회했습니다.');
