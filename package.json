@@ -10,7 +10,9 @@
     "dev:approve-all": "node scripts/dev-tools/contract-helper.js approve-all",
     "dev:approve": "node scripts/dev-tools/contract-helper.js approve",
     "dev:reject": "node scripts/dev-tools/contract-helper.js reject",
-    "dev:contract-status": "node scripts/dev-tools/contract-helper.js status"
+    "dev:contract-status": "node scripts/dev-tools/contract-helper.js status",
+    "dev:seed-contracts": "node scripts/dev-tools/seed-contracts.js seed",
+    "dev:seed-clean": "node scripts/dev-tools/seed-contracts.js clean"
   },
   "keywords": [],
   "author": "",
