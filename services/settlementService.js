@@ -35,9 +35,11 @@ const getSettlementStatus = (checkOutDate) => {
  * @param {number} contract.cleaningFee - 청소비
  * @param {number} contract.platformFee - 플랫폼 수수료
  * @param {Array} refunds - 환불 정보 배열
+ * @param {Object} options - 옵션
+ * @param {boolean} options.hasEzCleaningService - EZ청소서비스 사용 여부
  * @returns {Object} 정산 금액 breakdown
  */
-const calculateSettlementAmount = (contract, refunds = []) => {
+const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
   const {
     rentalFee = 0,
     maintenanceFee = 0,
@@ -45,8 +47,14 @@ const calculateSettlementAmount = (contract, refunds = []) => {
     platformFee = 0
   } = contract;
 
+  const { hasEzCleaningService = false } = options;
+
+  // EZ청소서비스 사용 시 청소비는 플랫폼이 가져감 (호스트 정산에서 제외)
+  const hostCleaningFee = hasEzCleaningService ? 0 : cleaningFee;
+
   // 기본 정산 금액 (호스트 수령액)
-  const subtotal = rentalFee + maintenanceFee + cleaningFee;
+  // 소계: 임대료 + 관리비 + 청소비(EZ서비스 미사용 시만)
+  const subtotal = rentalFee + maintenanceFee + hostCleaningFee;
   const grossSettlement = subtotal - platformFee;
 
   // 환불 금액 계산 (완료된 환불만)
@@ -59,7 +67,10 @@ const calculateSettlementAmount = (contract, refunds = []) => {
     if (refund.status === 'COMPLETED') {
       rentalFeeRefund += refund.rentalFeeRefundAmount || 0;
       maintenanceFeeRefund += refund.maintenanceFeeRefundAmount || 0;
-      cleaningFeeRefund += refund.cleaningFeeRefundAmount || 0;
+      // EZ청소서비스 사용 시 청소비 환불도 호스트 정산에서 제외
+      if (!hasEzCleaningService) {
+        cleaningFeeRefund += refund.cleaningFeeRefundAmount || 0;
+      }
     }
   });
 
@@ -68,13 +79,20 @@ const calculateSettlementAmount = (contract, refunds = []) => {
   // 최종 정산 금액
   const finalAmount = grossSettlement - totalRefundAmount;
 
+  // 수수료율 계산 (수수료 계산 기준: 임대료 + 관리비 + 청소비(EZ서비스 미사용 시))
+  // 실제 수수료율은 9.9%이지만, 표시용으로 실제 비율 계산
+  const feeBase = rentalFee + maintenanceFee + hostCleaningFee;
+  const platformFeeRate = feeBase > 0 ? Math.round((platformFee / feeBase) * 1000) / 10 : 0;
+
   return {
     rentalFee,
     maintenanceFee,
-    cleaningFee,
+    cleaningFee: hostCleaningFee,  // 호스트에게 정산되는 청소비
+    originalCleaningFee: cleaningFee,  // 원래 청소비 (표시용)
+    hasEzCleaningService,
     subtotal,
     platformFee,
-    platformFeeRate: subtotal > 0 ? Math.round((platformFee / subtotal) * 100) : 0,
+    platformFeeRate,
     grossSettlement,
     refund: {
       hasRefund: totalRefundAmount > 0,

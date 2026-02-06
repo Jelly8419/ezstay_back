@@ -2,7 +2,7 @@
  * Settlement Controller
  * 호스트 정산 관리 API
  */
-const { Contract, Room, RoomPhoto, User, Refund, UserBankAccount, sequelize } = require('../models');
+const { Contract, Room, RoomPhoto, User, Refund, UserBankAccount, EzService, sequelize } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 const { Op, fn, col, literal } = require('sequelize');
 const {
@@ -99,6 +99,12 @@ const getSettlements = async (req, res) => {
               attributes: ['photoUrl'],
               where: { displayOrder: 1 },
               required: false
+            },
+            {
+              model: EzService,
+              as: 'ezService',
+              attributes: ['cleaningService'],
+              required: false
             }
           ]
         },
@@ -124,7 +130,8 @@ const getSettlements = async (req, res) => {
 
     // 정산 정보 가공
     const settlements = contracts.map(contract => {
-      const settlement = calculateSettlementAmount(contract, contract.refunds || []);
+      const hasEzCleaningService = contract.room?.ezService?.cleaningService || false;
+      const settlement = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
       const status = getSettlementStatus(contract.checkOutDate);
       const settlementDate = calculateSettlementDate(contract.checkOutDate);
 
@@ -143,7 +150,8 @@ const getSettlements = async (req, res) => {
         status,
         statusLabel: SETTLEMENT_STATUS_LABELS[status],
         hasRefund: settlement.refund.hasRefund,
-        refundAmount: settlement.refund.totalRefundAmount
+        refundAmount: settlement.refund.totalRefundAmount,
+        hasEzCleaningService  // EZ청소서비스 사용 여부
       };
     });
 
@@ -257,6 +265,12 @@ const getSettlementDetail = async (req, res) => {
               attributes: ['photoUrl'],
               where: { displayOrder: 1 },
               required: false
+            },
+            {
+              model: EzService,
+              as: 'ezService',
+              attributes: ['cleaningService'],
+              required: false
             }
           ]
         },
@@ -292,8 +306,11 @@ const getSettlementDetail = async (req, res) => {
       attributes: ['bankName', 'accountNumber', 'accountHolder']
     });
 
+    // EZ청소서비스 사용 여부 확인
+    const hasEzCleaningService = contract.room?.ezService?.cleaningService || false;
+
     // 정산 금액 계산
-    const settlement = calculateSettlementAmount(contract, contract.refunds || []);
+    const settlement = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
     const status = getSettlementStatus(contract.checkOutDate);
     const settlementDate = calculateSettlementDate(contract.checkOutDate);
 
@@ -342,7 +359,9 @@ const getSettlementDetail = async (req, res) => {
       breakdown: {
         rentalFee: settlement.rentalFee,
         maintenanceFee: settlement.maintenanceFee,
-        cleaningFee: settlement.cleaningFee,
+        cleaningFee: settlement.cleaningFee,  // 호스트에게 정산되는 청소비 (EZ서비스 사용 시 0)
+        originalCleaningFee: settlement.originalCleaningFee,  // 원래 청소비
+        hasEzCleaningService: settlement.hasEzCleaningService,  // EZ청소서비스 사용 여부
         subtotal: settlement.subtotal,
         platformFee: settlement.platformFee,
         platformFeeRate: settlement.platformFeeRate,
@@ -434,7 +453,15 @@ const exportSettlements = async (req, res) => {
         {
           model: Room,
           as: 'room',
-          attributes: ['id', 'roomName']
+          attributes: ['id', 'roomName'],
+          include: [
+            {
+              model: EzService,
+              as: 'ezService',
+              attributes: ['cleaningService'],
+              required: false
+            }
+          ]
         },
         {
           model: User,
@@ -456,7 +483,8 @@ const exportSettlements = async (req, res) => {
 
     // 엑셀 데이터 준비
     const excelData = contracts.map(contract => {
-      const settlement = calculateSettlementAmount(contract, contract.refunds || []);
+      const hasEzCleaningService = contract.room?.ezService?.cleaningService || false;
+      const settlement = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
       const status = getSettlementStatus(contract.checkOutDate);
       const settlementDate = calculateSettlementDate(contract.checkOutDate);
 
@@ -469,7 +497,8 @@ const exportSettlements = async (req, res) => {
         rentalDays: calculateRentalDays(contract.checkInDate, contract.checkOutDate),
         rentalFee: settlement.rentalFee,
         maintenanceFee: settlement.maintenanceFee,
-        cleaningFee: settlement.cleaningFee,
+        cleaningFee: settlement.cleaningFee,  // EZ서비스 사용 시 0
+        hasEzCleaningService,
         subtotal: settlement.subtotal,
         platformFee: settlement.platformFee,
         refundAmount: settlement.refund.totalRefundAmount,

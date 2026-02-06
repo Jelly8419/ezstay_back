@@ -29,6 +29,7 @@ const createSettlementExcel = async (data) => {
     { header: '임대료', key: 'rentalFee', width: 15 },
     { header: '관리비', key: 'maintenanceFee', width: 12 },
     { header: '청소비', key: 'cleaningFee', width: 12 },
+    { header: 'EZ청소', key: 'ezCleaning', width: 10 },
     { header: '소계', key: 'subtotal', width: 15 },
     { header: '플랫폼 수수료', key: 'platformFee', width: 14 },
     { header: '환불금액', key: 'refundAmount', width: 12 },
@@ -60,6 +61,7 @@ const createSettlementExcel = async (data) => {
       rentalFee: item.rentalFee,
       maintenanceFee: item.maintenanceFee,
       cleaningFee: item.cleaningFee,
+      ezCleaning: item.hasEzCleaningService ? 'O' : '-',  // EZ청소서비스 사용 여부
       subtotal: item.subtotal,
       platformFee: item.platformFee,
       refundAmount: item.refundAmount,
@@ -93,6 +95,7 @@ const createSettlementExcel = async (data) => {
   worksheet.getColumn('rentalDays').alignment = { horizontal: 'center' };
   worksheet.getColumn('checkInDate').alignment = { horizontal: 'center' };
   worksheet.getColumn('checkOutDate').alignment = { horizontal: 'center' };
+  worksheet.getColumn('ezCleaning').alignment = { horizontal: 'center' };
   worksheet.getColumn('settlementDate').alignment = { horizontal: 'center' };
   worksheet.getColumn('status').alignment = { horizontal: 'center' };
 
