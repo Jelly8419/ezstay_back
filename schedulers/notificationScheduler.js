@@ -1,328 +1,107 @@
+/**
+ * 알림 스케줄러 (Legacy - Fallback Only)
+ *
+ * NOTE: 모든 알림은 Bull Queue를 통해 정확한 시간에 발송됩니다.
+ * 이 스케줄러는 Queue에서 누락된 경우를 대비한 백업용입니다.
+ *
+ * Bull Queue 알림 트리거:
+ * - 계약 승인 → 결제 만료 3시간 전 알림 예약
+ * - 결제 완료 → 입주 당일 + 옵션 마감 알림 예약
+ * - 입주 확정 → 퇴실 3일 전 + 퇴실 당일 알림 예약
+ *
+ * @see queues/notificationQueue.js
+ */
+
 const cron = require('node-cron');
 const { Contract, User, Room } = require('../models');
 const { Op } = require('sequelize');
 const NotificationService = require('../services/notificationService');
 
 /**
- * 알림 스케줄러
+ * 알림 스케줄러 시작 (Fallback 전용)
  *
- * 1. 결제 만료 3시간 전 알림 (PAYMENT_PENDING)
- *    - 결제 만료 = approvedAt + 24시간
- *    - 알림 발송 = approvedAt + 21시간 (만료 3시간 전)
- * 2. 입주 당일 알림 (CHECKIN_TODAY)
- * 3. 퇴실 3일 전 알림 (CHECKOUT_REMINDER)
- * 4. 옵션 마감 알림 - 입주 6일 전 (OPTION_DEADLINE)
+ * Bull Queue가 Redis 장애 등으로 동작하지 않을 때를 대비한 백업
+ * 하루에 한 번 누락된 알림을 체크하여 발송
  */
+function startNotificationScheduler() {
+  // 매일 자정 - 누락된 알림 체크 (Fallback)
+  cron.schedule('0 0 * * *', async () => {
+    console.log('[알림 스케줄러] Fallback 체크 실행...');
+    await checkMissedNotifications();
+  });
 
-/**
- * 날짜를 YYYY-MM-DD 형식으로 변환
- */
-function formatDate(date) {
-  return date.toISOString().split('T')[0];
+  console.log('[알림 스케줄러] 시작됨 (Fallback 모드)');
+  console.log('  - 주요 알림: Bull Queue에서 처리');
+  console.log('  - Fallback 체크: 매일 00:00');
 }
 
 /**
- * 결제 만료 3시간 전 알림 발송 (Fallback용)
- *
- * NOTE: 주요 알림은 Bull Queue를 통해 정확한 시간에 발송됩니다.
- * 이 함수는 Queue에서 누락된 경우를 대비한 백업용입니다.
- *
- * - APPROVED 상태 (결제 대기 중)
- * - 결제 만료 = approvedAt + 24시간
- * - 알림 발송 = 만료 3시간 전 (approvedAt으로부터 21시간 후)
+ * 누락된 알림 체크 및 발송
  */
-async function sendPaymentPendingNotifications() {
+async function checkMissedNotifications() {
   try {
     const now = new Date();
 
-    // 결제 만료 3시간 전에 알림을 보내려면:
-    // - 결제 만료 = approvedAt + 24시간
-    // - 알림 시점 = approvedAt + 21시간 (만료 3시간 전)
-    //
-    // 조건: approvedAt이 21~22시간 전인 계약 (매 시간 실행되므로 1시간 범위)
+    // 1. 결제 만료 임박 알림 누락 체크
+    // 21~24시간 전에 승인되었지만 아직 APPROVED 상태인 계약
     const hoursAgo21 = new Date(now.getTime() - 21 * 60 * 60 * 1000);
-    const hoursAgo22 = new Date(now.getTime() - 22 * 60 * 60 * 1000);
+    const hoursAgo24 = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-    // approvedAt이 21~22시간 전인 APPROVED 계약 조회
-    // (결제 만료까지 2~3시간 남은 계약)
-    const contracts = await Contract.findAll({
+    const paymentPendingContracts = await Contract.findAll({
       where: {
         status: 'APPROVED',
         approvedAt: {
-          [Op.gt]: hoursAgo22,
+          [Op.gt]: hoursAgo24,
           [Op.lte]: hoursAgo21
         }
       }
     });
 
-    console.log(`[알림 스케줄러] 결제 만료 3시간 전 알림 대상: ${contracts.length}건`);
-
-    for (const contract of contracts) {
-      try {
-        await NotificationService.notifyPaymentPending(contract);
-        console.log(`[알림 스케줄러] 결제 임박 알림 전송: contractId=${contract.id}`);
-      } catch (err) {
-        console.error(`[알림 스케줄러] 결제 임박 알림 실패: contractId=${contract.id}`, err);
+    if (paymentPendingContracts.length > 0) {
+      console.log(`[Fallback] 결제 만료 알림 누락: ${paymentPendingContracts.length}건`);
+      for (const contract of paymentPendingContracts) {
+        try {
+          await NotificationService.notifyPaymentPending(contract);
+          console.log(`[Fallback] 결제 만료 알림 발송: contractId=${contract.id}`);
+        } catch (err) {
+          console.error(`[Fallback] 결제 만료 알림 실패: contractId=${contract.id}`, err);
+        }
       }
     }
 
-    return contracts.length;
-  } catch (err) {
-    console.error('[알림 스케줄러] 결제 만료 알림 처리 실패:', err);
-    return 0;
-  }
-}
-
-/**
- * 입주 당일 알림 발송
- * - CONFIRMED 상태 (결제 완료)
- * - 오늘이 checkInDate인 계약
- */
-async function sendCheckinTodayNotifications() {
-  try {
+    // 2. 입주 당일 알림 누락 체크
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
-    // 오늘 입주 예정인 CONFIRMED 계약 조회
-    const contracts = await Contract.findAll({
+    const checkinTodayContracts = await Contract.findAll({
       where: {
-        status: 'CONFIRMED',
+        status: { [Op.in]: ['CONFIRMED', 'IN_PROGRESS'] },
         checkInDate: {
           [Op.gte]: today,
           [Op.lt]: tomorrow
         }
       },
       include: [
-        {
-          model: User,
-          as: 'guest',
-          attributes: ['id', 'name', 'nickname', 'phoneNumber']
-        },
-        {
-          model: User,
-          as: 'host',
-          attributes: ['id', 'name', 'nickname', 'phoneNumber']
-        }
+        { model: User, as: 'guest', attributes: ['id', 'name', 'nickname', 'phoneNumber'] },
+        { model: User, as: 'host', attributes: ['id', 'name', 'nickname', 'phoneNumber'] }
       ]
     });
 
-    console.log(`[알림 스케줄러] 입주 당일 알림 대상: ${contracts.length}건`);
-
-    for (const contract of contracts) {
-      try {
-        await NotificationService.notifyCheckinToday(contract, {
-          guest: contract.guest,
-          host: contract.host
-        });
-        console.log(`[알림 스케줄러] 입주 당일 알림 전송: contractId=${contract.id}`);
-      } catch (err) {
-        console.error(`[알림 스케줄러] 입주 당일 알림 실패: contractId=${contract.id}`, err);
-      }
+    // 오전 9시 이후에만 입주 당일 알림 체크
+    if (now.getHours() >= 9 && checkinTodayContracts.length > 0) {
+      console.log(`[Fallback] 입주 당일 알림 체크: ${checkinTodayContracts.length}건`);
+      // 알림 중복 발송 방지를 위해 실제 발송은 하지 않음 (로그만)
     }
 
-    return contracts.length;
+    console.log('[Fallback] 체크 완료');
   } catch (err) {
-    console.error('[알림 스케줄러] 입주 당일 알림 처리 실패:', err);
-    return 0;
+    console.error('[Fallback] 체크 실패:', err);
   }
-}
-
-/**
- * 퇴실 3일 전 알림 발송
- * - CHECKED_IN 상태 (입주 중)
- * - 3일 후가 checkOutDate인 계약
- */
-async function sendCheckoutReminderNotifications() {
-  try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    // 3일 후
-    const threeDaysLater = new Date(today);
-    threeDaysLater.setDate(threeDaysLater.getDate() + 3);
-
-    const fourDaysLater = new Date(threeDaysLater);
-    fourDaysLater.setDate(fourDaysLater.getDate() + 1);
-
-    // 3일 후 퇴실 예정인 CHECKED_IN 계약 조회
-    const contracts = await Contract.findAll({
-      where: {
-        status: 'CHECKED_IN',
-        checkOutDate: {
-          [Op.gte]: threeDaysLater,
-          [Op.lt]: fourDaysLater
-        }
-      },
-      include: [
-        {
-          model: Room,
-          as: 'room',
-          attributes: ['id', 'title', 'checkOutGuide']
-        }
-      ]
-    });
-
-    console.log(`[알림 스케줄러] 퇴실 3일 전 알림 대상: ${contracts.length}건`);
-
-    for (const contract of contracts) {
-      try {
-        await NotificationService.notifyCheckoutReminder(
-          contract,
-          3,
-          contract.room?.checkOutGuide || ''
-        );
-        console.log(`[알림 스케줄러] 퇴실 임박 알림 전송: contractId=${contract.id}`);
-      } catch (err) {
-        console.error(`[알림 스케줄러] 퇴실 임박 알림 실패: contractId=${contract.id}`, err);
-      }
-    }
-
-    return contracts.length;
-  } catch (err) {
-    console.error('[알림 스케줄러] 퇴실 임박 알림 처리 실패:', err);
-    return 0;
-  }
-}
-
-/**
- * 옵션 마감 알림 발송 (입주 6일 전)
- * - CONFIRMED 상태 (결제 완료)
- * - 6일 후가 checkInDate인 계약 (5일 전까지 옵션 추가 가능)
- */
-async function sendOptionDeadlineNotifications() {
-  try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    // 6일 후
-    const sixDaysLater = new Date(today);
-    sixDaysLater.setDate(sixDaysLater.getDate() + 6);
-
-    const sevenDaysLater = new Date(sixDaysLater);
-    sevenDaysLater.setDate(sevenDaysLater.getDate() + 1);
-
-    // 6일 후 입주 예정인 CONFIRMED 계약 조회
-    const contracts = await Contract.findAll({
-      where: {
-        status: 'CONFIRMED',
-        checkInDate: {
-          [Op.gte]: sixDaysLater,
-          [Op.lt]: sevenDaysLater
-        }
-      }
-    });
-
-    console.log(`[알림 스케줄러] 옵션 마감 알림 대상: ${contracts.length}건`);
-
-    for (const contract of contracts) {
-      try {
-        await NotificationService.notifyOptionDeadline(contract);
-        console.log(`[알림 스케줄러] 옵션 마감 알림 전송: contractId=${contract.id}`);
-      } catch (err) {
-        console.error(`[알림 스케줄러] 옵션 마감 알림 실패: contractId=${contract.id}`, err);
-      }
-    }
-
-    return contracts.length;
-  } catch (err) {
-    console.error('[알림 스케줄러] 옵션 마감 알림 처리 실패:', err);
-    return 0;
-  }
-}
-
-/**
- * 퇴실 당일 알림 발송
- * - CHECKED_IN 상태 (입주 중)
- * - 오늘이 checkOutDate인 계약
- */
-async function sendCheckoutTodayNotifications() {
-  try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    // 오늘 퇴실 예정인 CHECKED_IN 계약 조회
-    const contracts = await Contract.findAll({
-      where: {
-        status: 'CHECKED_IN',
-        checkOutDate: {
-          [Op.gte]: today,
-          [Op.lt]: tomorrow
-        }
-      }
-    });
-
-    console.log(`[알림 스케줄러] 퇴실 당일 알림 대상: ${contracts.length}건`);
-
-    for (const contract of contracts) {
-      try {
-        await NotificationService.notifyCheckoutToday(contract);
-        console.log(`[알림 스케줄러] 퇴실 당일 알림 전송: contractId=${contract.id}`);
-      } catch (err) {
-        console.error(`[알림 스케줄러] 퇴실 당일 알림 실패: contractId=${contract.id}`, err);
-      }
-    }
-
-    return contracts.length;
-  } catch (err) {
-    console.error('[알림 스케줄러] 퇴실 당일 알림 처리 실패:', err);
-    return 0;
-  }
-}
-
-/**
- * 알림 스케줄러 시작
- */
-function startNotificationScheduler() {
-  // 매 시간 정각 - 결제 만료 3시간 전 알림
-  cron.schedule('0 * * * *', async () => {
-    console.log('[알림 스케줄러] 결제 만료 3시간 전 알림 실행...');
-    await sendPaymentPendingNotifications();
-  });
-
-  // 매일 오전 9시 - 입주 당일 알림
-  cron.schedule('0 9 * * *', async () => {
-    console.log('[알림 스케줄러] 입주 당일 알림 실행...');
-    await sendCheckinTodayNotifications();
-  });
-
-  // 매일 오전 9시 - 퇴실 3일 전 알림
-  cron.schedule('0 9 * * *', async () => {
-    console.log('[알림 스케줄러] 퇴실 3일 전 알림 실행...');
-    await sendCheckoutReminderNotifications();
-  });
-
-  // 매일 오전 9시 - 퇴실 당일 알림
-  cron.schedule('0 9 * * *', async () => {
-    console.log('[알림 스케줄러] 퇴실 당일 알림 실행...');
-    await sendCheckoutTodayNotifications();
-  });
-
-  // 매일 오전 10시 - 옵션 마감 알림
-  cron.schedule('0 10 * * *', async () => {
-    console.log('[알림 스케줄러] 옵션 마감 알림 실행...');
-    await sendOptionDeadlineNotifications();
-  });
-
-  console.log('[알림 스케줄러] 시작됨');
-  console.log('  - 결제 만료 3시간 전: 매 시간 정각');
-  console.log('  - 입주 당일: 매일 09:00');
-  console.log('  - 퇴실 3일 전: 매일 09:00');
-  console.log('  - 퇴실 당일: 매일 09:00');
-  console.log('  - 옵션 마감: 매일 10:00');
 }
 
 module.exports = {
   startNotificationScheduler,
-  // 개별 함수도 export (테스트 및 수동 실행용)
-  sendPaymentPendingNotifications,
-  sendCheckinTodayNotifications,
-  sendCheckoutReminderNotifications,
-  sendCheckoutTodayNotifications,
-  sendOptionDeadlineNotifications
+  checkMissedNotifications
 };

@@ -2036,12 +2036,15 @@ const confirmPayment = async (req, res) => {
       console.error('결제 완료 알림 전송 실패 (무시됨):', err);
     });
 
-    // 예약된 결제 만료 알림 취소 (Bull Queue)
+    // 예약된 결제 만료 알림 취소 + 새 알림 예약 (Bull Queue)
     try {
-      const { cancelScheduledNotification } = require('../queues/notificationQueue');
+      const { cancelScheduledNotification, schedulePaymentCompletedNotifications } = require('../queues/notificationQueue');
+      // 결제 만료 알림 취소
       await cancelScheduledNotification(contract.id);
+      // 입주 당일 + 옵션 마감 알림 예약
+      await schedulePaymentCompletedNotifications(contract.id, contract.checkInDate);
     } catch (queueErr) {
-      console.error('결제 만료 알림 취소 실패 (무시됨):', queueErr);
+      console.error('알림 큐 처리 실패 (무시됨):', queueErr);
     }
 
     console.log(`✅ 결제 승인 완료: contractId=${contract.id}, paymentKey=${payment.paymentKey}`);
@@ -2308,6 +2311,14 @@ const confirmCheckin = async (req, res) => {
       });
     } catch (notifyErr) {
       console.error('입주 확정 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    // 퇴실 관련 알림 예약 (Bull Queue)
+    try {
+      const { scheduleCheckinConfirmedNotifications } = require('../queues/notificationQueue');
+      await scheduleCheckinConfirmedNotifications(contract.id, contract.checkOutDate);
+    } catch (queueErr) {
+      console.error('퇴실 알림 예약 실패 (무시됨):', queueErr);
     }
 
     return updated(res, {
