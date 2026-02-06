@@ -1093,6 +1093,14 @@ const approveContract = async (req, res) => {
       console.error('계약 승인 알림 전송 실패 (무시됨):', notifyErr);
     }
 
+    // 결제 만료 3시간 전 알림 예약 (Bull Queue)
+    try {
+      const { schedulePaymentPendingNotification } = require('../queues/notificationQueue');
+      await schedulePaymentPendingNotification(contract.id, contract.approvedAt);
+    } catch (queueErr) {
+      console.error('결제 만료 알림 예약 실패 (무시됨):', queueErr);
+    }
+
     await transaction.commit();
 
     return updated(
@@ -2027,6 +2035,14 @@ const confirmPayment = async (req, res) => {
     NotificationService.notifyPaymentCompleted(contract).catch(err => {
       console.error('결제 완료 알림 전송 실패 (무시됨):', err);
     });
+
+    // 예약된 결제 만료 알림 취소 (Bull Queue)
+    try {
+      const { cancelScheduledNotification } = require('../queues/notificationQueue');
+      await cancelScheduledNotification(contract.id);
+    } catch (queueErr) {
+      console.error('결제 만료 알림 취소 실패 (무시됨):', queueErr);
+    }
 
     console.log(`✅ 결제 승인 완료: contractId=${contract.id}, paymentKey=${payment.paymentKey}`);
 

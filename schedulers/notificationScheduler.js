@@ -22,7 +22,11 @@ function formatDate(date) {
 }
 
 /**
- * 결제 만료 3시간 전 알림 발송
+ * 결제 만료 3시간 전 알림 발송 (Fallback용)
+ *
+ * NOTE: 주요 알림은 Bull Queue를 통해 정확한 시간에 발송됩니다.
+ * 이 함수는 Queue에서 누락된 경우를 대비한 백업용입니다.
+ *
  * - APPROVED 상태 (결제 대기 중)
  * - 결제 만료 = approvedAt + 24시간
  * - 알림 발송 = 만료 3시간 전 (approvedAt으로부터 21시간 후)
