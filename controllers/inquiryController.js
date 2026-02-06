@@ -1,6 +1,7 @@
 const { success, error, created, updated, deleted, ErrorCodes } = require('../utils/responseHelper');
 const { Inquiry, User, Admin } = require('../models');
 const { Op } = require('sequelize');
+const NotificationService = require('../services/notificationService');
 
 /**
  * 내 문의 목록 조회 (사용자용)
@@ -339,6 +340,17 @@ const answerInquiry = async (req, res) => {
       answeredAt: new Date(),
       status: 'answered'
     });
+
+    // 사용자에게 문의 답변 알림 전송
+    try {
+      await NotificationService.notifyInquiryAnswered(
+        inquiry.userId,
+        inquiry.id,
+        inquiry.title
+      );
+    } catch (notifyErr) {
+      console.error('문의 답변 알림 전송 실패:', notifyErr);
+    }
 
     return updated(res, inquiry, '답변이 등록되었습니다.');
   } catch (err) {

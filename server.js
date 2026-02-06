@@ -160,6 +160,10 @@ cleanupActionLogs();
 const { startRentalOrderScheduler } = require('./schedulers/rentalOrderScheduler');
 startRentalOrderScheduler();
 
+// 알림 스케줄러 시작 (결제만료, 입주/퇴실, 옵션마감 알림)
+const { startNotificationScheduler } = require('./schedulers/notificationScheduler');
+startNotificationScheduler();
+
 // Firebase Admin SDK 초기화
 const { initializeFirebase } = require('./config/firebaseAdmin');
 initializeFirebase();
@@ -178,6 +182,7 @@ const rentalItemRoutes = require('./routes/rentalItemRoutes');
 const { adminRouter: rentalItemAdminRoutes } = require('./routes/rentalItemRoutes');
 const scheduleRoutes = require('./routes/scheduleRoutes');
 const rentalOrderRoutes = require('./routes/rentalOrderRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 
 app.use('/api/rooms', roomRoutes);
 app.use('/api/auth', authRoutes);
@@ -193,6 +198,7 @@ app.use('/api', refundRoutes);
 app.use('/api/rental-items', rentalItemRoutes);  // 게스트용 공개 API
 app.use('/api/admin/rental-items', rentalItemAdminRoutes);  // 관리자용 API
 app.use('/api', rentalOrderRoutes);  // 렌탈 주문 API
+app.use('/api/notifications', notificationRoutes);  // 알림 API
 
 app.get('/', (req, res) => {
   res.json({ message: 'Rental API Server is running!' });

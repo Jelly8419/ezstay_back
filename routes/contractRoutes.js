@@ -14,7 +14,10 @@ const {
   getContractRefunds,
   getPaymentInfo,
   confirmPayment,
-  updatePendingRentalItems
+  updatePendingRentalItems,
+  confirmCheckin,
+  requestCheckout,
+  confirmCheckout
 } = require('../controllers/contractController');
 const { confirmPaymentMock } = require('../controllers/mockPaymentController');
 
@@ -208,6 +211,42 @@ router.get('/:contractId/payment-info', authenticateToken, getPaymentInfo);
  * }
  */
 router.post('/:contractId/confirm-payment', authenticateToken, confirmPayment);
+
+/**
+ * 게스트 입주 확정
+ * POST /api/contracts/:contractId/confirm-checkin
+ *
+ * 게스트가 입주 완료를 확인하는 API
+ * - CONFIRMED 또는 IN_PROGRESS 상태에서만 가능
+ * - 호스트에게 입주 확정 알림 발송
+ */
+router.post('/:contractId/confirm-checkin', authenticateToken, confirmCheckin);
+
+/**
+ * 게스트 퇴실 요청 (보증금 반환 요청)
+ * POST /api/contracts/:contractId/request-checkout
+ *
+ * 게스트가 퇴실 완료 후 보증금 반환을 요청
+ * - CHECKED_IN 또는 IN_PROGRESS 상태에서만 가능
+ * - 호스트에게 퇴실 확인 요청 알림 발송
+ */
+router.post('/:contractId/request-checkout', authenticateToken, requestCheckout);
+
+/**
+ * 호스트 퇴실 확인 (보증금 반환 승인)
+ * POST /api/contracts/:contractId/confirm-checkout
+ *
+ * 호스트가 방 점검 후 퇴실을 확인
+ * - CHECKED_IN 또는 IN_PROGRESS 상태에서만 가능
+ * - 보증금 차감이 있는 경우 depositDeduction, deductionReason 전달
+ *
+ * Request Body:
+ * {
+ *   "depositDeduction": 0,       (선택사항, 보증금 차감액)
+ *   "deductionReason": ""        (선택사항, 차감 사유)
+ * }
+ */
+router.post('/:contractId/confirm-checkout', authenticateToken, confirmCheckout);
 
 /**
  * Mock 결제 승인 (개발/테스트 환경 전용)

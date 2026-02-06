@@ -25,6 +25,7 @@ const {
   cancelPendingRentalOrder,
   logRentalAction
 } = require('../utils/rentalOrderHelper');
+const NotificationService = require('../services/notificationService');
 
 /**
  * 계약별 렌탈 주문 목록 조회
@@ -433,6 +434,14 @@ const confirmRentalPayment = async (req, res) => {
     );
 
     await transaction.commit();
+
+    // 옵션 결제 완료 알림 발송 (트랜잭션 완료 후)
+    try {
+      await NotificationService.notifyAdditionalOptionPayment(rentalOrder.contract);
+    } catch (notifyErr) {
+      console.error('옵션 결제 완료 알림 발송 실패:', notifyErr);
+      // 알림 실패해도 결제는 성공 처리
+    }
 
     return success(res, {
       rentalOrderId: rentalOrder.id,

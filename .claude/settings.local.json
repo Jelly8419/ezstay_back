@@ -67,7 +67,18 @@
       "mcp__sequential-thinking__sequentialthinking",
       "Bash(if [ ! -d \"scripts/dev-tools\" ])",
       "Bash(then mkdir -p scripts/dev-tools)",
-      "Bash(fi)"
+      "Bash(fi)",
+      "mcp__serena__think_about_whether_you_are_done",
+      "Bash(cd:*)",
+      "mcp__serena__list_memories",
+      "mcp__serena__list_dir",
+      "mcp__serena__check_onboarding_performed",
+      "Read(//c/**)",
+      "Bash(npx pm2:*)",
+      "Bash(wmic:*)",
+      "Bash(npm run dev:seed-contracts:*)",
+      "Bash(npm run dev:seed-clean:*)",
+      "mcp__serena__think_about_task_adherence"
     ],
     "deny": [],
     "ask": []
