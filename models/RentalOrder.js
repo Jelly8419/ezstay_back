@@ -110,6 +110,21 @@ const RentalOrder = sequelize.define('RentalOrder', {
     comment: '주문 시점 아이템 정보'
   },
 
+  // 배송 상태
+  deliveryStatus: {
+    type: DataTypes.ENUM('PENDING', 'IN_TRANSIT', 'DELIVERED'),
+    allowNull: false,
+    defaultValue: 'PENDING',
+    field: 'delivery_status',
+    comment: '배송 상태 (PENDING: 배송전, IN_TRANSIT: 배송중, DELIVERED: 배송완료)'
+  },
+  deliveredAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    field: 'delivered_at',
+    comment: '배송 완료 시점'
+  },
+
   createdAt: {
     type: DataTypes.DATE,
     allowNull: false,
@@ -146,6 +161,10 @@ const RentalOrder = sequelize.define('RentalOrder', {
     {
       fields: ['paid_at'],
       name: 'idx_rental_orders_paid_at'
+    },
+    {
+      fields: ['delivery_status'],
+      name: 'idx_rental_orders_delivery_status'
     }
   ]
 });
@@ -159,6 +178,15 @@ RentalOrder.STATUS_LABELS = {
   PARTIAL_REFUND: '부분 환불',
   FULLY_REFUNDED: '전액 환불',
   CANCELLED: '취소'
+};
+
+/**
+ * 배송 상태 레이블
+ */
+RentalOrder.DELIVERY_STATUS_LABELS = {
+  PENDING: '배송전',
+  IN_TRANSIT: '배송중',
+  DELIVERED: '배송완료'
 };
 
 /**

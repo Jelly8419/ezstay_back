@@ -53,7 +53,9 @@ const RentalOrderLog = sequelize.define('RentalOrderLog', {
       'REFUND_COMPLETED',     // 환불 완료
       'REFUND_FAILED',        // 환불 실패
       'ORDER_CANCELLED',      // 주문 전체 취소
-      'ORDER_EXPIRED'         // 주문 자동 만료 (미결제/기한 초과)
+      'ORDER_EXPIRED',        // 주문 자동 만료 (미결제/기한 초과)
+      'DELIVERY_STARTED',     // 배송 시작
+      'DELIVERY_COMPLETED'    // 배송 완료
     ),
     allowNull: false,
     comment: '액션 유형'
@@ -160,7 +162,9 @@ RentalOrderLog.ACTION_LABELS = {
   REFUND_COMPLETED: '환불 완료',
   REFUND_FAILED: '환불 실패',
   ORDER_CANCELLED: '주문 취소',
-  ORDER_EXPIRED: '주문 자동 만료'
+  ORDER_EXPIRED: '주문 자동 만료',
+  DELIVERY_STARTED: '배송 시작',
+  DELIVERY_COMPLETED: '배송 완료'
 };
 
 /**

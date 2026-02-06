@@ -260,4 +260,11 @@ router.post(
   adminController.adminCancelRentalItem
 );
 
+// 렌탈 주문 배송 상태 변경 (super_admin, admin만 가능)
+router.patch(
+  '/rental-orders/:rentalOrderId/delivery-status',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.updateRentalOrderDeliveryStatus
+);
+
 module.exports = router;

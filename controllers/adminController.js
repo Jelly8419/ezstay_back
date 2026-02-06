@@ -1700,6 +1700,7 @@ const getRentalOrders = async (req, res) => {
       page = 1,
       limit = 20,
       status,
+      deliveryStatus,
       orderType,
       contractId,
       startDate,
@@ -1713,6 +1714,10 @@ const getRentalOrders = async (req, res) => {
 
     if (status) {
       where.status = status;
+    }
+
+    if (deliveryStatus) {
+      where.deliveryStatus = deliveryStatus;
     }
 
     if (orderType) {
@@ -1774,6 +1779,9 @@ const getRentalOrders = async (req, res) => {
         rentalOrderId: order.rentalOrderId,
         orderType: order.orderType,
         status: order.status,
+        deliveryStatus: order.deliveryStatus,
+        deliveryStatusLabel: RentalOrder.DELIVERY_STATUS_LABELS[order.deliveryStatus],
+        deliveredAt: order.deliveredAt,
         totalAmount: parseFloat(order.totalAmount),
         refundedAmount: parseFloat(order.refundedAmount || 0),
         modifiableUntil: order.modifiableUntil,
@@ -1872,6 +1880,9 @@ const getRentalOrderDetail = async (req, res) => {
         rentalOrderId: order.rentalOrderId,
         orderType: order.orderType,
         status: order.status,
+        deliveryStatus: order.deliveryStatus,
+        deliveryStatusLabel: RentalOrder.DELIVERY_STATUS_LABELS[order.deliveryStatus],
+        deliveredAt: order.deliveredAt,
         totalAmount: parseFloat(order.totalAmount),
         refundedAmount: parseFloat(order.refundedAmount || 0),
         modifiableUntil: order.modifiableUntil,
@@ -2141,6 +2152,113 @@ const adminCancelRentalItem = async (req, res) => {
   }
 };
 
+/**
+ * 렌탈 주문 배송 상태 변경
+ * PATCH /api/admin/rental-orders/:rentalOrderId/delivery-status
+ */
+const updateRentalOrderDeliveryStatus = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { rentalOrderId } = req.params;
+    const { deliveryStatus } = req.body;
+    const adminId = req.admin.id;
+
+    // 입력 검증
+    const validStatuses = ['PENDING', 'IN_TRANSIT', 'DELIVERED'];
+    if (!deliveryStatus || !validStatuses.includes(deliveryStatus)) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+        details: '유효한 배송 상태를 입력해주세요. (PENDING, IN_TRANSIT, DELIVERED)'
+      });
+    }
+
+    // 렌탈 주문 조회
+    const rentalOrder = await RentalOrder.findByPk(rentalOrderId, {
+      include: [{
+        model: RentalOrderItem,
+        as: 'items',
+        include: [{
+          model: RentalItem,
+          as: 'rentalItem',
+          attributes: ['name']
+        }]
+      }],
+      transaction
+    });
+
+    if (!rentalOrder) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.RENTAL_ORDER_NOT_FOUND, 404);
+    }
+
+    // 결제 완료된 주문만 배송 상태 변경 가능
+    if (!['PAID', 'PARTIAL_REFUND'].includes(rentalOrder.status)) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+        details: '결제 완료된 주문만 배송 상태를 변경할 수 있습니다.'
+      });
+    }
+
+    const previousStatus = rentalOrder.deliveryStatus;
+
+    // 이미 같은 상태인 경우
+    if (previousStatus === deliveryStatus) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+        details: `이미 '${RentalOrder.DELIVERY_STATUS_LABELS[deliveryStatus]}' 상태입니다.`
+      });
+    }
+
+    // 배송 상태 업데이트
+    const updateData = {
+      deliveryStatus
+    };
+
+    // 배송 완료 시 시간 기록
+    if (deliveryStatus === 'DELIVERED') {
+      updateData.deliveredAt = new Date();
+    }
+
+    await rentalOrder.update(updateData, { transaction });
+
+    // 이력 로그 기록
+    const actionType = deliveryStatus === 'DELIVERED' ? 'DELIVERY_COMPLETED' : 'DELIVERY_STARTED';
+    await RentalOrderLog.createLog({
+      contractId: rentalOrder.contractId,
+      rentalOrderId: rentalOrder.id,
+      action: actionType,
+      actor: 'ADMIN',
+      actorId: adminId,
+      metadata: {
+        previousStatus,
+        newStatus: deliveryStatus,
+        items: rentalOrder.items.map(item => ({
+          name: item.rentalItem?.name,
+          quantity: item.quantity
+        }))
+      },
+      description: `배송 상태 변경: ${RentalOrder.DELIVERY_STATUS_LABELS[previousStatus]} → ${RentalOrder.DELIVERY_STATUS_LABELS[deliveryStatus]}`,
+      req
+    }, transaction);
+
+    await transaction.commit();
+
+    return updated(res, {
+      rentalOrderId: rentalOrder.id,
+      orderId: rentalOrder.orderId,
+      previousDeliveryStatus: previousStatus,
+      deliveryStatus: deliveryStatus,
+      deliveryStatusLabel: RentalOrder.DELIVERY_STATUS_LABELS[deliveryStatus],
+      deliveredAt: rentalOrder.deliveredAt
+    }, `배송 상태가 '${RentalOrder.DELIVERY_STATUS_LABELS[deliveryStatus]}'(으)로 변경되었습니다.`);
+  } catch (err) {
+    await transaction.rollback();
+    console.error('렌탈 주문 배송 상태 변경 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   // 대시보드
   getDashboardStats,
@@ -2182,5 +2300,6 @@ module.exports = {
   getRentalOrders,
   getRentalOrderDetail,
   getContractRentalHistory,
-  adminCancelRentalItem
+  adminCancelRentalItem,
+  updateRentalOrderDeliveryStatus
 };
