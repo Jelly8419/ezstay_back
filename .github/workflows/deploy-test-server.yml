@@ -85,15 +85,21 @@ jobs:
             echo "🔄 Git Pull..."
             git fetch origin
             git checkout develop
+
+            # 로컬 변경사항 정리 (package-lock.json 등 자동 생성 파일)
+            echo "🧹 로컬 변경사항 정리..."
+            git restore package-lock.json 2>/dev/null || true
+            git restore . 2>/dev/null || true
+
             git pull origin develop
 
-            # package.json 변경 감지
-            if git diff $CURRENT_COMMIT HEAD --name-only | grep -q "package.json"; then
-              echo "📦 package.json 변경 감지 - 의존성 재설치..."
-              rm -rf node_modules package-lock.json
-              npm install --legacy-peer-deps
+            # package.json 또는 package-lock.json 변경 감지
+            if git diff $CURRENT_COMMIT HEAD --name-only | grep -qE "package(-lock)?\.json"; then
+              echo "📦 의존성 파일 변경 감지 - 의존성 재설치..."
+              rm -rf node_modules
+              npm ci --legacy-peer-deps  # npm ci는 package-lock.json을 수정하지 않음
             else
-              echo "✅ package.json 변경 없음 - 의존성 설치 스킵"
+              echo "✅ 의존성 파일 변경 없음 - 설치 스킵"
             fi
 
             # PM2로 무중단 배포 (reload)
@@ -111,8 +117,8 @@ jobs:
             else
               echo "❌ 헬스체크 실패 - 롤백 시작..."
               git reset --hard $CURRENT_COMMIT
-              rm -rf node_modules package-lock.json
-              npm install --legacy-peer-deps  # 롤백 시에도 안전한 방식으로 의존성 설치
+              rm -rf node_modules
+              npm ci --legacy-peer-deps  # npm ci로 안전하게 의존성 설치
               pm2 reload ezstay-api
               echo "🔙 롤백 완료: $CURRENT_COMMIT"
               exit 1
