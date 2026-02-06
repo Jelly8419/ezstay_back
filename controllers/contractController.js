@@ -20,6 +20,8 @@ const {
   confirmRentalOrderPayment,
   getContractRentalSummary
 } = require('../utils/rentalOrderHelper');
+const NotificationService = require('../services/notificationService');
+const { CANCEL_TYPES } = require('../utils/notificationMessages');
 
 /**
  * 계약 요청 생성 (게스트 -> 호스트)
@@ -387,8 +389,13 @@ const createContractRequest = async (req, res) => {
       transaction
     });
 
-    // 13. TODO: 호스트에게 알림 전송 (추후 구현)
-    // await sendNotificationToHost(room.hostId, { ... });
+    // 13. 알림 전송 (호스트 + 게스트 모두)
+    try {
+      const guest = await User.findByPk(guestId, { attributes: ['id', 'name', 'nickname'] });
+      await NotificationService.notifyContractRequest(contract, { room, guest });
+    } catch (notifyErr) {
+      console.error('계약 요청 알림 전송 실패 (무시됨):', notifyErr);
+    }
 
     // 14. [개발 환경 전용] 자동 승인 기능
     let finalStatus = contract.status;
@@ -983,16 +990,16 @@ const approveContract = async (req, res) => {
       transaction
     });
 
+    // 방 정보 조회 (알림 전송용)
+    const room = await Room.findByPk(contract.roomId, {
+      attributes: ['id', 'roomName', 'title', 'address'],
+      transaction
+    });
+
     // 채팅방 자동 생성
     try {
       // Firebase 채팅방 ID 생성
       const firebaseChatRoomId = ChatRoom.generateFirebaseChatRoomId(contract.id);
-
-      // 방 정보 조회
-      const room = await Room.findByPk(contract.roomId, {
-        attributes: ['id', 'roomName', 'address'],
-        transaction
-      });
 
       // 호스트/게스트 정보 조회
       const host = await User.findByPk(contract.hostId, {
@@ -1079,8 +1086,12 @@ const approveContract = async (req, res) => {
       // 채팅방 생성 실패해도 계약 승인은 계속 진행
     }
 
-    // TODO: 게스트에게 승인 알림 전송 (추후 구현)
-    // await sendNotificationToGuest(contract.guestId, { ... });
+    // 알림 전송 (호스트 + 게스트 모두에게)
+    try {
+      await NotificationService.notifyContractApproved(contract, { room });
+    } catch (notifyErr) {
+      console.error('계약 승인 알림 전송 실패 (무시됨):', notifyErr);
+    }
 
     await transaction.commit();
 
@@ -1195,7 +1206,13 @@ const rejectContract = async (req, res) => {
     }
 
     // TODO: 렌탈 아이템 예약 해제 (재고 복구)
-    // TODO: 게스트에게 거절 알림 전송 (추후 구현)
+
+    // 게스트에게 거절 알림 전송
+    try {
+      await NotificationService.notifyContractRejected(contract);
+    } catch (notifyErr) {
+      console.error('계약 거절 알림 전송 실패 (무시됨):', notifyErr);
+    }
 
     await transaction.commit();
 
@@ -1307,8 +1324,12 @@ const cancelContractByGuest = async (req, res) => {
       });
     }
 
-    // TODO: 호스트에게 취소 알림 전송 (추후 구현)
-    // await sendNotificationToHost(contract.hostId, { ... });
+    // 호스트/게스트 모두에게 취소 알림 전송
+    try {
+      await NotificationService.notifyContractCanceled(contract, CANCEL_TYPES.GUEST_CANCEL);
+    } catch (notifyErr) {
+      console.error('계약 취소 알림 전송 실패 (무시됨):', notifyErr);
+    }
 
     await transaction.commit();
 
@@ -2002,6 +2023,11 @@ const confirmPayment = async (req, res) => {
       console.error(`[자동메시지] 계약 확정 메시지 발송 실패 (무시됨):`, err);
     });
 
+    // 결제 완료 알림 (호스트 + 게스트)
+    NotificationService.notifyPaymentCompleted(contract).catch(err => {
+      console.error('결제 완료 알림 전송 실패 (무시됨):', err);
+    });
+
     console.log(`✅ 결제 승인 완료: contractId=${contract.id}, paymentKey=${payment.paymentKey}`);
 
     // 응답 데이터 구성
@@ -2207,6 +2233,239 @@ const updatePendingRentalItems = async (req, res) => {
   }
 };
 
+/**
+ * 게스트 입주 확정
+ * POST /api/contracts/:contractId/confirm-checkin
+ *
+ * 게스트가 입주를 완료했음을 확인
+ * - CONFIRMED 또는 IN_PROGRESS 상태에서만 가능
+ * - 호스트에게 입주 확정 알림 발송
+ */
+const confirmCheckin = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const guestId = req.user.id;
+
+    const contract = await Contract.findByPk(contractId, {
+      include: [
+        { model: User, as: 'guest', attributes: ['id', 'name', 'nickname'] },
+        { model: Room, as: 'room', attributes: ['id', 'title'] }
+      ]
+    });
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    // 게스트 본인만 확정 가능
+    if (contract.guestId !== guestId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    // 상태 검증
+    if (!['CONFIRMED', 'IN_PROGRESS'].includes(contract.status)) {
+      return error(res, {
+        code: 4610,
+        message: '입주 확정이 가능한 상태가 아닙니다.'
+      }, 400);
+    }
+
+    // 이미 입주 확정된 경우
+    if (contract.guestCheckedIn) {
+      return error(res, {
+        code: 4611,
+        message: '이미 입주 확정 처리되었습니다.'
+      }, 400);
+    }
+
+    // 입주 확정 처리
+    await contract.update({
+      guestCheckedIn: true,
+      guestCheckedInAt: new Date(),
+      status: 'CHECKED_IN'
+    });
+
+    // 호스트에게 입주 확정 알림 발송
+    try {
+      await NotificationService.notifyCheckinConfirmed(contract, {
+        guest: contract.guest
+      });
+    } catch (notifyErr) {
+      console.error('입주 확정 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    return updated(res, {
+      contractId: contract.id,
+      status: contract.status,
+      guestCheckedIn: true,
+      guestCheckedInAt: contract.guestCheckedInAt
+    }, '입주가 확정되었습니다.');
+
+  } catch (err) {
+    console.error('입주 확정 처리 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 게스트 퇴실 요청 (보증금 반환 요청)
+ * POST /api/contracts/:contractId/request-checkout
+ *
+ * 게스트가 퇴실 완료 후 보증금 반환을 요청
+ * - CHECKED_IN 또는 IN_PROGRESS 상태에서만 가능
+ * - 호스트에게 퇴실 확인 요청 알림 발송
+ */
+const requestCheckout = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const guestId = req.user.id;
+
+    const contract = await Contract.findByPk(contractId, {
+      include: [
+        { model: User, as: 'guest', attributes: ['id', 'name', 'nickname'] },
+        { model: Room, as: 'room', attributes: ['id', 'title'] }
+      ]
+    });
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    // 게스트 본인만 요청 가능
+    if (contract.guestId !== guestId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    // 상태 검증
+    if (!['CHECKED_IN', 'IN_PROGRESS'].includes(contract.status)) {
+      return error(res, {
+        code: 4612,
+        message: '퇴실 요청이 가능한 상태가 아닙니다.'
+      }, 400);
+    }
+
+    // 이미 퇴실 요청된 경우
+    if (contract.checkoutRequested) {
+      return error(res, {
+        code: 4613,
+        message: '이미 퇴실 요청이 접수되었습니다.'
+      }, 400);
+    }
+
+    // 퇴실 요청 처리
+    await contract.update({
+      checkoutRequested: true,
+      checkoutRequestedAt: new Date()
+    });
+
+    // 호스트에게 퇴실 확인 요청 알림 발송
+    try {
+      await NotificationService.notifyCheckoutRequest(contract, {
+        guest: contract.guest,
+        room: contract.room
+      });
+    } catch (notifyErr) {
+      console.error('퇴실 요청 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    return updated(res, {
+      contractId: contract.id,
+      checkoutRequested: true,
+      checkoutRequestedAt: contract.checkoutRequestedAt
+    }, '퇴실 요청이 접수되었습니다. 호스트가 확인 후 보증금이 반환됩니다.');
+
+  } catch (err) {
+    console.error('퇴실 요청 처리 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 호스트 퇴실 확인 (보증금 반환 승인)
+ * POST /api/contracts/:contractId/confirm-checkout
+ *
+ * 호스트가 방 점검 후 퇴실을 확인
+ * - CHECKED_IN 또는 IN_PROGRESS 상태에서만 가능
+ * - checkoutRequested가 true인 경우에만 가능
+ * - 호스트/게스트 모두에게 퇴실 완료 알림 발송
+ */
+const confirmCheckout = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const hostId = req.user.id;
+    const { depositDeduction = 0, deductionReason = '' } = req.body;
+
+    const contract = await Contract.findByPk(contractId);
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    // 호스트 본인만 확인 가능
+    if (contract.hostId !== hostId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    // 상태 검증
+    if (!['CHECKED_IN', 'IN_PROGRESS'].includes(contract.status)) {
+      return error(res, {
+        code: 4614,
+        message: '퇴실 확인이 가능한 상태가 아닙니다.'
+      }, 400);
+    }
+
+    // 퇴실 요청이 없는 경우
+    if (!contract.checkoutRequested) {
+      return error(res, {
+        code: 4615,
+        message: '게스트의 퇴실 요청이 먼저 필요합니다.'
+      }, 400);
+    }
+
+    // 이미 퇴실 확인된 경우
+    if (contract.status === 'COMPLETED') {
+      return error(res, {
+        code: 4616,
+        message: '이미 퇴실 확인 처리되었습니다.'
+      }, 400);
+    }
+
+    // 퇴실 확인 처리
+    const refundableDeposit = Math.max(0, (contract.deposit || 0) - depositDeduction);
+
+    await contract.update({
+      status: 'COMPLETED',
+      checkedOutAt: new Date(),
+      hostCheckedOut: true,
+      hostCheckedOutAt: new Date(),
+      depositDeduction,
+      deductionReason,
+      refundableDeposit
+    });
+
+    // 호스트/게스트 모두에게 퇴실 완료 알림 발송
+    try {
+      await NotificationService.notifyCheckoutConfirmed(contract);
+    } catch (notifyErr) {
+      console.error('퇴실 완료 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    return updated(res, {
+      contractId: contract.id,
+      status: 'COMPLETED',
+      checkedOutAt: contract.checkedOutAt,
+      deposit: contract.deposit,
+      depositDeduction,
+      refundableDeposit,
+      deductionReason: deductionReason || null
+    }, '퇴실이 확인되었습니다. 보증금 반환 처리가 진행됩니다.');
+
+  } catch (err) {
+    console.error('퇴실 확인 처리 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   createContractRequest,
   getGuestContracts,
@@ -2220,5 +2479,8 @@ module.exports = {
   getContractRefunds,
   getPaymentInfo,
   confirmPayment,
-  updatePendingRentalItems
+  updatePendingRentalItems,
+  confirmCheckin,
+  requestCheckout,
+  confirmCheckout
 };

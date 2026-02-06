@@ -30,6 +30,7 @@ const PaymentFailureLogModel = require('./PaymentFailureLog');
 const BlockedPeriod = require('./BlockedPeriod');
 const AutoMessageTemplate = require('./AutoMessageTemplate');
 const NotificationLog = require('./NotificationLog');
+const Notification = require('./Notification');
 const RentalOrder = require('./RentalOrder');
 const RentalOrderItem = require('./RentalOrderItem');
 const RentalOrderLog = require('./RentalOrderLog');
@@ -663,6 +664,24 @@ RentalPaymentFailureLog.belongsTo(Contract, {
   onUpdate: 'CASCADE'
 });
 
+// =====================================================
+// Notification 관계 설정 (사용자 알림)
+// =====================================================
+
+// User ↔ Notification (Soft Reference - FK 제약 없음)
+User.hasMany(Notification, {
+  foreignKey: 'userId',
+  as: 'notifications',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Notification.belongsTo(User, {
+  foreignKey: 'userId',
+  as: 'user',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -698,6 +717,7 @@ module.exports = {
   BlockedPeriod,
   AutoMessageTemplate,
   NotificationLog,
+  Notification,
   RentalOrder,
   RentalOrderItem,
   RentalOrderLog,

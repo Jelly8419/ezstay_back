@@ -1,5 +1,6 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
 const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, sequelize } = require('../models');
+const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 const { calculateProgress } = require('../utils/roomProgress');
@@ -471,7 +472,17 @@ const approveProperty = async (req, res) => {
     // 캐시 무효화 (ETag 버전 증가)
     await invalidateRoomCache();
 
-    // TODO: 호스트에게 승인 알림 전송
+    // 호스트에게 승인 알림 전송
+    try {
+      await NotificationService.notifyPropertyReviewResult(
+        room.hostId,
+        room.id,
+        room.title,
+        true // isApproved
+      );
+    } catch (notifyErr) {
+      console.error('매물 승인 알림 전송 실패:', notifyErr);
+    }
 
     return success(res, room, '매물 승인 완료');
   } catch (err) {
@@ -512,7 +523,18 @@ const rejectProperty = async (req, res) => {
     // 캐시 무효화 (ETag 버전 증가)
     await invalidateRoomCache();
 
-    // TODO: 호스트에게 반려 알림 전송
+    // 호스트에게 반려 알림 전송
+    try {
+      await NotificationService.notifyPropertyReviewResult(
+        room.hostId,
+        room.id,
+        room.title,
+        false, // isApproved
+        rejectionReason
+      );
+    } catch (notifyErr) {
+      console.error('매물 반려 알림 전송 실패:', notifyErr);
+    }
 
     return success(res, room, '매물 반려 완료');
   } catch (err) {

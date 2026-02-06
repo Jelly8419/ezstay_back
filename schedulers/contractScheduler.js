@@ -3,6 +3,8 @@ const { Contract, ChatRoom, ContractStatusLog, sequelize } = require('../models'
 const { Op } = require('sequelize');
 const { sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
+const NotificationService = require('../services/notificationService');
+const { CANCEL_TYPES } = require('../utils/notificationMessages');
 
 /**
  * 계약 상태 자동 업데이트 스케줄러
@@ -188,9 +190,10 @@ async function updatePaymentExpired() {
 
     await transaction.commit();
 
-    // 시스템 메시지 발송 (트랜잭션 외부에서 비동기 실행)
+    // 시스템 메시지 및 알림 발송 (트랜잭션 외부에서 비동기 실행)
     if (expiredContracts.length > 0) {
-      expiredContracts.forEach(contract => {
+      for (const contract of expiredContracts) {
+        // 채팅 시스템 메시지
         if (contract.chatRoom) {
           sendSystemMessage(
             contract.chatRoom.firebaseChatRoomId,
@@ -201,7 +204,14 @@ async function updatePaymentExpired() {
             console.error(`결제 만료 시스템 메시지 발송 실패 (계약 ID: ${contract.id}):`, err);
           });
         }
-      });
+
+        // 알림 발송 (결제 만료로 인한 계약 취소)
+        try {
+          await NotificationService.notifyContractCanceled(contract, CANCEL_TYPES.PAYMENT_EXPIRED);
+        } catch (notifyErr) {
+          console.error(`결제 만료 알림 발송 실패 (계약 ID: ${contract.id}):`, notifyErr);
+        }
+      }
     }
 
     if (result[0] > 0) {

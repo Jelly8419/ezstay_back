@@ -1,6 +1,7 @@
 const { success, error, created, updated, deleted, ErrorCodes } = require('../utils/responseHelper');
-const { Notice, Admin } = require('../models');
+const { Notice, Admin, User } = require('../models');
 const { Op } = require('sequelize');
+const NotificationService = require('../services/notificationService');
 
 /**
  * 공지사항 목록 조회 (사용자용)
@@ -338,6 +339,36 @@ const publishNotice = async (req, res) => {
       publishedAt: notice.publishedAt || new Date(),
       updatedBy: adminId
     });
+
+    // 대상 사용자에게 공지사항 알림 전송 (비동기로 처리)
+    try {
+      // userType에 따라 대상 사용자 조회
+      const whereCondition = { isActive: true };
+      if (notice.userType === 'host') {
+        whereCondition.isHost = true;
+      }
+      // guest인 경우 모든 활성 사용자 (all인 경우도 마찬가지)
+
+      const users = await User.findAll({
+        where: whereCondition,
+        attributes: ['id']
+      });
+      const userIds = users.map(u => u.id);
+
+      if (userIds.length > 0) {
+        // 알림 생성은 백그라운드로 처리 (응답 지연 방지)
+        setImmediate(async () => {
+          try {
+            await NotificationService.notifyNotice(notice, userIds);
+            console.log(`공지사항 알림 전송 완료: ${userIds.length}명`);
+          } catch (err) {
+            console.error('공지사항 알림 전송 실패:', err);
+          }
+        });
+      }
+    } catch (notifyErr) {
+      console.error('공지사항 알림 대상 조회 실패:', notifyErr);
+    }
 
     return updated(res, notice, '공지사항이 게시되었습니다.');
   } catch (err) {
