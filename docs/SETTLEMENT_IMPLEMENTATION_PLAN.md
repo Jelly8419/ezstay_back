@@ -6,10 +6,14 @@
 **결론: 별도 Settlement 테이블 생성 필요 없음**
 
 **이유:**
-- Contract 테이블에 이미 모든 금액 정보 존재 (rentalFee, maintenanceFee, cleaningFee, platformFee)
+- Contract 테이블에 이미 모든 금액 정보 존재 (rentalFee, maintenanceFee, cleaningFee, hostPlatformFee)
 - Refund 테이블에 환불 관련 상세 정보 존재
 - 정산은 Contract의 상태(COMPLETED) + 체크아웃 날짜 기반으로 계산 가능
 - 별도 테이블 생성 시 데이터 동기화 문제 발생 가능
+
+**수수료 저장 방식:**
+- `platformFee`: 게스트 플랫폼 수수료 (9.9%) - 게스트가 추가 결제
+- `hostPlatformFee`: 호스트 플랫폼 수수료 (3.3%) - 정산 시 차감, 계약 생성 시 저장
 
 ### 1.2 정산 대상 조건
 ```
@@ -25,14 +29,24 @@
 ```
 
 ### 1.3 정산 금액 계산 공식
+
+**수수료 정책:**
+- 게스트 플랫폼 수수료: 9.9% (게스트가 결제 시 추가 부담, Contract.platformFee)
+- 호스트 플랫폼 수수료: 3.3% (호스트 정산 시 차감, 동적 계산)
+
 ```javascript
+// 소계 (EZ청소서비스 사용 시 청소비 제외)
+subtotal = rentalFee + maintenanceFee + cleaningFee(EZ서비스 미사용 시)
+
+// 호스트 플랫폼 수수료 (3.3%) - Contract.hostPlatformFee에 저장됨
+hostPlatformFee = Contract.hostPlatformFee  // 계약 생성 시 계산되어 저장
+
 // 기본 정산 금액 (호스트 수령액)
-hostSettlement = rentalFee + maintenanceFee + cleaningFee - platformFee
+grossSettlement = subtotal - hostPlatformFee
 
 // 환불이 있는 경우
 // Refund 테이블에서 해당 계약의 환불 정보 조회
-// hostSettlement -= (rentalFeeRefundAmount + maintenanceFeeRefundAmount + cleaningFeeRefundAmount)
-// 단, 플랫폼 수수료 환불분은 호스트 정산에서 제외되지 않음
+// grossSettlement -= (rentalFeeRefundAmount + maintenanceFeeRefundAmount + cleaningFeeRefundAmount)
 ```
 
 ---

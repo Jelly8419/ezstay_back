@@ -31,7 +31,7 @@ const createSettlementExcel = async (data) => {
     { header: '청소비', key: 'cleaningFee', width: 12 },
     { header: 'EZ청소', key: 'ezCleaning', width: 10 },
     { header: '소계', key: 'subtotal', width: 15 },
-    { header: '플랫폼 수수료', key: 'platformFee', width: 14 },
+    { header: '플랫폼 수수료(3.3%)', key: 'platformFee', width: 16 },
     { header: '환불금액', key: 'refundAmount', width: 12 },
     { header: '정산금액', key: 'settlementAmount', width: 15 },
     { header: '정산예정일', key: 'settlementDate', width: 12 },

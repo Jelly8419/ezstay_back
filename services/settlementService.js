@@ -28,12 +28,19 @@ const getSettlementStatus = (checkOutDate) => {
 };
 
 /**
+ * 호스트 플랫폼 수수료율 (3.3%)
+ * - 게스트 수수료 (9.9%): 게스트가 결제 시 추가 부담 → Contract.platformFee
+ * - 호스트 수수료 (3.3%): 정산 시 차감 → Contract.hostPlatformFee
+ */
+const HOST_PLATFORM_FEE_RATE = 0.033;
+
+/**
  * 정산 금액 계산
  * @param {Object} contract - 계약 정보
  * @param {number} contract.rentalFee - 임대료
  * @param {number} contract.maintenanceFee - 관리비
  * @param {number} contract.cleaningFee - 청소비
- * @param {number} contract.platformFee - 플랫폼 수수료
+ * @param {number} contract.hostPlatformFee - 호스트 플랫폼 수수료 (3.3%)
  * @param {Array} refunds - 환불 정보 배열
  * @param {Object} options - 옵션
  * @param {boolean} options.hasEzCleaningService - EZ청소서비스 사용 여부
@@ -44,7 +51,7 @@ const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
     rentalFee = 0,
     maintenanceFee = 0,
     cleaningFee = 0,
-    platformFee = 0
+    hostPlatformFee: storedHostPlatformFee
   } = contract;
 
   const { hasEzCleaningService = false } = options;
@@ -52,10 +59,17 @@ const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
   // EZ청소서비스 사용 시 청소비는 플랫폼이 가져감 (호스트 정산에서 제외)
   const hostCleaningFee = hasEzCleaningService ? 0 : cleaningFee;
 
-  // 기본 정산 금액 (호스트 수령액)
   // 소계: 임대료 + 관리비 + 청소비(EZ서비스 미사용 시만)
   const subtotal = rentalFee + maintenanceFee + hostCleaningFee;
-  const grossSettlement = subtotal - platformFee;
+
+  // 호스트 플랫폼 수수료 (3.3%)
+  // DB에 저장된 값 사용, 없으면 동적 계산 (이전 계약 호환)
+  const hostPlatformFee = storedHostPlatformFee != null
+    ? storedHostPlatformFee
+    : Math.floor(subtotal * HOST_PLATFORM_FEE_RATE);
+
+  // 기본 정산 금액 (호스트 수령액)
+  const grossSettlement = subtotal - hostPlatformFee;
 
   // 환불 금액 계산 (완료된 환불만)
   let totalRefundAmount = 0;
@@ -79,11 +93,6 @@ const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
   // 최종 정산 금액
   const finalAmount = grossSettlement - totalRefundAmount;
 
-  // 수수료율 계산 (수수료 계산 기준: 임대료 + 관리비 + 청소비(EZ서비스 미사용 시))
-  // 실제 수수료율은 9.9%이지만, 표시용으로 실제 비율 계산
-  const feeBase = rentalFee + maintenanceFee + hostCleaningFee;
-  const platformFeeRate = feeBase > 0 ? Math.round((platformFee / feeBase) * 1000) / 10 : 0;
-
   return {
     rentalFee,
     maintenanceFee,
@@ -91,8 +100,8 @@ const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
     originalCleaningFee: cleaningFee,  // 원래 청소비 (표시용)
     hasEzCleaningService,
     subtotal,
-    platformFee,
-    platformFeeRate,
+    platformFee: hostPlatformFee,  // 호스트 수수료 (3.3%)
+    platformFeeRate: HOST_PLATFORM_FEE_RATE * 100,  // 3.3%
     grossSettlement,
     refund: {
       hasRefund: totalRefundAmount > 0,
