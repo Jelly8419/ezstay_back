@@ -6,7 +6,9 @@ const NotificationService = require('../services/notificationService');
 /**
  * 알림 스케줄러
  *
- * 1. 결제 만료 24시간 전 알림 (PAYMENT_PENDING)
+ * 1. 결제 만료 3시간 전 알림 (PAYMENT_PENDING)
+ *    - 결제 만료 = approvedAt + 24시간
+ *    - 알림 발송 = approvedAt + 21시간 (만료 3시간 전)
  * 2. 입주 당일 알림 (CHECKIN_TODAY)
  * 3. 퇴실 3일 전 알림 (CHECKOUT_REMINDER)
  * 4. 옵션 마감 알림 - 입주 6일 전 (OPTION_DEADLINE)
@@ -20,27 +22,36 @@ function formatDate(date) {
 }
 
 /**
- * 결제 만료 24시간 전 알림 발송
+ * 결제 만료 3시간 전 알림 발송
  * - APPROVED 상태 (결제 대기 중)
- * - paymentDeadline이 24시간 이내인 계약
+ * - 결제 만료 = approvedAt + 24시간
+ * - 알림 발송 = 만료 3시간 전 (approvedAt으로부터 21시간 후)
  */
 async function sendPaymentPendingNotifications() {
   try {
     const now = new Date();
-    const in24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
-    // 결제 기한이 24시간 이내인 APPROVED 계약 조회
+    // 결제 만료 3시간 전에 알림을 보내려면:
+    // - 결제 만료 = approvedAt + 24시간
+    // - 알림 시점 = approvedAt + 21시간 (만료 3시간 전)
+    //
+    // 조건: approvedAt이 21~22시간 전인 계약 (매 시간 실행되므로 1시간 범위)
+    const hoursAgo21 = new Date(now.getTime() - 21 * 60 * 60 * 1000);
+    const hoursAgo22 = new Date(now.getTime() - 22 * 60 * 60 * 1000);
+
+    // approvedAt이 21~22시간 전인 APPROVED 계약 조회
+    // (결제 만료까지 2~3시간 남은 계약)
     const contracts = await Contract.findAll({
       where: {
         status: 'APPROVED',
-        paymentDeadline: {
-          [Op.gt]: now,
-          [Op.lte]: in24Hours
+        approvedAt: {
+          [Op.gt]: hoursAgo22,
+          [Op.lte]: hoursAgo21
         }
       }
     });
 
-    console.log(`[알림 스케줄러] 결제 만료 임박 알림 대상: ${contracts.length}건`);
+    console.log(`[알림 스케줄러] 결제 만료 3시간 전 알림 대상: ${contracts.length}건`);
 
     for (const contract of contracts) {
       try {
@@ -264,9 +275,9 @@ async function sendCheckoutTodayNotifications() {
  * 알림 스케줄러 시작
  */
 function startNotificationScheduler() {
-  // 매 시간 정각 - 결제 만료 24시간 전 알림
+  // 매 시간 정각 - 결제 만료 3시간 전 알림
   cron.schedule('0 * * * *', async () => {
-    console.log('[알림 스케줄러] 결제 만료 임박 알림 실행...');
+    console.log('[알림 스케줄러] 결제 만료 3시간 전 알림 실행...');
     await sendPaymentPendingNotifications();
   });
 
@@ -295,7 +306,7 @@ function startNotificationScheduler() {
   });
 
   console.log('[알림 스케줄러] 시작됨');
-  console.log('  - 결제 만료 임박: 매 시간 정각');
+  console.log('  - 결제 만료 3시간 전: 매 시간 정각');
   console.log('  - 입주 당일: 매일 09:00');
   console.log('  - 퇴실 3일 전: 매일 09:00');
   console.log('  - 퇴실 당일: 매일 09:00');
