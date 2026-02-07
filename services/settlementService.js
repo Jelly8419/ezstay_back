@@ -78,7 +78,7 @@ const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
   let cleaningFeeRefund = 0;
 
   refunds.forEach(refund => {
-    if (refund.status === 'COMPLETED') {
+    if (refund.refundStatus === 'COMPLETED') {
       rentalFeeRefund += refund.rentalFeeRefundAmount || 0;
       maintenanceFeeRefund += refund.maintenanceFeeRefundAmount || 0;
       // EZ청소서비스 사용 시 청소비 환불도 호스트 정산에서 제외

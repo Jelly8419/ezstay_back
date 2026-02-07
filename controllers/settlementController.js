@@ -96,9 +96,11 @@ const getSettlements = async (req, res) => {
             {
               model: RoomPhoto,
               as: 'photos',
-              attributes: ['photoUrl'],
-              where: { displayOrder: 1 },
-              required: false
+              attributes: ['url'],
+              required: false,
+              separate: true,
+              order: [['order', 'ASC']],
+              limit: 1
             },
             {
               model: EzService,
@@ -117,7 +119,7 @@ const getSettlements = async (req, res) => {
           model: Refund,
           as: 'refunds',
           attributes: [
-            'id', 'status', 'rentalFeeRefundAmount',
+            'id', 'refundStatus', 'rentalFeeRefundAmount',
             'maintenanceFeeRefundAmount', 'cleaningFeeRefundAmount'
           ],
           required: false
@@ -140,7 +142,7 @@ const getSettlements = async (req, res) => {
         contractNumber: contract.contractNumber,
         roomId: contract.room?.id,
         roomTitle: contract.room?.roomName,
-        roomThumbnail: contract.room?.photos?.[0]?.photoUrl || null,
+        roomThumbnail: contract.room?.photos?.[0]?.url || null,
         guestName: contract.guest?.name,
         checkInDate: contract.checkInDate,
         checkOutDate: contract.checkOutDate,
@@ -262,9 +264,11 @@ const getSettlementDetail = async (req, res) => {
             {
               model: RoomPhoto,
               as: 'photos',
-              attributes: ['photoUrl'],
-              where: { displayOrder: 1 },
-              required: false
+              attributes: ['url'],
+              required: false,
+              separate: true,
+              order: [['order', 'ASC']],
+              limit: 1
             },
             {
               model: EzService,
@@ -283,7 +287,7 @@ const getSettlementDetail = async (req, res) => {
           model: Refund,
           as: 'refunds',
           attributes: [
-            'id', 'status', 'refundType', 'refundReason',
+            'id', 'refundStatus', 'policyTypeUsed', 'cancellationReason',
             'rentalFeeRefundAmount', 'maintenanceFeeRefundAmount',
             'cleaningFeeRefundAmount', 'platformFeeDeducted',
             'finalRefundAmount', 'completedAt', 'createdAt'
@@ -315,12 +319,12 @@ const getSettlementDetail = async (req, res) => {
     const settlementDate = calculateSettlementDate(contract.checkOutDate);
 
     // 환불 정보 가공
-    const completedRefund = contract.refunds?.find(r => r.status === 'COMPLETED');
+    const completedRefund = contract.refunds?.find(r => r.refundStatus === 'COMPLETED');
     const refundInfo = completedRefund ? {
       hasRefund: true,
       refundDate: completedRefund.completedAt || completedRefund.createdAt,
-      refundReason: completedRefund.refundReason,
-      refundType: completedRefund.refundType,
+      refundReason: completedRefund.cancellationReason,
+      refundType: completedRefund.policyTypeUsed,
       refundDetails: {
         rentalFeeRefund: completedRefund.rentalFeeRefundAmount || 0,
         maintenanceFeeRefund: completedRefund.maintenanceFeeRefundAmount || 0,
@@ -350,7 +354,7 @@ const getSettlementDetail = async (req, res) => {
         roomId: contract.room?.id,
         title: contract.room?.roomName,
         address: contract.room?.address,
-        thumbnail: contract.room?.photos?.[0]?.photoUrl || null
+        thumbnail: contract.room?.photos?.[0]?.url || null
       },
       guest: {
         name: contract.guest?.name,
@@ -472,7 +476,7 @@ const exportSettlements = async (req, res) => {
           model: Refund,
           as: 'refunds',
           attributes: [
-            'id', 'status', 'rentalFeeRefundAmount',
+            'id', 'refundStatus', 'rentalFeeRefundAmount',
             'maintenanceFeeRefundAmount', 'cleaningFeeRefundAmount'
           ],
           required: false
