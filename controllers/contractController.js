@@ -253,7 +253,7 @@ const createContractRequest = async (req, res) => {
     // 할인 적용 후 금액
     const afterDiscount = subtotalServer - discountAmountServer;
 
-    // 플랫폼 수수료 계산 (9.9%)
+    // 플랫폼 수수료 계산
     // - 기준: 임대료 + 관리비 + 청소비(EZ서비스 사용시 제외) - 총할인
     // - EZ청소서비스 사용 시 청소비는 수수료 계산에서 제외
     const hasFreeCleaningService = room.ezService?.cleaningService || false;
@@ -261,7 +261,16 @@ const createContractRequest = async (req, res) => {
                     serverCalculated.maintenanceFee +
                     (hasFreeCleaningService ? 0 : serverCalculated.cleaningFee) -
                     discountAmountServer;
+
+    // 게스트 플랫폼 수수료 (9.9%) - 게스트가 추가 결제
     serverCalculated.platformFee = Math.floor(feeBase * 0.099);
+
+    // 호스트 플랫폼 수수료 (3.3%) - 정산 시 차감
+    // 기준: 임대료 + 관리비 + 청소비(EZ서비스 미사용시) (할인 적용 전 금액 기준)
+    const hostFeeBase = serverCalculated.rentalFee +
+                        serverCalculated.maintenanceFee +
+                        (hasFreeCleaningService ? 0 : serverCalculated.cleaningFee);
+    serverCalculated.hostPlatformFee = Math.floor(hostFeeBase * 0.033);
 
     // 실이용 금액 (할인 적용 + 수수료 포함)
     serverCalculated.totalUsageFee = afterDiscount + serverCalculated.platformFee;
@@ -330,7 +339,8 @@ const createContractRequest = async (req, res) => {
         maintenanceFee: serverCalculated.maintenanceFee,
         cleaningFee: serverCalculated.cleaningFee,
         rentalItemsFee: serverCalculated.rentalItemsFee,
-        platformFee: serverCalculated.platformFee,
+        platformFee: serverCalculated.platformFee,  // 게스트 수수료 (9.9%)
+        hostPlatformFee: serverCalculated.hostPlatformFee,  // 호스트 수수료 (3.3%)
         discountAmount: discountAmountServer,
         discountType: discountTypeServer,
         discountCode: discountCode || null,

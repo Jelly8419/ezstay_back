@@ -67,6 +67,10 @@
   - [대여 물품 목록 조회](#대여-물품-목록-조회)
   - [대여 물품 상세 조회](#대여-물품-상세-조회)
   - [대여 물품 통계 조회](#대여-물품-통계-조회)
+- [정산 API](#정산-api)
+  - [정산 목록 조회](#정산-목록-조회)
+  - [정산 상세 조회](#정산-상세-조회)
+  - [정산 내역 엑셀 다운로드](#정산-내역-엑셀-다운로드)
 
 ---
 
@@ -4134,3 +4138,197 @@ FAQ 목록을 조회합니다.
   }
 }
 ```
+
+---
+
+# 정산 API
+
+## 정산 목록 조회
+**GET** `/api/host/settlements`
+
+호스트의 정산 내역을 조회합니다. 정산 대기/완료 탭으로 구분되며, 완료 탭에서는 방 및 날짜 필터링이 가능합니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Query Parameters
+| 파라미터 | 타입 | 필수 | 설명 |
+|---------|------|------|------|
+| tab | string | N | `pending` (기본값) / `completed` |
+| roomId | number | N | 방 ID (completed 탭에서만 적용) |
+| startDate | string | N | 정산일 기준 시작일 (YYYY-MM-DD, completed 탭에서만 적용) |
+| endDate | string | N | 정산일 기준 종료일 (YYYY-MM-DD, completed 탭에서만 적용) |
+| page | number | N | 페이지 번호 (기본값: 1) |
+| limit | number | N | 페이지당 항목 수 (기본값: 20) |
+
+### Success Response (200)
+```json
+{
+  "success": true,
+  "data": {
+    "settlements": [
+      {
+        "contractId": 123,
+        "contractNumber": "C2501-00123",
+        "roomId": 45,
+        "roomTitle": "강남역 원룸 A",
+        "roomThumbnail": "/uploads/rooms/45/thumb.jpg",
+        "guestName": "홍길동",
+        "checkInDate": "2025-01-01",
+        "checkOutDate": "2025-01-15",
+        "rentalDays": 14,
+        "settlementAmount": 1260000,
+        "settlementDate": "2025-01-22",
+        "status": "pending",
+        "statusLabel": "정산 예정",
+        "hasRefund": false,
+        "refundAmount": 0
+      }
+    ],
+    "summary": {
+      "totalCount": 15,
+      "totalSettlementAmount": 18900000,
+      "pendingCount": 5,
+      "completedCount": 10
+    },
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "totalPages": 1,
+      "totalCount": 15
+    },
+    "filters": {
+      "rooms": [
+        { "roomId": 45, "roomTitle": "강남역 원룸 A" },
+        { "roomId": 46, "roomTitle": "역삼역 투룸 B" }
+      ]
+    }
+  }
+}
+```
+
+### 정산 계산 공식
+- **정산 금액** = 임대료 + 관리비 + 청소비 - 플랫폼 수수료 - 환불 금액
+- **정산 예정일** = 체크아웃일 + 7일
+- **정산 상태**: `pending` (체크아웃 후 7일 이내), `completed` (체크아웃 후 7일 경과)
+
+---
+
+## 정산 상세 조회
+**GET** `/api/host/settlements/:contractId`
+
+특정 계약의 정산 상세 정보를 조회합니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Path Parameters
+| 파라미터 | 타입 | 필수 | 설명 |
+|---------|------|------|------|
+| contractId | number | Y | 계약 ID |
+
+### Success Response (200)
+```json
+{
+  "success": true,
+  "data": {
+    "contract": {
+      "contractId": 123,
+      "contractNumber": "C2501-00123",
+      "status": "COMPLETED",
+      "checkInDate": "2025-01-01",
+      "checkOutDate": "2025-01-15",
+      "rentalDays": 14,
+      "paidAt": "2024-12-25T10:30:00Z"
+    },
+    "room": {
+      "roomId": 45,
+      "title": "강남역 원룸 A",
+      "address": "서울시 강남구 역삼동 123-45",
+      "thumbnail": "/uploads/rooms/45/thumb.jpg"
+    },
+    "guest": {
+      "name": "홍길동",
+      "phone": "010-****-5678"
+    },
+    "breakdown": {
+      "rentalFee": 1400000,
+      "maintenanceFee": 140000,
+      "cleaningFee": 50000,
+      "subtotal": 1590000,
+      "platformFee": 159000,
+      "platformFeeRate": 10,
+      "grossSettlement": 1431000
+    },
+    "refund": {
+      "hasRefund": true,
+      "refundDate": "2025-01-10T14:20:00Z",
+      "refundReason": "조기 퇴실",
+      "refundType": "EARLY_CHECKOUT",
+      "refundDetails": {
+        "rentalFeeRefund": 200000,
+        "maintenanceFeeRefund": 20000,
+        "cleaningFeeRefund": 0,
+        "totalRefund": 220000
+      }
+    },
+    "settlement": {
+      "finalAmount": 1211000,
+      "settlementDate": "2025-01-22",
+      "status": "pending",
+      "statusLabel": "정산 예정",
+      "bankInfo": {
+        "bankName": "신한은행",
+        "accountNumber": "110-***-***890",
+        "accountHolder": "김호스트"
+      }
+    }
+  }
+}
+```
+
+### Error Responses
+| 코드 | 설명 |
+|-----|------|
+| 404 | 계약을 찾을 수 없거나 권한 없음 |
+
+---
+
+## 정산 내역 엑셀 다운로드
+**GET** `/api/host/settlements/export`
+
+정산 내역을 엑셀 파일로 다운로드합니다.
+
+### 인증
+**필수** - Authorization 헤더에 Access Token 포함
+
+### Query Parameters
+| 파라미터 | 타입 | 필수 | 설명 |
+|---------|------|------|------|
+| tab | string | N | `pending` / `completed` / `all` (기본값) |
+| roomId | number | N | 방 ID 필터 |
+| startDate | string | N | 정산일 기준 시작일 (YYYY-MM-DD) |
+| endDate | string | N | 정산일 기준 종료일 (YYYY-MM-DD) |
+
+### Success Response (200)
+- Content-Type: `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+- 파일명: `settlement_YYYY-MM-DD.xlsx`
+
+### 엑셀 컬럼
+| 컬럼명 | 설명 |
+|-------|------|
+| 계약번호 | 계약 고유 번호 |
+| 방 이름 | 숙소 이름 |
+| 게스트명 | 게스트 이름 |
+| 입실일 | 체크인 날짜 |
+| 퇴실일 | 체크아웃 날짜 |
+| 이용일수 | 숙박 일수 |
+| 임대료 | 총 임대료 |
+| 관리비 | 총 관리비 |
+| 청소비 | 청소 비용 |
+| 소계 | 임대료 + 관리비 + 청소비 |
+| 플랫폼 수수료 | 플랫폼 이용 수수료 |
+| 환불금액 | 환불된 금액 |
+| 정산금액 | 최종 정산 금액 |
+| 정산예정일 | 정산 예정/완료 날짜 |
+| 상태 | 정산 예정 / 정산 완료 |

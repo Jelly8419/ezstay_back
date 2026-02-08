@@ -127,7 +127,17 @@ const Contract = sequelize.define('Contract', {
     allowNull: false,
     defaultValue: 0,
     field: 'platform_fee',
-    comment: '플랫폼 수수료',
+    comment: '게스트 플랫폼 수수료 (9.9%, 게스트가 추가 결제)',
+    validate: {
+      min: 0
+    }
+  },
+  hostPlatformFee: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'host_platform_fee',
+    comment: '호스트 플랫폼 수수료 (3.3%, 정산 시 차감)',
     validate: {
       min: 0
     }

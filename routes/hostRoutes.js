@@ -27,6 +27,11 @@ const {
   toggleAutoMessageTemplate,
   getRoomAutoMessageTemplates
 } = require('../controllers/autoMessageController');
+const {
+  getSettlements,
+  getSettlementDetail,
+  exportSettlements
+} = require('../controllers/settlementController');
 const { authenticateToken } = require('../middleware/auth');
 const { uploadRoomPhotos } = require('../middleware/upload');
 const { uploadLimiter } = require('../middleware/rateLimiter');
@@ -106,5 +111,18 @@ router.patch('/auto-messages/:id/toggle', toggleAutoMessageTemplate);
 
 // 22. 특정 방의 자동메시지 템플릿 목록 조회
 router.get('/rooms/:roomId/auto-messages', getRoomAutoMessageTemplates);
+
+// ========================================
+// 정산 관리 API
+// ========================================
+
+// 23. 정산 내역 엑셀 다운로드 (settlements/:contractId보다 먼저 와야 함)
+router.get('/settlements/export', exportSettlements);
+
+// 24. 정산 목록 조회
+router.get('/settlements', getSettlements);
+
+// 25. 정산 상세 조회
+router.get('/settlements/:contractId', getSettlementDetail);
 
 module.exports = router;
