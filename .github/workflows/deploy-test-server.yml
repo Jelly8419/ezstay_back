@@ -93,11 +93,14 @@ jobs:
 
             git pull origin develop
 
-            # package.json 또는 package-lock.json 변경 감지
-            if git diff $CURRENT_COMMIT HEAD --name-only | grep -qE "package(-lock)?\.json"; then
+            # node_modules 존재 여부 확인 + package.json 변경 감지
+            if [ ! -d "node_modules" ]; then
+              echo "📦 node_modules 없음 - 의존성 설치..."
+              npm ci --legacy-peer-deps
+            elif git diff $CURRENT_COMMIT HEAD --name-only | grep -qE "package(-lock)?\.json"; then
               echo "📦 의존성 파일 변경 감지 - 의존성 재설치..."
               rm -rf node_modules
-              npm ci --legacy-peer-deps  # npm ci는 package-lock.json을 수정하지 않음
+              npm ci --legacy-peer-deps
             else
               echo "✅ 의존성 파일 변경 없음 - 설치 스킵"
             fi
