@@ -133,7 +133,7 @@ async function updatePaymentExpired() {
           { checkInDate: { [Op.lt]: todayStart } }
         ]
       },
-      attributes: ['id', 'approvedAt', 'checkInDate'],
+      attributes: ['id', 'approvedAt', 'checkInDate', 'hostId', 'guestId', 'roomId'],
       include: [
         {
           model: ChatRoom,

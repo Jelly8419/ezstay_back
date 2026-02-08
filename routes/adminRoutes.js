@@ -3,6 +3,8 @@ const router = express.Router();
 const adminController = require('../controllers/adminController');
 const adminAuthController = require('../controllers/adminAuthController');
 const adminLogController = require('../controllers/adminLogController');
+const adminPaymentController = require('../controllers/adminPaymentController');
+const adminSettlementController = require('../controllers/adminSettlementController');
 const noticeController = require('../controllers/noticeController');
 const faqController = require('../controllers/faqController');
 const inquiryController = require('../controllers/inquiryController');
@@ -265,6 +267,50 @@ router.patch(
   '/rental-orders/:rentalOrderId/delivery-status',
   requireAdminRole(['super_admin', 'admin']),
   adminController.updateRentalOrderDeliveryStatus
+);
+
+// ============================================
+// 결제 관리
+// ============================================
+
+// 결제 목록 조회
+router.get('/payments', adminPaymentController.getPayments);
+
+// 결제 상세 조회
+router.get('/payments/:paymentId', adminPaymentController.getPaymentDetail);
+
+// 관리자 환불 처리 (토스페이먼츠 연동, super_admin/admin만 가능)
+router.post(
+  '/payments/:paymentId/refund',
+  requireAdminRole(['super_admin', 'admin']),
+  adminPaymentController.processAdminRefund
+);
+
+// ============================================
+// 정산 관리
+// ============================================
+
+// 정산 목록 조회
+router.get('/settlements', adminSettlementController.getAdminSettlements);
+
+// 정산 엑셀 내보내기 (⚠️ :contractId 라우트보다 먼저 등록)
+router.get('/settlements/export', adminSettlementController.exportAdminSettlements);
+
+// 정산 상세 조회
+router.get('/settlements/:contractId', adminSettlementController.getAdminSettlementDetail);
+
+// 정산 완료 처리 (super_admin, admin만 가능)
+router.patch(
+  '/settlements/:contractId/complete',
+  requireAdminRole(['super_admin', 'admin']),
+  adminSettlementController.markSettlementComplete
+);
+
+// 정산 보류 처리 (super_admin, admin만 가능)
+router.patch(
+  '/settlements/:contractId/hold',
+  requireAdminRole(['super_admin', 'admin']),
+  adminSettlementController.holdSettlement
 );
 
 module.exports = router;
