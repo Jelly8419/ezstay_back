@@ -343,11 +343,7 @@ const answerInquiry = async (req, res) => {
 
     // 사용자에게 문의 답변 알림 전송
     try {
-      await NotificationService.notifyInquiryAnswered(
-        inquiry.userId,
-        inquiry.id,
-        inquiry.title
-      );
+      await NotificationService.notifyInquiryAnswered(inquiry);
     } catch (notifyErr) {
       console.error('문의 답변 알림 전송 실패:', notifyErr);
     }

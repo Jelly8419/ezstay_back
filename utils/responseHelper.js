@@ -85,6 +85,8 @@ const ErrorCodes = {
   ALREADY_PAID: { code: 4606, message: '이미 결제된 계약입니다.' },
   PAYMENT_EXPIRED: { code: 4607, message: '결제 가능 시간이 만료되었습니다.' },
   PAYMENT_NOT_FOUND: { code: 4608, message: '결제 정보를 찾을 수 없습니다.' },
+  PAYMENT_NOT_REFUNDABLE: { code: 4609, message: '환불 가능한 상태가 아닙니다.' },
+  REFUND_EXCEEDS_BALANCE: { code: 4610, message: '환불 금액이 잔액을 초과합니다.' },
 
   // 렌탈 주문 관련 (47xx)
   RENTAL_NOT_AVAILABLE_WITHIN_6_DAYS: { code: 4700, message: '입주일 6일 이내에는 렌탈 아이템을 신청할 수 없습니다.' },
@@ -103,6 +105,9 @@ const ErrorCodes = {
 
   // 알림 관련 (48xx)
   NOTIFICATION_NOT_FOUND: { code: 4801, message: '알림을 찾을 수 없습니다.' },
+
+  // 정산 관련 (49xx)
+  SETTLEMENT_NOT_FOUND: { code: 4901, message: '정산 정보를 찾을 수 없습니다.' },
   INVALID_USER_MODE: { code: 4802, message: 'userMode는 guest 또는 host여야 합니다.' },
 
   // 서버 관련 (5xxx)

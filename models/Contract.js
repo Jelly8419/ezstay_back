@@ -417,6 +417,27 @@ const Contract = sequelize.define('Contract', {
     comment: '취소 시점'
   },
 
+  // 정산 관리 (관리자용)
+  settlementStatus: {
+    type: DataTypes.ENUM('auto', 'completed', 'on_hold'),
+    allowNull: false,
+    defaultValue: 'auto',
+    field: 'settlement_status',
+    comment: '정산 상태 (auto=자동계산, completed=관리자확인완료, on_hold=보류)'
+  },
+  settlementCompletedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    field: 'settlement_completed_at',
+    comment: '정산 완료 처리 일시'
+  },
+  settlementNote: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    field: 'settlement_note',
+    comment: '정산 관리자 메모 (보류 사유 등)'
+  },
+
   createdAt: {
     type: DataTypes.DATE,
     allowNull: false,
