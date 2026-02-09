@@ -36,6 +36,7 @@ const RentalOrderItem = require('./RentalOrderItem');
 const RentalOrderLog = require('./RentalOrderLog');
 const RentalPaymentModel = require('./RentalPayment');
 const RentalPaymentFailureLogModel = require('./RentalPaymentFailureLog');
+const Settlement = require('./Settlement');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -665,6 +666,35 @@ RentalPaymentFailureLog.belongsTo(Contract, {
 });
 
 // =====================================================
+// Settlement 관계 설정 (정산)
+// =====================================================
+Contract.hasOne(Settlement, {
+  foreignKey: 'contractId',
+  as: 'settlement',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Settlement.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+User.hasMany(Settlement, {
+  foreignKey: 'hostId',
+  as: 'settlements',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Settlement.belongsTo(User, {
+  foreignKey: 'hostId',
+  as: 'host',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// =====================================================
 // Notification 관계 설정 (사용자 알림)
 // =====================================================
 
@@ -722,5 +752,6 @@ module.exports = {
   RentalOrderItem,
   RentalOrderLog,
   RentalPayment,
-  RentalPaymentFailureLog
+  RentalPaymentFailureLog,
+  Settlement
 };

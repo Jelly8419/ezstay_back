@@ -85,7 +85,7 @@ const getRoomById = async (req, res) => {
         'longTermWeeks', 'longTermDiscount', 'quickMoveIn', 'quickMoveInDiscount',
 
         // 상세 정보
-        'description', 'maxGuests',
+        'description', 'maxGuests', 'checkInTime', 'checkOutTime',
 
         // 타임스탬프
         'createdAt', 'updatedAt'

@@ -402,12 +402,12 @@ const updateFreeServices = async (req, res) => {
   }
 };
 
-// 7. 방 소개 및 설명
+// 7. 방 소개 및 설명 (입퇴실 시간 포함)
 const updateDescription = async (req, res) => {
   try {
     const { roomId } = req.params;
     const hostId = req.user.id;
-    const { description, maxGuests } = req.body;
+    const { description, maxGuests, checkInTime, checkOutTime } = req.body;
 
     const room = await Room.findOne({
       where: { id: roomId, hostId }
@@ -415,6 +415,18 @@ const updateDescription = async (req, res) => {
 
     if (!room) {
       return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 방 설명 글자수 제한 (10~500자)
+    if (description !== undefined && description !== null) {
+      const descLength = description.trim().length;
+      if (descLength < 10 || descLength > 500) {
+        return error(res, {
+          code: 4007,
+          message: '방 설명은 10자 이상 500자 이하로 입력해야 합니다.',
+          details: { currentLength: descLength, min: 10, max: 500 }
+        }, 400);
+      }
     }
 
     // maxGuests 검증
@@ -427,9 +439,31 @@ const updateDescription = async (req, res) => {
       }
     }
 
+    // 입실 시간 검증 (14~17시, 1시간 단위)
+    if (checkInTime !== undefined) {
+      if (!Number.isInteger(checkInTime) || checkInTime < 14 || checkInTime > 17) {
+        return error(res, {
+          code: 4005,
+          message: '입실 시간은 14시~17시 사이의 정수만 입력 가능합니다.'
+        }, 400);
+      }
+    }
+
+    // 퇴실 시간 검증 (8~11시, 1시간 단위)
+    if (checkOutTime !== undefined) {
+      if (!Number.isInteger(checkOutTime) || checkOutTime < 8 || checkOutTime > 11) {
+        return error(res, {
+          code: 4006,
+          message: '퇴실 시간은 8시~11시 사이의 정수만 입력 가능합니다.'
+        }, 400);
+      }
+    }
+
     await room.update({
       description,
-      maxGuests: maxGuests !== undefined ? maxGuests : room.maxGuests
+      maxGuests: maxGuests !== undefined ? maxGuests : room.maxGuests,
+      checkInTime: checkInTime !== undefined ? checkInTime : room.checkInTime,
+      checkOutTime: checkOutTime !== undefined ? checkOutTime : room.checkOutTime
     });
 
     return updated(res, { roomId: room.id }, '방 소개가 저장되었습니다.');
@@ -751,9 +785,11 @@ const getRoom = async (req, res) => {
         roomPassword: room.ezService.roomPassword
       } : null,
 
-      // 방 소개
+      // 방 소개 및 입퇴실 시간
       description: room.description,
       maxGuests: room.maxGuests,
+      checkInTime: room.checkInTime,
+      checkOutTime: room.checkOutTime,
 
       // 상태
       status: room.status,
@@ -927,6 +963,8 @@ const duplicateRoom = async (req, res) => {
       refundPolicy: originalRoom.refundPolicy,
       description: originalRoom.description,
       maxGuests: originalRoom.maxGuests,
+      checkInTime: originalRoom.checkInTime,
+      checkOutTime: originalRoom.checkOutTime,
       status: 'draft',
       isActive: true
     }, { transaction });

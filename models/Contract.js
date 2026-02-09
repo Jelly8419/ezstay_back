@@ -417,6 +417,65 @@ const Contract = sequelize.define('Contract', {
     comment: '취소 시점'
   },
 
+  // 퇴실 프로세스 관리
+  checkoutRequested: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    field: 'checkout_requested',
+    comment: '게스트 퇴실 요청 여부'
+  },
+  checkoutRequestedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    field: 'checkout_requested_at',
+    comment: '게스트 퇴실 요청 시점'
+  },
+  hostCheckedOut: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    field: 'host_checked_out',
+    comment: '호스트 퇴실 확인 여부'
+  },
+  hostCheckedOutAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    field: 'host_checked_out_at',
+    comment: '호스트 퇴실 확인 시점'
+  },
+
+  // 보증금 정산 관리
+  depositDeduction: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'deposit_deduction',
+    comment: '보증금 차감 금액',
+    validate: {
+      min: 0
+    }
+  },
+  deductionReason: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    field: 'deduction_reason',
+    comment: '보증금 차감 사유'
+  },
+  refundableDeposit: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    field: 'refundable_deposit',
+    comment: '반환 가능 보증금 (보증금 - 차감액)'
+  },
+  depositStatus: {
+    type: DataTypes.ENUM('HOLDING', 'RETURN_PENDING', 'RETURNED', 'PARTIALLY_RETURNED', 'FORFEITED'),
+    allowNull: false,
+    defaultValue: 'HOLDING',
+    field: 'deposit_status',
+    comment: '보증금 상태 (HOLDING=보관중, RETURN_PENDING=반환대기, RETURNED=반환완료, PARTIALLY_RETURNED=부분반환, FORFEITED=몰수)'
+  },
+
   // 정산 관리 (관리자용)
   settlementStatus: {
     type: DataTypes.ENUM('auto', 'completed', 'on_hold'),
@@ -499,6 +558,16 @@ const Contract = sequelize.define('Contract', {
     {
       fields: ['refund_policy_type'],
       name: 'idx_refund_policy_type'
+    },
+    {
+      fields: ['checkout_requested', 'checkout_requested_at'],
+      name: 'idx_checkout_request',
+      comment: '48시간 자동 퇴실확정 스케줄러 최적화'
+    },
+    {
+      fields: ['deposit_status'],
+      name: 'idx_deposit_status',
+      comment: '보증금 상태 조회 최적화'
     }
   ]
 });

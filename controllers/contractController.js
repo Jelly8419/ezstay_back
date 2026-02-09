@@ -1,4 +1,5 @@
-const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalItemReservation, RentalItem } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalItemReservation, RentalItem, Settlement } = require('../models');
+const { Op } = require('sequelize');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const axios = require('axios');
 const {
@@ -1484,6 +1485,48 @@ const requestRefund = async (req, res) => {
       );
     }
 
+    // 입주 중(IN_PROGRESS) 취소/환불 1회 제한
+    if (contract.status === 'IN_PROGRESS') {
+      const pastRefundCount = await Refund.count({
+        where: { contractId },
+        transaction
+      });
+
+      if (pastRefundCount > 0) {
+        await transaction.rollback();
+        return error(
+          res,
+          {
+            code: 4503,
+            message: '입주 중에는 취소/환불 요청을 1회만 할 수 있습니다. 이미 환불 이력이 존재합니다.'
+          },
+          400
+        );
+      }
+    }
+
+    // 정산 완료 후 환불 차단
+    const settlement = await Settlement.findOne({
+      where: {
+        contractId,
+        status: { [Op.in]: ['READY', 'PROCESSING', 'COMPLETED'] }
+      },
+      transaction
+    });
+
+    if (settlement) {
+      await transaction.rollback();
+      return error(
+        res,
+        {
+          code: 4504,
+          message: '정산이 이미 진행되었거나 완료되어 환불이 불가합니다.',
+          settlementStatus: settlement.status
+        },
+        400
+      );
+    }
+
     // 환불 금액 계산
     const cancellationDate = new Date();
     const refundResult = await calculateRefund(contract, cancellationDate);
@@ -2263,88 +2306,6 @@ const updatePendingRentalItems = async (req, res) => {
 };
 
 /**
- * 게스트 입주 확정
- * POST /api/contracts/:contractId/confirm-checkin
- *
- * 게스트가 입주를 완료했음을 확인
- * - CONFIRMED 또는 IN_PROGRESS 상태에서만 가능
- * - 호스트에게 입주 확정 알림 발송
- */
-const confirmCheckin = async (req, res) => {
-  try {
-    const { contractId } = req.params;
-    const guestId = req.user.id;
-
-    const contract = await Contract.findByPk(contractId, {
-      include: [
-        { model: User, as: 'guest', attributes: ['id', 'name', 'nickname'] },
-        { model: Room, as: 'room', attributes: ['id', 'title'] }
-      ]
-    });
-
-    if (!contract) {
-      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
-    }
-
-    // 게스트 본인만 확정 가능
-    if (contract.guestId !== guestId) {
-      return error(res, ErrorCodes.FORBIDDEN, 403);
-    }
-
-    // 상태 검증
-    if (!['CONFIRMED', 'IN_PROGRESS'].includes(contract.status)) {
-      return error(res, {
-        code: 4610,
-        message: '입주 확정이 가능한 상태가 아닙니다.'
-      }, 400);
-    }
-
-    // 이미 입주 확정된 경우
-    if (contract.guestCheckedIn) {
-      return error(res, {
-        code: 4611,
-        message: '이미 입주 확정 처리되었습니다.'
-      }, 400);
-    }
-
-    // 입주 확정 처리
-    await contract.update({
-      guestCheckedIn: true,
-      guestCheckedInAt: new Date(),
-      status: 'CHECKED_IN'
-    });
-
-    // 호스트에게 입주 확정 알림 발송
-    try {
-      await NotificationService.notifyCheckinConfirmed(contract, {
-        guest: contract.guest
-      });
-    } catch (notifyErr) {
-      console.error('입주 확정 알림 전송 실패 (무시됨):', notifyErr);
-    }
-
-    // 퇴실 관련 알림 예약 (Bull Queue)
-    try {
-      const { scheduleCheckinConfirmedNotifications } = require('../queues/notificationQueue');
-      await scheduleCheckinConfirmedNotifications(contract.id, contract.checkOutDate);
-    } catch (queueErr) {
-      console.error('퇴실 알림 예약 실패 (무시됨):', queueErr);
-    }
-
-    return updated(res, {
-      contractId: contract.id,
-      status: contract.status,
-      guestCheckedIn: true,
-      guestCheckedInAt: contract.guestCheckedInAt
-    }, '입주가 확정되었습니다.');
-
-  } catch (err) {
-    console.error('입주 확정 처리 오류:', err);
-    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
-  }
-};
-
-/**
  * 게스트 퇴실 요청 (보증금 반환 요청)
  * POST /api/contracts/:contractId/request-checkout
  *
@@ -2373,11 +2334,11 @@ const requestCheckout = async (req, res) => {
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
-    // 상태 검증
-    if (!['CHECKED_IN', 'IN_PROGRESS'].includes(contract.status)) {
+    // 상태 검증 (IN_PROGRESS 상태에서만 퇴실 요청 가능)
+    if (contract.status !== 'IN_PROGRESS') {
       return error(res, {
         code: 4612,
-        message: '퇴실 요청이 가능한 상태가 아닙니다.'
+        message: '퇴실 요청이 가능한 상태가 아닙니다. (임대 진행 중 상태에서만 가능)'
       }, 400);
     }
 
@@ -2409,7 +2370,7 @@ const requestCheckout = async (req, res) => {
       contractId: contract.id,
       checkoutRequested: true,
       checkoutRequestedAt: contract.checkoutRequestedAt
-    }, '퇴실 요청이 접수되었습니다. 호스트가 확인 후 보증금이 반환됩니다.');
+    }, '퇴실 요청이 접수되었습니다. 호스트가 48시간 내 확인하지 않으면 자동 확정됩니다.');
 
   } catch (err) {
     console.error('퇴실 요청 처리 오류:', err);
@@ -2443,11 +2404,11 @@ const confirmCheckout = async (req, res) => {
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
-    // 상태 검증
-    if (!['CHECKED_IN', 'IN_PROGRESS'].includes(contract.status)) {
+    // 상태 검증 (IN_PROGRESS 상태에서만 퇴실 확인 가능)
+    if (contract.status !== 'IN_PROGRESS') {
       return error(res, {
         code: 4614,
-        message: '퇴실 확인이 가능한 상태가 아닙니다.'
+        message: '퇴실 확인이 가능한 상태가 아닙니다. (임대 진행 중 상태에서만 가능)'
       }, 400);
     }
 
@@ -2459,8 +2420,8 @@ const confirmCheckout = async (req, res) => {
       }, 400);
     }
 
-    // 이미 퇴실 확인된 경우
-    if (contract.status === 'COMPLETED') {
+    // 이미 호스트가 확인한 경우
+    if (contract.hostCheckedOut) {
       return error(res, {
         code: 4616,
         message: '이미 퇴실 확인 처리되었습니다.'
@@ -2469,6 +2430,9 @@ const confirmCheckout = async (req, res) => {
 
     // 퇴실 확인 처리
     const refundableDeposit = Math.max(0, (contract.deposit || 0) - depositDeduction);
+    const depositStatus = depositDeduction > 0
+      ? (refundableDeposit > 0 ? 'PARTIALLY_RETURNED' : 'FORFEITED')
+      : 'RETURN_PENDING';
 
     await contract.update({
       status: 'COMPLETED',
@@ -2477,7 +2441,8 @@ const confirmCheckout = async (req, res) => {
       hostCheckedOutAt: new Date(),
       depositDeduction,
       deductionReason,
-      refundableDeposit
+      refundableDeposit,
+      depositStatus
     });
 
     // 호스트/게스트 모두에게 퇴실 완료 알림 발송
@@ -2494,6 +2459,7 @@ const confirmCheckout = async (req, res) => {
       deposit: contract.deposit,
       depositDeduction,
       refundableDeposit,
+      depositStatus,
       deductionReason: deductionReason || null
     }, '퇴실이 확인되었습니다. 보증금 반환 처리가 진행됩니다.');
 
@@ -2517,7 +2483,6 @@ module.exports = {
   getPaymentInfo,
   confirmPayment,
   updatePendingRentalItems,
-  confirmCheckin,
   requestCheckout,
   confirmCheckout
 };

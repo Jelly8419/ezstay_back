@@ -36,9 +36,10 @@ const getSettlements = async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // 정산 기준일 (체크아웃 + 7일)
+    // 정산 기준일 (입주일 + 3영업일 ≈ 5 calendar days)
+    // 정산 예정일이 오늘 이전이면 완료, 이후면 대기
     const settlementCutoffDate = new Date(today);
-    settlementCutoffDate.setDate(settlementCutoffDate.getDate() - 7);
+    settlementCutoffDate.setDate(settlementCutoffDate.getDate() - 5);
 
     // 기본 WHERE 조건
     const whereCondition = {
@@ -46,15 +47,15 @@ const getSettlements = async (req, res) => {
       status: 'COMPLETED'
     };
 
-    // 탭에 따른 조건 분기
+    // 탭에 따른 조건 분기 (입주일 기준)
     if (tab === 'pending') {
-      // 정산 대기: 체크아웃 후 7일 이내
-      whereCondition.checkOutDate = {
+      // 정산 대기: 입주일 + 3영업일이 아직 안 지난 계약
+      whereCondition.checkInDate = {
         [Op.gte]: settlementCutoffDate
       };
     } else if (tab === 'completed') {
-      // 정산 완료: 체크아웃 후 7일 경과
-      whereCondition.checkOutDate = {
+      // 정산 완료: 입주일 + 3영업일 경과
+      whereCondition.checkInDate = {
         [Op.lt]: settlementCutoffDate
       };
 
@@ -63,22 +64,21 @@ const getSettlements = async (req, res) => {
         whereCondition.roomId = parseInt(roomId);
       }
 
-      // 날짜 필터 (정산일 기준)
+      // 날짜 필터 (정산일 기준, 역산: 입주일 + 5일 ≈ 정산일)
       if (startDate || endDate) {
-        // 정산일 = 체크아웃 + 7일이므로 역산
         const dateFilter = {};
         if (startDate) {
           const filterStart = new Date(startDate);
-          filterStart.setDate(filterStart.getDate() - 7);
+          filterStart.setDate(filterStart.getDate() - 5);
           dateFilter[Op.gte] = filterStart;
         }
         if (endDate) {
           const filterEnd = new Date(endDate);
-          filterEnd.setDate(filterEnd.getDate() - 7);
+          filterEnd.setDate(filterEnd.getDate() - 5);
           dateFilter[Op.lte] = filterEnd;
         }
-        whereCondition.checkOutDate = {
-          ...whereCondition.checkOutDate,
+        whereCondition.checkInDate = {
+          ...whereCondition.checkInDate,
           ...dateFilter
         };
       }
@@ -134,8 +134,8 @@ const getSettlements = async (req, res) => {
     const settlements = contracts.map(contract => {
       const hasEzCleaningService = contract.room?.ezService?.cleaningService || false;
       const settlement = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
-      const status = getSettlementStatus(contract.checkOutDate);
-      const settlementDate = calculateSettlementDate(contract.checkOutDate);
+      const status = getSettlementStatus(contract.checkInDate);
+      const settlementDate = calculateSettlementDate(contract.checkInDate);
 
       return {
         contractId: contract.id,
@@ -157,14 +157,14 @@ const getSettlements = async (req, res) => {
       };
     });
 
-    // 전체 통계 조회 (탭과 관계없이)
+    // 전체 통계 조회 (탭과 관계없이, 입주일 기준)
     const [pendingStats, completedStats] = await Promise.all([
       // 정산 대기 통계
       Contract.findAll({
         where: {
           hostId,
           status: 'COMPLETED',
-          checkOutDate: { [Op.gte]: settlementCutoffDate }
+          checkInDate: { [Op.gte]: settlementCutoffDate }
         },
         attributes: [
           [fn('COUNT', col('id')), 'count'],
@@ -180,7 +180,7 @@ const getSettlements = async (req, res) => {
         where: {
           hostId,
           status: 'COMPLETED',
-          checkOutDate: { [Op.lt]: settlementCutoffDate }
+          checkInDate: { [Op.lt]: settlementCutoffDate }
         },
         attributes: [
           [fn('COUNT', col('id')), 'count'],
@@ -315,8 +315,8 @@ const getSettlementDetail = async (req, res) => {
 
     // 정산 금액 계산
     const settlement = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
-    const status = getSettlementStatus(contract.checkOutDate);
-    const settlementDate = calculateSettlementDate(contract.checkOutDate);
+    const status = getSettlementStatus(contract.checkInDate);
+    const settlementDate = calculateSettlementDate(contract.checkInDate);
 
     // 환불 정보 가공
     const completedRefund = contract.refunds?.find(r => r.refundStatus === 'COMPLETED');
@@ -407,7 +407,7 @@ const exportSettlements = async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const settlementCutoffDate = new Date(today);
-    settlementCutoffDate.setDate(settlementCutoffDate.getDate() - 7);
+    settlementCutoffDate.setDate(settlementCutoffDate.getDate() - 5); // 입주일 + 3영업일 ≈ 5일
 
     // 기본 WHERE 조건
     const whereCondition = {
@@ -415,11 +415,11 @@ const exportSettlements = async (req, res) => {
       status: 'COMPLETED'
     };
 
-    // 탭에 따른 조건
+    // 탭에 따른 조건 (입주일 기준)
     if (tab === 'pending') {
-      whereCondition.checkOutDate = { [Op.gte]: settlementCutoffDate };
+      whereCondition.checkInDate = { [Op.gte]: settlementCutoffDate };
     } else if (tab === 'completed') {
-      whereCondition.checkOutDate = { [Op.lt]: settlementCutoffDate };
+      whereCondition.checkInDate = { [Op.lt]: settlementCutoffDate };
     }
 
     // 필터 적용
@@ -431,22 +431,22 @@ const exportSettlements = async (req, res) => {
       const dateFilter = {};
       if (startDate) {
         const filterStart = new Date(startDate);
-        filterStart.setDate(filterStart.getDate() - 7);
+        filterStart.setDate(filterStart.getDate() - 5);
         dateFilter[Op.gte] = filterStart;
       }
       if (endDate) {
         const filterEnd = new Date(endDate);
-        filterEnd.setDate(filterEnd.getDate() - 7);
+        filterEnd.setDate(filterEnd.getDate() - 5);
         dateFilter[Op.lte] = filterEnd;
       }
 
-      if (whereCondition.checkOutDate) {
-        whereCondition.checkOutDate = {
-          ...whereCondition.checkOutDate,
+      if (whereCondition.checkInDate) {
+        whereCondition.checkInDate = {
+          ...whereCondition.checkInDate,
           ...dateFilter
         };
       } else {
-        whereCondition.checkOutDate = dateFilter;
+        whereCondition.checkInDate = dateFilter;
       }
     }
 
@@ -489,8 +489,8 @@ const exportSettlements = async (req, res) => {
     const excelData = contracts.map(contract => {
       const hasEzCleaningService = contract.room?.ezService?.cleaningService || false;
       const settlement = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
-      const status = getSettlementStatus(contract.checkOutDate);
-      const settlementDate = calculateSettlementDate(contract.checkOutDate);
+      const status = getSettlementStatus(contract.checkInDate);
+      const settlementDate = calculateSettlementDate(contract.checkInDate);
 
       return {
         contractNumber: contract.contractNumber,

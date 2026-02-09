@@ -35,6 +35,7 @@ const {
 const { authenticateToken } = require('../middleware/auth');
 const { uploadRoomPhotos } = require('../middleware/upload');
 const { uploadLimiter } = require('../middleware/rateLimiter');
+const { requireUserInfo } = require('../middleware/validation');
 
 // 인증 필요한 모든 라우트에 미들웨어 적용
 router.use(authenticateToken);
@@ -66,8 +67,8 @@ router.patch('/rooms/:roomId/ez-service', updateFreeServices);
 // 8. 방 소개
 router.patch('/rooms/:roomId/description', updateDescription);
 
-// 9. 심사 요청
-router.post('/rooms/:roomId/submit-review', submitReview);
+// 9. 심사 요청 (전화번호 + 계좌정보 필수)
+router.post('/rooms/:roomId/submit-review', requireUserInfo({ requirePhone: true, requireBankAccount: true }), submitReview);
 
 // 10. 사진 순서 변경
 router.patch('/rooms/:roomId/photos/reorder', reorderPhotos);

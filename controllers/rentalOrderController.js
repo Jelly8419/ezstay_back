@@ -546,15 +546,6 @@ const cancelRentalItem = async (req, res) => {
       return error(res, ErrorCodes.RENTAL_NOT_GUEST, 403);
     }
 
-    // 수정 가능 여부 확인
-    const modifiableInfo = checkRentalModifiable(rentalOrder.contract);
-    if (!modifiableInfo.modifiable) {
-      await transaction.rollback();
-      return error(res, ErrorCodes.RENTAL_MODIFICATION_EXPIRED, 400, {
-        details: modifiableInfo.reason
-      });
-    }
-
     // 환불 가능 상태 확인
     if (!['PAID', 'PARTIAL_REFUND'].includes(rentalOrder.status)) {
       await transaction.rollback();
@@ -579,20 +570,68 @@ const cancelRentalItem = async (req, res) => {
       return error(res, ErrorCodes.RENTAL_ORDER_ITEM_NOT_FOUND, 404);
     }
 
-    // 이미 취소된 아이템 확인
+    // 이미 취소되었거나 취소 요청 중인 아이템 확인
     if (orderItem.status === 'CANCELLED') {
       await transaction.rollback();
       return error(res, ErrorCodes.RENTAL_ITEM_ALREADY_CANCELLED, 400);
     }
+    if (orderItem.status === 'CANCEL_REQUESTED') {
+      await transaction.rollback();
+      return error(res, {
+        code: 4420,
+        message: '이미 취소 요청이 접수된 아이템입니다.'
+      }, 400);
+    }
 
-    // TODO: 토스페이먼츠 부분 환불 API 호출
-    // const refundResponse = await partialRefundTossPayment(
-    //   rentalOrder.paymentKey,
-    //   parseFloat(orderItem.totalPrice),
-    //   reason
-    // );
+    // 수정 가능 여부 확인 (입주 5일 전까지)
+    const modifiableInfo = checkRentalModifiable(rentalOrder.contract);
 
-    // 아이템 취소 처리
+    // 입주 중(IN_PROGRESS)이고 수정 기한 지난 경우 → 취소 요청 상태로 전환 (관리자 처리 필요)
+    if (!modifiableInfo.modifiable && rentalOrder.contract.status === 'IN_PROGRESS') {
+      await orderItem.update({
+        status: 'CANCEL_REQUESTED',
+        cancelReason: reason || '입주 중 취소 요청'
+      }, { transaction });
+
+      await logRentalAction({
+        contractId: rentalOrder.contractId,
+        rentalOrderId: rentalOrder.id,
+        rentalOrderItemId: orderItem.id,
+        action: 'CANCEL_REQUESTED',
+        actor: 'GUEST',
+        actorId: userId,
+        amountChange: 0,
+        balanceAfter: 0,
+        metadata: {
+          itemId: orderItem.rentalItemId,
+          itemName: orderItem.rentalItem?.name || '알 수 없음',
+          quantity: orderItem.quantity,
+          reason,
+          requestedAt: new Date().toISOString()
+        },
+        description: `입주 중 아이템 취소 요청: ${reason || '사유 없음'}`,
+        req
+      }, transaction);
+
+      await transaction.commit();
+
+      return success(res, {
+        itemId: orderItem.id,
+        itemName: orderItem.rentalItem?.name,
+        status: 'CANCEL_REQUESTED',
+        message: '입주 중에는 취소 요청이 접수되며, 관리자 확인 후 처리됩니다.'
+      }, '취소 요청이 접수되었습니다. 관리자 확인 후 환불이 처리됩니다.');
+    }
+
+    // 수정 기한 지났고 입주 중도 아닌 경우 → 취소 불가
+    if (!modifiableInfo.modifiable) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.RENTAL_MODIFICATION_EXPIRED, 400, {
+        details: modifiableInfo.reason
+      });
+    }
+
+    // 수정 기한 내 즉시 취소 처리
     const result = await cancelRentalOrderItem(
       orderItem,
       rentalOrder,

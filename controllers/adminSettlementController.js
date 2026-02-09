@@ -24,7 +24,7 @@ exports.getAdminSettlements = async (req, res) => {
       hostId,
       startDate,
       endDate,
-      sortBy = 'checkOutDate',
+      sortBy = 'checkInDate',
       sortOrder = 'DESC'
     } = req.query;
 
@@ -32,8 +32,9 @@ exports.getAdminSettlements = async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    // 정산 cutoff: 입주일 + 3영업일 ≈ 최대 5 캘린더일
     const settlementCutoffDate = new Date(today);
-    settlementCutoffDate.setDate(settlementCutoffDate.getDate() - 7);
+    settlementCutoffDate.setDate(settlementCutoffDate.getDate() - 5);
 
     // 기본 WHERE: 완료된 계약만
     const whereCondition = {
@@ -42,17 +43,17 @@ exports.getAdminSettlements = async (req, res) => {
 
     // 상태 필터
     if (status === 'pending') {
-      whereCondition.checkOutDate = { [Op.gte]: settlementCutoffDate };
+      whereCondition.checkInDate = { [Op.gte]: settlementCutoffDate };
       whereCondition[Op.or] = [
         { settlementStatus: 'auto' },
         { settlementStatus: null }
       ];
     } else if (status === 'completed') {
       whereCondition[Op.or] = [
-        // 날짜 기반 자동 완료 (auto + 7일 경과)
+        // 날짜 기반 자동 완료 (auto + 입주일+3영업일 경과)
         {
           settlementStatus: { [Op.or]: ['auto', null] },
-          checkOutDate: { [Op.lt]: settlementCutoffDate }
+          checkInDate: { [Op.lt]: settlementCutoffDate }
         },
         // 관리자 수동 완료
         { settlementStatus: 'completed' }
@@ -66,7 +67,7 @@ exports.getAdminSettlements = async (req, res) => {
       whereCondition.hostId = parseInt(hostId);
     }
 
-    // 날짜 범위 필터 (체크아웃 기준)
+    // 날짜 범위 필터 (입주일 기준)
     if (startDate || endDate) {
       const dateFilter = {};
       if (startDate) {
@@ -78,13 +79,13 @@ exports.getAdminSettlements = async (req, res) => {
         dateFilter[Op.lte] = end;
       }
 
-      if (whereCondition.checkOutDate) {
-        whereCondition.checkOutDate = {
-          ...whereCondition.checkOutDate,
+      if (whereCondition.checkInDate) {
+        whereCondition.checkInDate = {
+          ...whereCondition.checkInDate,
           ...dateFilter
         };
       } else {
-        whereCondition.checkOutDate = dateFilter;
+        whereCondition.checkInDate = dateFilter;
       }
     }
 
@@ -97,8 +98,8 @@ exports.getAdminSettlements = async (req, res) => {
     } : {};
 
     // 정렬
-    const allowedSortFields = ['checkOutDate', 'createdAt', 'finalTotalAmount'];
-    const safeSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'checkOutDate';
+    const allowedSortFields = ['checkInDate', 'checkOutDate', 'createdAt', 'finalTotalAmount'];
+    const safeSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'checkInDate';
     const safeSortOrder = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
     const { count, rows: contracts } = await Contract.findAndCountAll({
@@ -155,10 +156,10 @@ exports.getAdminSettlements = async (req, res) => {
       } else if (contract.settlementStatus === 'on_hold') {
         settlementStatusResult = 'on_hold';
       } else {
-        settlementStatusResult = getSettlementStatus(contract.checkOutDate);
+        settlementStatusResult = getSettlementStatus(contract.checkInDate);
       }
 
-      const settlementDate = calculateSettlementDate(contract.checkOutDate);
+      const settlementDate = calculateSettlementDate(contract.checkInDate);
 
       return {
         contractId: contract.id,
@@ -194,7 +195,7 @@ exports.getAdminSettlements = async (req, res) => {
       Contract.count({
         where: {
           status: 'COMPLETED',
-          checkOutDate: { [Op.gte]: settlementCutoffDate },
+          checkInDate: { [Op.gte]: settlementCutoffDate },
           [Op.or]: [
             { settlementStatus: 'auto' },
             { settlementStatus: null }
@@ -207,7 +208,7 @@ exports.getAdminSettlements = async (req, res) => {
           [Op.or]: [
             {
               settlementStatus: { [Op.or]: ['auto', null] },
-              checkOutDate: { [Op.lt]: settlementCutoffDate }
+              checkInDate: { [Op.lt]: settlementCutoffDate }
             },
             { settlementStatus: 'completed' }
           ]
@@ -322,7 +323,7 @@ exports.getAdminSettlementDetail = async (req, res) => {
 
     const hasEzCleaningService = contract.room?.ezService?.cleaningService || false;
     const settlement = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
-    const settlementDate = calculateSettlementDate(contract.checkOutDate);
+    const settlementDate = calculateSettlementDate(contract.checkInDate);
 
     // 관리자 오버라이드 상태
     let settlementStatusResult;
@@ -331,7 +332,7 @@ exports.getAdminSettlementDetail = async (req, res) => {
     } else if (contract.settlementStatus === 'on_hold') {
       settlementStatusResult = 'on_hold';
     } else {
-      settlementStatusResult = getSettlementStatus(contract.checkOutDate);
+      settlementStatusResult = getSettlementStatus(contract.checkInDate);
     }
 
     // 환불 정보
@@ -517,8 +518,9 @@ exports.exportAdminSettlements = async (req, res) => {
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    // 정산 cutoff: 입주일 + 3영업일 ≈ 최대 5 캘린더일
     const settlementCutoffDate = new Date(today);
-    settlementCutoffDate.setDate(settlementCutoffDate.getDate() - 7);
+    settlementCutoffDate.setDate(settlementCutoffDate.getDate() - 5);
 
     const whereCondition = {
       status: 'COMPLETED'
@@ -526,7 +528,7 @@ exports.exportAdminSettlements = async (req, res) => {
 
     // 상태 필터
     if (status === 'pending') {
-      whereCondition.checkOutDate = { [Op.gte]: settlementCutoffDate };
+      whereCondition.checkInDate = { [Op.gte]: settlementCutoffDate };
       whereCondition[Op.or] = [
         { settlementStatus: 'auto' },
         { settlementStatus: null }
@@ -535,7 +537,7 @@ exports.exportAdminSettlements = async (req, res) => {
       whereCondition[Op.or] = [
         {
           settlementStatus: { [Op.or]: ['auto', null] },
-          checkOutDate: { [Op.lt]: settlementCutoffDate }
+          checkInDate: { [Op.lt]: settlementCutoffDate }
         },
         { settlementStatus: 'completed' }
       ];
@@ -558,13 +560,13 @@ exports.exportAdminSettlements = async (req, res) => {
         dateFilter[Op.lte] = end;
       }
 
-      if (whereCondition.checkOutDate) {
-        whereCondition.checkOutDate = {
-          ...whereCondition.checkOutDate,
+      if (whereCondition.checkInDate) {
+        whereCondition.checkInDate = {
+          ...whereCondition.checkInDate,
           ...dateFilter
         };
       } else {
-        whereCondition.checkOutDate = dateFilter;
+        whereCondition.checkInDate = dateFilter;
       }
     }
 
@@ -604,7 +606,7 @@ exports.exportAdminSettlements = async (req, res) => {
           required: false
         }
       ],
-      order: [['checkOutDate', 'DESC']]
+      order: [['checkInDate', 'DESC']]
     });
 
     // 엑셀 데이터 준비 (호스트명 포함)
@@ -618,10 +620,10 @@ exports.exportAdminSettlements = async (req, res) => {
       } else if (contract.settlementStatus === 'on_hold') {
         settlementStatusResult = 'on_hold';
       } else {
-        settlementStatusResult = getSettlementStatus(contract.checkOutDate);
+        settlementStatusResult = getSettlementStatus(contract.checkInDate);
       }
 
-      const settlementDate = calculateSettlementDate(contract.checkOutDate);
+      const settlementDate = calculateSettlementDate(contract.checkInDate);
       const statusLabel = settlementStatusResult === 'on_hold'
         ? '보류'
         : SETTLEMENT_STATUS_LABELS[settlementStatusResult] || settlementStatusResult;

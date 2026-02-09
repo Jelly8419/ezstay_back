@@ -4,11 +4,43 @@
  */
 
 /**
- * 정산 예정일 계산 (체크아웃 + 7일)
+ * 영업일 추가 계산 (주말 제외, 공휴일은 미포함)
+ * @param {Date} fromDate - 시작일
+ * @param {number} businessDays - 추가할 영업일 수
+ * @returns {Date} 영업일 기준 결과 날짜
+ */
+const addBusinessDays = (fromDate, businessDays) => {
+  const date = new Date(fromDate);
+  let added = 0;
+  while (added < businessDays) {
+    date.setDate(date.getDate() + 1);
+    const dayOfWeek = date.getDay();
+    // 주말(토=6, 일=0) 제외
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+      added++;
+    }
+  }
+  return date;
+};
+
+/**
+ * 정산 예정일 계산 (입주일 + 3영업일)
+ * 정책: 입주일 기준 3영업일 후 정산
+ *
+ * @param {Date|string} checkInDate - 체크인(입주) 날짜
+ * @returns {Date} 정산 예정일
+ */
+const calculateSettlementDate = (checkInDate) => {
+  return addBusinessDays(new Date(checkInDate), 3);
+};
+
+/**
+ * (하위 호환) 체크아웃 기준 정산 예정일 계산
+ * @deprecated 입주일 기준으로 변경됨, 기존 코드 호환용
  * @param {Date|string} checkOutDate - 체크아웃 날짜
  * @returns {Date} 정산 예정일
  */
-const calculateSettlementDate = (checkOutDate) => {
+const calculateSettlementDateByCheckout = (checkOutDate) => {
   const date = new Date(checkOutDate);
   date.setDate(date.getDate() + 7);
   return date;
@@ -16,11 +48,11 @@ const calculateSettlementDate = (checkOutDate) => {
 
 /**
  * 정산 상태 판단
- * @param {Date|string} checkOutDate - 체크아웃 날짜
+ * @param {Date|string} checkInDate - 체크인(입주) 날짜
  * @returns {'pending'|'completed'} 정산 상태
  */
-const getSettlementStatus = (checkOutDate) => {
-  const settlementDate = calculateSettlementDate(checkOutDate);
+const getSettlementStatus = (checkInDate) => {
+  const settlementDate = calculateSettlementDate(checkInDate);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -164,7 +196,9 @@ const SETTLEMENT_STATUS_LABELS = {
 };
 
 module.exports = {
+  addBusinessDays,
   calculateSettlementDate,
+  calculateSettlementDateByCheckout,
   getSettlementStatus,
   calculateSettlementAmount,
   calculateRentalDays,

@@ -185,6 +185,35 @@ const Room = sequelize.define('Room', {
     type: DataTypes.STRING(50),
     allowNull: true
   },
+  // 입퇴실 시간 (정책: 입실 14~17시, 퇴실 8~11시, 1시간 단위)
+  checkInTime: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 14,
+    field: 'check_in_time',
+    comment: '입실 시간 (14~17, 정시 기준)',
+    validate: {
+      min: 14,
+      max: 17,
+      isInt: {
+        msg: '입실 시간은 정수만 입력 가능합니다.'
+      }
+    }
+  },
+  checkOutTime: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 11,
+    field: 'check_out_time',
+    comment: '퇴실 시간 (8~11, 정시 기준)',
+    validate: {
+      min: 8,
+      max: 11,
+      isInt: {
+        msg: '퇴실 시간은 정수만 입력 가능합니다.'
+      }
+    }
+  },
   // 방 소개
   description: {
     type: DataTypes.TEXT,

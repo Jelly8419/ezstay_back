@@ -217,15 +217,24 @@ const getMyChatRooms = async (req, res) => {
     });
 
     // Firestore에서 마지막 메시지 정보 가져오기 (선택사항)
+    // 계약 종료 상태 목록 (읽기 전용 판단용)
+    const terminatedStatuses = [
+      'COMPLETED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_HOST',
+      'CANCELLED_BY_ADMIN_WITH_REFUND', 'CANCELLED_BY_ADMIN_NO_REFUND',
+      'PAYMENT_EXPIRED', 'APPROVAL_EXPIRED', 'REFUND_COMPLETED'
+    ];
+
     const chatRoomsWithMetadata = await Promise.all(
       chatRooms.map(async (chatRoom) => {
         try {
           const metadata = await getChatRoomMetadata(chatRoom.firebaseChatRoomId);
+          const isReadOnly = terminatedStatuses.includes(chatRoom.contract?.status);
           return {
             ...chatRoom.toJSON(),
             lastMessage: metadata?.lastMessageText || null,
             lastMessageAt: metadata?.lastMessageAt || null,
-            unreadCount: metadata?.unreadCount?.[userId] || 0
+            unreadCount: metadata?.unreadCount?.[userId] || 0,
+            isReadOnly
           };
         } catch (err) {
           console.error('Firestore 메타데이터 조회 실패:', err);
@@ -295,9 +304,20 @@ const getChatRoomDetail = async (req, res) => {
     // Firestore에서 메타데이터 조회
     const metadata = await getChatRoomMetadata(chatRoomId);
 
+    // 계약 종료 후 채팅 제한 (읽기 전용)
+    const contractStatus = chatRoom.contract?.status;
+    const terminatedStatuses = [
+      'COMPLETED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_HOST',
+      'CANCELLED_BY_ADMIN_WITH_REFUND', 'CANCELLED_BY_ADMIN_NO_REFUND',
+      'PAYMENT_EXPIRED', 'APPROVAL_EXPIRED', 'REFUND_COMPLETED'
+    ];
+    const isReadOnly = terminatedStatuses.includes(contractStatus);
+
     return success(res, {
       chatRoom: chatRoom.toJSON(),
-      metadata
+      metadata,
+      isReadOnly,
+      readOnlyReason: isReadOnly ? '계약이 종료되어 채팅이 읽기 전용입니다.' : null
     }, '채팅방 상세 정보 조회 성공');
   } catch (err) {
     console.error('채팅방 상세 조회 오류:', err);

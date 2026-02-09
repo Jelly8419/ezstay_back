@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
+const { requireUserInfo } = require('../middleware/validation');
 const {
   createContractRequest,
   getGuestContracts,
@@ -15,7 +16,6 @@ const {
   getPaymentInfo,
   confirmPayment,
   updatePendingRentalItems,
-  confirmCheckin,
   requestCheckout,
   confirmCheckout
 } = require('../controllers/contractController');
@@ -55,7 +55,7 @@ const { confirmPaymentMock } = require('../controllers/mockPaymentController');
  *   "pricingSnapshot": { ... }
  * }
  */
-router.post('/request', authenticateToken, createContractRequest);
+router.post('/request', authenticateToken, requireUserInfo({ requirePhone: true }), createContractRequest);
 
 /**
  * 게스트의 계약 요청 목록 조회
@@ -211,16 +211,6 @@ router.get('/:contractId/payment-info', authenticateToken, getPaymentInfo);
  * }
  */
 router.post('/:contractId/confirm-payment', authenticateToken, confirmPayment);
-
-/**
- * 게스트 입주 확정
- * POST /api/contracts/:contractId/confirm-checkin
- *
- * 게스트가 입주 완료를 확인하는 API
- * - CONFIRMED 또는 IN_PROGRESS 상태에서만 가능
- * - 호스트에게 입주 확정 알림 발송
- */
-router.post('/:contractId/confirm-checkin', authenticateToken, confirmCheckin);
 
 /**
  * 게스트 퇴실 요청 (보증금 반환 요청)

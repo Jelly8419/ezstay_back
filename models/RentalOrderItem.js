@@ -59,10 +59,10 @@ const RentalOrderItem = sequelize.define('RentalOrderItem', {
 
   // 상태
   status: {
-    type: DataTypes.ENUM('ACTIVE', 'CANCELLED'),
+    type: DataTypes.ENUM('ACTIVE', 'CANCEL_REQUESTED', 'CANCELLED'),
     allowNull: false,
     defaultValue: 'ACTIVE',
-    comment: '상태'
+    comment: '상태 (입주 중 취소 요청 시 CANCEL_REQUESTED → 관리자 처리 후 CANCELLED)'
   },
   cancelledAt: {
     type: DataTypes.DATE,
@@ -120,6 +120,7 @@ const RentalOrderItem = sequelize.define('RentalOrderItem', {
  */
 RentalOrderItem.STATUS_LABELS = {
   ACTIVE: '활성',
+  CANCEL_REQUESTED: '취소 요청',
   CANCELLED: '취소됨'
 };
 
