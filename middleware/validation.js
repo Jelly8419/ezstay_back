@@ -29,7 +29,7 @@ const requireUserInfo = (options = {}) => {
       const missingFields = [];
 
       const user = await User.findByPk(userId, {
-        attributes: ['id', 'phoneNumber', 'isVerified']
+        attributes: ['id', 'phoneNumber', 'phoneVerified']
       });
 
       if (!user) {
@@ -43,7 +43,7 @@ const requireUserInfo = (options = {}) => {
         missingFields.push('phoneNumber');
       }
 
-      if (requireVerification && !user.isVerified) {
+      if (requireVerification && !user.phoneVerified) {
         missingFields.push('verification');
       }
 
