@@ -4,7 +4,8 @@ const { Sequelize } = require('sequelize');
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT || 3306,
-  dialect: 'mysql'
+  dialect: 'mysql',
+  logging: false
 });
 
 const LocalUser = sequelize.define('LocalUser', {
@@ -15,14 +16,8 @@ const LocalUser = sequelize.define('LocalUser', {
   },
   userId: {
     type: DataTypes.INTEGER,
-    allowNull: false,
-    unique: true,
-    references: {
-      model: 'users',
-      key: 'id'
-    },
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE'
+    allowNull: false
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   password: {
     type: DataTypes.STRING(255),
@@ -67,7 +62,9 @@ const LocalUser = sequelize.define('LocalUser', {
   underscored: true,
   indexes: [
     {
-      fields: ['user_id']
+      unique: true,
+      fields: ['user_id'],
+      name: 'local_users_user_id_unique'
     },
     {
       fields: ['password_reset_token']

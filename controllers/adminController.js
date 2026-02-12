@@ -1,7 +1,9 @@
-const { success, error, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto } = require('../models');
+const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, sequelize } = require('../models');
+const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
-const sequelize = require('sequelize');
+const { invalidateRoomCache } = require('../utils/cacheInvalidation');
+const { calculateProgress } = require('../utils/roomProgress');
 
 /**
  * 대시보드 통계 조회
@@ -65,8 +67,8 @@ const getDashboardStats = async (req, res) => {
     // 매물 심사 대기 수
     const pendingReviews = await Room.count({ where: { status: 'pending_review' } });
 
-    // 미답변 문의 수 (TODO: 문의 모델 구현 후 적용)
-    const pendingInquiries = 0; // 임시값
+    // 미답변 문의 수
+    const pendingInquiries = await Inquiry.count({ where: { status: 'pending' } });
 
     // 트렌드 계산
     const userTrend = totalUsersLastMonth > 0
@@ -131,7 +133,7 @@ const getRecentActivities = async (req, res) => {
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'email']
+          attributes: ['id', 'name', 'nickname', 'email']
         },
         {
           model: Room,
@@ -178,6 +180,7 @@ const getUsers = async (req, res) => {
       where[Op.or] = [
         { email: { [Op.like]: `%${search}%` } },
         { name: { [Op.like]: `%${search}%` } },
+        { nickname: { [Op.like]: `%${search}%` } },
         { phoneNumber: { [Op.like]: `%${search}%` } }
       ];
     }
@@ -227,9 +230,31 @@ const getUserDetail = async (req, res) => {
       attributes: { exclude: ['refreshToken'] },
       include: [
         {
-          model: Room,
-          as: 'rooms',
-          attributes: ['id', 'roomName', 'status', 'createdAt']
+          model: require('../models').LocalUser,
+          as: 'localProfile',
+          attributes: ['emailVerified', 'failedLoginAttempts', 'lockUntil'],
+          required: false
+        },
+        {
+          model: require('../models').SocialUser,
+          as: 'socialProfiles',
+          attributes: ['provider', 'providerEmail', 'createdAt'],
+          required: false
+        },
+        {
+          model: require('../models').UserBankAccount,
+          as: 'bankAccounts',
+          attributes: [
+            'id',
+            'bankName',
+            'accountNumber',
+            'accountHolder',
+            'isPrimary',
+            'isVerified',
+            'verifiedAt'
+          ],
+          required: false,
+          order: [['isPrimary', 'DESC'], ['createdAt', 'DESC']]
         }
       ]
     });
@@ -244,8 +269,35 @@ const getUserDetail = async (req, res) => {
     // 게스트인 경우 예약 횟수
     const guestReservationsCount = await Contract.count({ where: { guestId: userId } });
 
+    // 가입 유형 상세 정보 구성
+    const accountTypeDetail = user.userType === 'local'
+      ? {
+          type: 'email',
+          emailVerified: user.localProfile?.emailVerified || false,
+          failedLoginAttempts: user.localProfile?.failedLoginAttempts || 0,
+          isLocked: user.localProfile?.lockUntil && new Date(user.localProfile.lockUntil) > new Date()
+        }
+      : {
+          type: 'social',
+          providers: user.socialProfiles?.map(sp => ({
+            provider: sp.provider,
+            providerEmail: sp.providerEmail,
+            connectedAt: sp.createdAt
+          })) || []
+        };
+
+    // 계좌 인증 여부 확인
+    const hasVerifiedBankAccount = user.bankAccounts?.some(acc => acc.isVerified) || false;
+
+    // 응답 데이터 구성
+    const userData = user.toJSON();
+    delete userData.localProfile;
+    delete userData.socialProfiles;
+
     return success(res, {
-      ...user.toJSON(),
+      ...userData,
+      accountTypeDetail,
+      hasVerifiedBankAccount,
       hostRoomsCount,
       guestReservationsCount
     }, '유저 상세 조회 성공');
@@ -256,24 +308,36 @@ const getUserDetail = async (req, res) => {
 };
 
 /**
- * 유저 상태 변경 (활성/비활성)
+ * 유저 상태 변경 (활성/비활성/정지)
  * PATCH /api/admin/users/:userId/status
+ * body: { accountStatus: 'active' | 'suspended' | 'withdrawn' } 또는 { isActive: boolean } (하위호환)
  */
 const updateUserStatus = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { isActive } = req.body;
-
-    if (typeof isActive !== 'boolean') {
-      return error(res, ErrorCodes.VALIDATION_ERROR, 400);
-    }
+    const { isActive, accountStatus } = req.body;
 
     const user = await User.findByPk(userId);
     if (!user) {
       return error(res, ErrorCodes.USER_NOT_FOUND, 404);
     }
 
-    user.isActive = isActive;
+    // accountStatus가 제공된 경우 (새 방식)
+    if (accountStatus) {
+      if (!['active', 'suspended', 'withdrawn'].includes(accountStatus)) {
+        return error(res, ErrorCodes.VALIDATION_ERROR, 400);
+      }
+      user.accountStatus = accountStatus;
+      user.isActive = accountStatus === 'active';
+    }
+    // isActive만 제공된 경우 (하위호환)
+    else if (typeof isActive === 'boolean') {
+      user.isActive = isActive;
+      user.accountStatus = isActive ? 'active' : 'suspended';
+    } else {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400);
+    }
+
     await user.save();
 
     return success(res, user, '유저 상태 변경 성공');
@@ -323,14 +387,14 @@ const getProperties = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'email', 'phoneNumber']
+          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
         },
         {
           model: RoomPhoto,
           as: 'photos',
-          attributes: ['id', 'photoUrl'],
+          attributes: ['id', 'url'],
           limit: 1,
-          order: [['displayOrder', 'ASC']]
+          order: [['order', 'ASC']]
         }
       ]
     });
@@ -368,12 +432,12 @@ const getPendingReviews = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'email', 'phoneNumber']
+          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
         },
         {
           model: RoomPhoto,
           as: 'photos',
-          attributes: ['id', 'photoUrl', 'displayOrder']
+          attributes: ['id', 'url', 'order']
         }
       ]
     });
@@ -417,7 +481,20 @@ const approveProperty = async (req, res) => {
     room.approvedAt = new Date();
     await room.save();
 
-    // TODO: 호스트에게 승인 알림 전송
+    // 캐시 무효화 (ETag 버전 증가)
+    await invalidateRoomCache();
+
+    // 호스트에게 승인 알림 전송
+    try {
+      await NotificationService.notifyPropertyReviewResult(
+        room.hostId,
+        room.id,
+        room.title,
+        true // isApproved
+      );
+    } catch (notifyErr) {
+      console.error('매물 승인 알림 전송 실패:', notifyErr);
+    }
 
     return success(res, room, '매물 승인 완료');
   } catch (err) {
@@ -455,11 +532,169 @@ const rejectProperty = async (req, res) => {
     room.rejectionReason = rejectionReason;
     await room.save();
 
-    // TODO: 호스트에게 반려 알림 전송
+    // 캐시 무효화 (ETag 버전 증가)
+    await invalidateRoomCache();
+
+    // 호스트에게 반려 알림 전송
+    try {
+      await NotificationService.notifyPropertyReviewResult(
+        room.hostId,
+        room.id,
+        room.title,
+        false, // isApproved
+        rejectionReason
+      );
+    } catch (notifyErr) {
+      console.error('매물 반려 알림 전송 실패:', notifyErr);
+    }
 
     return success(res, room, '매물 반려 완료');
   } catch (err) {
     console.error('매물 반려 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 매물 상세 조회 (관리자용 - 심사용)
+ * GET /api/admin/properties/:roomId
+ */
+const getPropertyDetail = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+
+    // Room 정보 조회 (호스트 검증 없음, 관리자는 모든 방 조회 가능)
+    const room = await Room.findByPk(roomId, {
+      include: [
+        {
+          model: RoomPhoto,
+          as: 'photos',
+          attributes: ['id', 'url', 'order'],
+          separate: true,
+          order: [['order', 'ASC']]
+        },
+        {
+          model: RoomAmenity,
+          as: 'amenity'
+        },
+        {
+          model: EzService,
+          as: 'ezService'
+        },
+        {
+          model: User,
+          as: 'host',
+          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber', 'phoneVerified'],
+          include: [
+            {
+              model: UserBankAccount,
+              as: 'bankAccounts',
+              attributes: ['id'],
+              limit: 1
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 진행 단계 계산
+    const registrationProgress = calculateProgress(room);
+
+    // 호스트 정보 가공
+    const hostInfo = {
+      id: room.host.id,
+      name: room.host.name,
+      email: room.host.email,
+      phoneNumber: room.host.phoneNumber,
+      phoneVerified: room.host.phoneVerified || false,
+      hasBankAccount: room.host.bankAccounts && room.host.bankAccounts.length > 0
+    };
+
+    // 응답 데이터 구조화
+    const responseData = {
+      // 기본 정보
+      id: room.id,
+      roomName: room.roomName,
+      address: room.address,
+      detailAddress: room.detailAddress,  // 관리자는 상세주소 확인 가능
+      latitude: room.latitude,
+      longitude: room.longitude,
+      area: room.area,
+      floor: room.floor,
+      buildingType: room.buildingType,
+      parkingAvailable: room.parkingAvailable,
+      parkingInfo: room.parkingInfo,
+      elevatorAvailable: room.elevatorAvailable,
+      roomCount: room.roomCount,
+      bathroomCount: room.bathroomCount,
+      isDuplex: room.isDuplex,
+      entrancePassword: room.entrancePassword,  // 관리자는 현관 비밀번호 확인 가능
+
+      // 요금 정보 (1일 기준, 할인 기준은 주 단위)
+      dailyRent: room.dailyRent,
+      dailyMaintenanceFee: room.dailyMaintenanceFee,
+      longTermWeeks: room.longTermWeeks,
+      longTermDiscount: room.longTermDiscount,
+      quickMoveIn: room.quickMoveIn,
+      quickMoveInDiscount: room.quickMoveInDiscount,
+      maintenanceDetail: room.maintenanceDetail,
+      includeElectricity: room.includeElectricity,
+      includeWater: room.includeWater,
+      includeGas: room.includeGas,
+      includeInternet: room.includeInternet,
+      cleaningFee: room.cleaningFee,
+      minContractWeeks: room.minContractWeeks,
+      refundPolicy: room.refundPolicy,
+
+      // 사진
+      photos: room.photos.map(photo => ({
+        id: photo.id,
+        url: photo.url,
+        order: photo.order
+      })),
+
+      // 편의시설
+      amenities: room.amenity ? {
+        basicOptions: room.amenity.basicOptions,
+        additionalOptions: room.amenity.additionalOptions,
+        convenienceOptions: room.amenity.convenienceOptions,
+        petsAllowed: room.amenity.petsAllowed
+      } : null,
+
+      // 이지서비스 (호스트 제공 무료 부가서비스)
+      ezService: room.ezService ? {
+        cleaningService: room.ezService.cleaningService,
+        autoPasswordChange: room.ezService.autoPasswordChange,
+        roomPassword: room.ezService.roomPassword
+      } : null,
+
+      // 방 소개
+      description: room.description,
+      maxGuests: room.maxGuests,
+
+      // 상태
+      status: room.status,
+      submittedAt: room.submittedAt,
+      approvedAt: room.approvedAt,
+      publishedAt: room.publishedAt,
+      rejectionReason: room.rejectionReason,
+      createdAt: room.createdAt,
+      updatedAt: room.updatedAt,
+
+      // 호스트 정보
+      host: hostInfo,
+
+      // 등록 진행 상태
+      registrationProgress
+    };
+
+    return success(res, responseData, '매물 상세 조회 성공');
+  } catch (err) {
+    console.error('매물 상세 조회 실패:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
 };
@@ -492,12 +727,12 @@ const getReservations = async (req, res) => {
       {
         model: User,
         as: 'guest',
-        attributes: ['id', 'name', 'email', 'phoneNumber']
+        attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
       },
       {
         model: User,
         as: 'host',
-        attributes: ['id', 'name', 'email']
+        attributes: ['id', 'name', 'nickname', 'email']
       },
       {
         model: Room,
@@ -574,7 +809,7 @@ const getReservationDetail = async (req, res) => {
             {
               model: RoomPhoto,
               as: 'photos',
-              attributes: ['id', 'photoUrl', 'displayOrder']
+              attributes: ['id', 'url', 'order']
             }
           ]
         }
@@ -595,6 +830,1447 @@ const getReservationDetail = async (req, res) => {
   }
 };
 
+/**
+ * 관리자용 방 상세 정보 조회 (메모 포함)
+ * GET /api/admin/properties/:roomId/management
+ */
+const getRoomManagementDetail = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+
+    // 방 정보 조회 (모든 관련 정보 포함)
+    const room = await Room.findByPk(roomId, {
+      include: [
+        {
+          model: User,
+          as: 'host',
+          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
+        },
+        {
+          model: Contract,
+          as: 'contracts',
+          where: {
+            status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'APPROVED'] }
+          },
+          required: false,
+          include: [
+            {
+              model: User,
+              as: 'guest',
+              attributes: ['id', 'name', 'nickname', 'phoneNumber']
+            }
+          ],
+          order: [['check_in_date', 'DESC']]
+        },
+        {
+          model: RoomMemo,
+          as: 'memos',
+          include: [
+            {
+              model: Admin,
+              as: 'admin',
+              attributes: ['id', 'name']
+            }
+          ],
+          order: [['created_at', 'DESC']]
+        }
+      ]
+    });
+
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 응답 데이터 구조화
+    const responseData = {
+      roomInfo: {
+        id: room.id,
+        roomName: room.roomName,
+        status: room.status,
+        entrancePassword: room.entrancePassword,
+        address: room.address,
+        detailAddress: room.detailAddress,
+        dailyRent: room.dailyRent,
+        createdAt: room.createdAt,
+        updatedAt: room.updatedAt
+      },
+      hostInfo: {
+        id: room.host.id,
+        name: room.host.name,
+        email: room.host.email,
+        phoneNumber: room.host.phoneNumber
+      },
+      contracts: room.contracts.map(contract => ({
+        id: contract.id,
+        guestName: contract.guest.name,
+        guestPhone: contract.guest.phoneNumber,
+        checkInDate: contract.checkInDate,
+        checkOutDate: contract.checkOutDate,
+        status: contract.status,
+        totalAmount: contract.totalAmount,
+        createdAt: contract.createdAt
+      })),
+      memos: room.memos.map(memo => ({
+        id: memo.id,
+        content: memo.content,
+        createdBy: memo.admin.name,
+        createdAt: memo.createdAt,
+        updatedAt: memo.updatedAt
+      }))
+    };
+
+    return success(res, responseData, '방 상세 정보 조회 완료');
+  } catch (err) {
+    console.error('방 상세 정보 조회 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 방 상태 변경 (게시중 <-> 비게시)
+ * PATCH /api/admin/properties/:roomId/status
+ */
+const updateRoomStatus = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { status, reason } = req.body;
+    const adminId = req.admin.id;
+
+    // IP 주소 및 User-Agent 추출
+    const ipAddress = req.ip || req.connection.remoteAddress;
+    const userAgent = req.get('User-Agent');
+
+    // 허용된 상태값 검증
+    const allowedStatuses = ['published', 'hidden_by_admin'];
+    if (!allowedStatuses.includes(status)) {
+      return error(res, {
+        code: 4001,
+        message: `허용되지 않은 상태값입니다. (허용: ${allowedStatuses.join(', ')})`
+      }, 400);
+    }
+
+    const room = await Room.findByPk(roomId);
+
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 현재 상태와 동일한지 확인
+    if (room.status === status) {
+      return error(res, {
+        code: 4002,
+        message: '이미 해당 상태입니다.'
+      }, 400);
+    }
+
+    // 트랜잭션 시작
+    const transaction = await sequelize.transaction();
+
+    try {
+      // 상태 변경
+      const previousStatus = room.status;
+      room.status = status;
+      await room.save({ transaction });
+
+      // 상태 변경 이력 저장
+      await RoomStatusHistory.create({
+        roomId,
+        adminId,
+        previousStatus,
+        newStatus: status,
+        reason: reason || null,
+        ipAddress,
+        userAgent,
+        changedAt: new Date()
+      }, { transaction });
+
+      await transaction.commit();
+
+      // 캐시 무효화
+      await invalidateRoomCache();
+
+      return success(res, {
+        roomId: room.id,
+        previousStatus,
+        newStatus: status,
+        reason: reason || null
+      }, '방 상태 변경 완료');
+    } catch (err) {
+      await transaction.rollback();
+      throw err;
+    }
+  } catch (err) {
+    console.error('방 상태 변경 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 방 비밀번호 변경 (이력 저장 포함)
+ * PATCH /api/admin/properties/:roomId/password
+ */
+const updateRoomPassword = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { newPassword, reason } = req.body;
+    const adminId = req.admin.id; // authenticateAdmin 미들웨어에서 설정
+
+    // 비밀번호 필수 검증
+    if (!newPassword || newPassword.trim() === '') {
+      return error(res, {
+        code: 4003,
+        message: '새 비밀번호를 입력해주세요.'
+      }, 400);
+    }
+
+    // 길이 제한만 검증 (특수문자 허용: *1234#, #9876* 등)
+    if (newPassword.length < 4 || newPassword.length > 50) {
+      return error(res, {
+        code: 4004,
+        message: '비밀번호는 4~50자 이내로 입력해주세요.'
+      }, 400);
+    }
+
+    const room = await Room.findByPk(roomId);
+
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    const previousPassword = room.entrancePassword;
+
+    // 트랜잭션으로 비밀번호 변경 + 이력 저장
+    const transaction = await sequelize.transaction();
+
+    try {
+      // 1. 방 비밀번호 변경
+      room.entrancePassword = newPassword.trim();
+      await room.save({ transaction });
+
+      // 2. 변경 이력 저장
+      const ipAddress = req.ip || req.connection.remoteAddress;
+      const userAgent = req.get('user-agent');
+
+      await RoomPasswordHistory.create({
+        roomId,
+        adminId,
+        previousPassword,
+        newPassword: newPassword.trim(),
+        reason: reason || null,
+        ipAddress,
+        userAgent,
+        changedAt: new Date()
+      }, { transaction });
+
+      await transaction.commit();
+
+      return success(res, {
+        roomId: room.id,
+        previousPassword,
+        newPassword: newPassword.trim(),
+        changedAt: new Date(),
+        reason: reason || null
+      }, '방 비밀번호 변경 완료');
+    } catch (err) {
+      await transaction.rollback();
+      throw err;
+    }
+  } catch (err) {
+    console.error('방 비밀번호 변경 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 메모 생성
+ * POST /api/admin/properties/:roomId/memos
+ */
+const createRoomMemo = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { content } = req.body;
+    const adminId = req.admin.id; // authenticateAdmin 미들웨어에서 설정
+
+    // 내용 필수 검증
+    if (!content || content.trim() === '') {
+      return error(res, {
+        code: 4005,
+        message: '메모 내용을 입력해주세요.'
+      }, 400);
+    }
+
+    // 방 존재 여부 확인
+    const room = await Room.findByPk(roomId);
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 메모 생성
+    const memo = await RoomMemo.create({
+      roomId,
+      adminId,
+      content: content.trim()
+    });
+
+    // 작성자 정보 포함하여 조회
+    const memoWithAdmin = await RoomMemo.findByPk(memo.id, {
+      include: [
+        {
+          model: Admin,
+          as: 'admin',
+          attributes: ['id', 'name']
+        }
+      ]
+    });
+
+    return success(res, {
+      id: memoWithAdmin.id,
+      content: memoWithAdmin.content,
+      createdBy: memoWithAdmin.admin.name,
+      createdAt: memoWithAdmin.createdAt
+    }, '메모 생성 완료', 201);
+  } catch (err) {
+    console.error('메모 생성 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 메모 수정
+ * PATCH /api/admin/properties/:roomId/memos/:memoId
+ */
+const updateRoomMemo = async (req, res) => {
+  try {
+    const { roomId, memoId } = req.params;
+    const { content } = req.body;
+
+    // 내용 필수 검증
+    if (!content || content.trim() === '') {
+      return error(res, {
+        code: 4005,
+        message: '메모 내용을 입력해주세요.'
+      }, 400);
+    }
+
+    // 메모 존재 여부 및 방 일치 확인
+    const memo = await RoomMemo.findOne({
+      where: { id: memoId, roomId }
+    });
+
+    if (!memo) {
+      return error(res, {
+        code: 4006,
+        message: '해당 메모를 찾을 수 없습니다.'
+      }, 404);
+    }
+
+    // 메모 수정
+    memo.content = content.trim();
+    await memo.save();
+
+    // 작성자 정보 포함하여 조회
+    const memoWithAdmin = await RoomMemo.findByPk(memo.id, {
+      include: [
+        {
+          model: Admin,
+          as: 'admin',
+          attributes: ['id', 'name']
+        }
+      ]
+    });
+
+    return success(res, {
+      id: memoWithAdmin.id,
+      content: memoWithAdmin.content,
+      createdBy: memoWithAdmin.admin.name,
+      updatedAt: memoWithAdmin.updatedAt
+    }, '메모 수정 완료');
+  } catch (err) {
+    console.error('메모 수정 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 메모 삭제
+ * DELETE /api/admin/properties/:roomId/memos/:memoId
+ */
+const deleteRoomMemo = async (req, res) => {
+  try {
+    const { roomId, memoId } = req.params;
+
+    // 메모 존재 여부 및 방 일치 확인
+    const memo = await RoomMemo.findOne({
+      where: { id: memoId, roomId }
+    });
+
+    if (!memo) {
+      return error(res, {
+        code: 4006,
+        message: '해당 메모를 찾을 수 없습니다.'
+      }, 404);
+    }
+
+    await memo.destroy();
+
+    return success(res, { id: memoId }, '메모 삭제 완료');
+  } catch (err) {
+    console.error('메모 삭제 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 비밀번호 변경 이력 조회
+ * GET /api/admin/properties/:roomId/password-history
+ */
+const getRoomPasswordHistory = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { limit = 10, offset = 0 } = req.query;
+
+    // 방 존재 여부 확인
+    const room = await Room.findByPk(roomId);
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 비밀번호 변경 이력 조회 (최신순)
+    const { count, rows: histories } = await RoomPasswordHistory.findAndCountAll({
+      where: { roomId },
+      include: [
+        {
+          model: Admin,
+          as: 'admin',
+          attributes: ['id', 'name']
+        }
+      ],
+      order: [['changed_at', 'DESC']],
+      limit: Math.min(parseInt(limit) || 10, 50),
+      offset: parseInt(offset) || 0
+    });
+
+    // 응답 데이터 가공 (보안상 IP/UserAgent는 super_admin만 볼 수 있도록)
+    const isSuperAdmin = req.admin.role === 'super_admin';
+
+    const responseData = histories.map(history => ({
+      id: history.id,
+      previousPassword: history.previousPassword,
+      newPassword: history.newPassword,
+      reason: history.reason,
+      changedBy: history.admin.name,
+      changedAt: history.changedAt,
+      ...(isSuperAdmin && {
+        ipAddress: history.ipAddress,
+        userAgent: history.userAgent
+      })
+    }));
+
+    return success(res, {
+      total: count,
+      histories: responseData,
+      pagination: {
+        limit: parseInt(limit) || 10,
+        offset: parseInt(offset) || 0,
+        hasMore: count > (parseInt(offset) || 0) + responseData.length
+      }
+    }, '비밀번호 변경 이력 조회 완료');
+  } catch (err) {
+    console.error('비밀번호 변경 이력 조회 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 방 상태 변경 이력 조회 (보안 감사용)
+ * GET /api/admin/properties/:roomId/status-history
+ */
+const getRoomStatusHistory = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { limit, offset } = req.query;
+
+    // 방 존재 여부 확인
+    const room = await Room.findByPk(roomId);
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    // 상태 변경 이력 조회
+    const { count, rows: histories } = await RoomStatusHistory.findAndCountAll({
+      where: { roomId },
+      include: [
+        {
+          model: Admin,
+          as: 'admin',
+          attributes: ['id', 'name']
+        }
+      ],
+      order: [['changedAt', 'DESC']],
+      limit: Math.min(parseInt(limit) || 20, 50),
+      offset: parseInt(offset) || 0
+    });
+
+    // 응답 데이터 가공 (보안상 IP/UserAgent는 super_admin만 볼 수 있도록)
+    const isSuperAdmin = req.admin.role === 'super_admin';
+
+    const responseData = histories.map(history => ({
+      id: history.id,
+      previousStatus: history.previousStatus,
+      newStatus: history.newStatus,
+      reason: history.reason,
+      changedBy: history.admin.name,
+      changedAt: history.changedAt,
+      ...(isSuperAdmin && {
+        ipAddress: history.ipAddress,
+        userAgent: history.userAgent
+      })
+    }));
+
+    return success(res, {
+      total: count,
+      histories: responseData,
+      pagination: {
+        limit: parseInt(limit) || 20,
+        offset: parseInt(offset) || 0,
+        hasMore: count > (parseInt(offset) || 0) + responseData.length
+      }
+    }, '상태 변경 이력 조회 완료');
+  } catch (err) {
+    console.error('상태 변경 이력 조회 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 모든 환불 요청 목록 조회 (관리자)
+ * GET /api/admin/refunds
+ */
+const getRefunds = async (req, res) => {
+  try {
+    const { status, page = 1, limit = 20 } = req.query;
+
+    const whereClause = {};
+    if (status) {
+      whereClause.refundStatus = status;
+    }
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const { count, rows: refunds } = await Refund.findAndCountAll({
+      where: whereClause,
+      include: [
+        {
+          model: Contract,
+          as: 'contract',
+          attributes: ['id', 'roomId', 'hostId', 'guestId', 'checkInDate', 'checkOutDate'],
+          include: [
+            {
+              model: Room,
+              as: 'room',
+              attributes: ['id', 'roomName', 'address']
+            },
+            {
+              model: User,
+              as: 'guest',
+              attributes: ['id', 'name', 'nickname', 'phoneNumber', 'email']
+            }
+          ]
+        }
+      ],
+      order: [['requestedAt', 'DESC']],
+      limit: parseInt(limit),
+      offset
+    });
+
+    return success(
+      res,
+      {
+        total: count,
+        refunds: refunds.map(refund => ({
+          id: refund.id,
+          refundStatus: refund.refundStatus,
+
+          // 계약 정보
+          contract: {
+            id: refund.contract.id,
+            checkInDate: refund.contract.checkInDate,
+            checkOutDate: refund.contract.checkOutDate,
+            room: {
+              id: refund.contract.room.id,
+              roomName: refund.contract.room.roomName,
+              address: refund.contract.room.address
+            },
+            guest: {
+              id: refund.contract.guest.id,
+              name: refund.contract.guest.name,
+              phoneNumber: refund.contract.guest.phoneNumber,
+              email: refund.contract.guest.email
+            }
+          },
+
+          // 환불 계산 정보
+          policyTypeUsed: refund.policyTypeUsed,
+          daysBeforeCheckin: refund.daysBeforeCheckin,
+          isSameDayCancellation: refund.isSameDayCancellation,
+
+          // 환불 금액
+          totalRefundAmount: refund.totalRefundAmount,
+          finalRefundAmount: refund.finalRefundAmount,
+
+          // 환불 방법
+          refundMethod: refund.refundMethod,
+
+          // 사유
+          cancellationReason: refund.cancellationReason,
+
+          // 타임스탬프
+          requestedAt: refund.requestedAt,
+          approvedAt: refund.approvedAt,
+          rejectedAt: refund.rejectedAt,
+          completedAt: refund.completedAt
+        })),
+        pagination: {
+          currentPage: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: Math.ceil(count / parseInt(limit)),
+          hasMore: offset + refunds.length < count
+        }
+      },
+      '환불 요청 목록을 조회했습니다.'
+    );
+  } catch (err) {
+    console.error('환불 목록 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 환불 상세 조회 (관리자)
+ * GET /api/admin/refunds/:refundId
+ */
+const getRefundDetail = async (req, res) => {
+  try {
+    const { refundId } = req.params;
+
+    const refund = await Refund.findByPk(refundId, {
+      include: [
+        {
+          model: Contract,
+          as: 'contract',
+          include: [
+            {
+              model: Room,
+              as: 'room',
+              attributes: ['id', 'roomName', 'address', 'refundPolicy']
+            },
+            {
+              model: User,
+              as: 'host',
+              attributes: ['id', 'name', 'nickname', 'phoneNumber', 'email']
+            },
+            {
+              model: User,
+              as: 'guest',
+              attributes: ['id', 'name', 'nickname', 'phoneNumber', 'email']
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!refund) {
+      return error(res, { code: 3006, message: '환불 요청을 찾을 수 없습니다' }, 404);
+    }
+
+    return success(
+      res,
+      {
+        refund: {
+          id: refund.id,
+          refundStatus: refund.refundStatus,
+
+          // 계약 정보
+          contract: {
+            id: refund.contract.id,
+            checkInDate: refund.contract.checkInDate,
+            checkOutDate: refund.contract.checkOutDate,
+            totalDays: refund.contract.totalDays,
+            room: refund.contract.room,
+            host: refund.contract.host,
+            guest: refund.contract.guest
+          },
+
+          // 환불 계산 정보
+          policyTypeUsed: refund.policyTypeUsed,
+          cancellationDate: refund.cancellationDate,
+          checkInDate: refund.checkInDate,
+          daysBeforeCheckin: refund.daysBeforeCheckin,
+          isSameDayCancellation: refund.isSameDayCancellation,
+
+          // 원본 금액
+          originalRentalFee: refund.originalRentalFee,
+          originalCleaningFee: refund.originalCleaningFee,
+          originalMaintenanceFee: refund.originalMaintenanceFee,
+          originalTotalAmount: refund.originalTotalAmount,
+
+          // 환불 금액
+          rentalFeeRefundRate: refund.rentalFeeRefundRate,
+          rentalFeeRefundAmount: refund.rentalFeeRefundAmount,
+          cleaningFeeRefundAmount: refund.cleaningFeeRefundAmount,
+          maintenanceFeeRefundAmount: refund.maintenanceFeeRefundAmount,
+          totalRefundAmount: refund.totalRefundAmount,
+
+          // 수수료 및 공제액
+          platformFeeDeducted: refund.platformFeeDeducted,
+          penaltyAmount: refund.penaltyAmount,
+          finalRefundAmount: refund.finalRefundAmount,
+
+          // 환불 방법
+          refundMethod: refund.refundMethod,
+          refundAccountInfo: refund.refundAccountInfo,
+
+          // 사유 및 메시지
+          cancellationReason: refund.cancellationReason,
+          rejectionReason: refund.rejectionReason,
+          adminNotes: refund.adminNotes,
+
+          // 타임스탬프
+          requestedAt: refund.requestedAt,
+          approvedAt: refund.approvedAt,
+          rejectedAt: refund.rejectedAt,
+          completedAt: refund.completedAt,
+          createdAt: refund.createdAt,
+          updatedAt: refund.updatedAt
+        }
+      },
+      '환불 요청 상세를 조회했습니다.'
+    );
+  } catch (err) {
+    console.error('환불 상세 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 환불 승인 (관리자)
+ * PATCH /api/admin/refunds/:refundId/approve
+ */
+const approveRefund = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { refundId } = req.params;
+    const { admin_notes } = req.body;
+    const adminId = req.admin.id;
+
+    // 환불 요청 조회
+    const refund = await Refund.findByPk(refundId, { transaction });
+
+    if (!refund) {
+      await transaction.rollback();
+      return error(res, { code: 3006, message: '환불 요청을 찾을 수 없습니다' }, 404);
+    }
+
+    // 승인 가능한 상태인지 확인
+    if (refund.refundStatus !== 'REQUESTED') {
+      await transaction.rollback();
+      return error(
+        res,
+        {
+          code: 4503,
+          message: '요청 상태의 환불만 승인할 수 있습니다',
+          currentStatus: refund.refundStatus
+        },
+        400
+      );
+    }
+
+    // 환불 승인 처리
+    await refund.update(
+      {
+        refundStatus: 'APPROVED',
+        adminNotes: admin_notes || null,
+        approvedAt: new Date()
+      },
+      { transaction }
+    );
+
+    // TODO: 실제 환불 처리 로직 (PG사 API 연동)
+    // await processRefundPayment(refund);
+
+    await transaction.commit();
+
+    return updated(
+      res,
+      {
+        refundId: refund.id,
+        refundStatus: refund.refundStatus,
+        approvedAt: refund.approvedAt,
+        finalRefundAmount: refund.finalRefundAmount
+      },
+      '환불이 승인되었습니다. 실제 환불 처리는 영업일 기준 3-5일 소요됩니다.'
+    );
+  } catch (err) {
+    await transaction.rollback();
+    console.error('환불 승인 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 환불 거절 (관리자)
+ * PATCH /api/admin/refunds/:refundId/reject
+ */
+const rejectRefund = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { refundId } = req.params;
+    const { rejection_reason, admin_notes } = req.body;
+    const adminId = req.admin.id;
+
+    // 거절 사유 확인
+    if (!rejection_reason || rejection_reason.trim() === '') {
+      await transaction.rollback();
+      return error(
+        res,
+        { code: 4504, message: '거절 사유를 입력해주세요' },
+        400
+      );
+    }
+
+    // 환불 요청 조회
+    const refund = await Refund.findByPk(refundId, { transaction });
+
+    if (!refund) {
+      await transaction.rollback();
+      return error(res, { code: 3006, message: '환불 요청을 찾을 수 없습니다' }, 404);
+    }
+
+    // 거절 가능한 상태인지 확인
+    if (refund.refundStatus !== 'REQUESTED') {
+      await transaction.rollback();
+      return error(
+        res,
+        {
+          code: 4505,
+          message: '요청 상태의 환불만 거절할 수 있습니다',
+          currentStatus: refund.refundStatus
+        },
+        400
+      );
+    }
+
+    // 환불 거절 처리
+    await refund.update(
+      {
+        refundStatus: 'REJECTED',
+        rejectionReason: rejection_reason,
+        adminNotes: admin_notes || null,
+        rejectedAt: new Date()
+      },
+      { transaction }
+    );
+
+    // 계약 상태 복원 (환불 요청 전 상태로)
+    const contract = await Contract.findByPk(refund.contractId, { transaction });
+    if (contract) {
+      // 환불 거절 시 계약 상태를 PAYMENT_COMPLETED 또는 IN_PROGRESS로 복원
+      // (실제 비즈니스 로직에 따라 조정 필요)
+      await contract.update({
+        status: 'PAYMENT_COMPLETED'
+      }, { transaction });
+    }
+
+    await transaction.commit();
+
+    return updated(
+      res,
+      {
+        refundId: refund.id,
+        refundStatus: refund.refundStatus,
+        rejectionReason: refund.rejectionReason,
+        rejectedAt: refund.rejectedAt
+      },
+      '환불 요청이 거절되었습니다.'
+    );
+  } catch (err) {
+    await transaction.rollback();
+    console.error('환불 거절 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 렌탈 주문 목록 조회 (관리자)
+ * GET /api/admin/rental-orders
+ */
+const getRentalOrders = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      status,
+      deliveryStatus,
+      orderType,
+      contractId,
+      startDate,
+      endDate
+    } = req.query;
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    // 검색 조건 구성
+    const where = {};
+
+    if (status) {
+      where.status = status;
+    }
+
+    if (deliveryStatus) {
+      where.deliveryStatus = deliveryStatus;
+    }
+
+    if (orderType) {
+      where.orderType = orderType;
+    }
+
+    if (contractId) {
+      where.contractId = parseInt(contractId);
+    }
+
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) {
+        where.createdAt[Op.gte] = new Date(startDate);
+      }
+      if (endDate) {
+        where.createdAt[Op.lte] = new Date(endDate + 'T23:59:59');
+      }
+    }
+
+    const { count, rows: orders } = await RentalOrder.findAndCountAll({
+      where,
+      include: [
+        {
+          model: Contract,
+          as: 'contract',
+          attributes: ['id', 'orderId', 'status', 'checkInDate', 'checkOutDate'],
+          include: [
+            {
+              model: User,
+              as: 'guest',
+              attributes: ['id', 'name', 'nickname', 'email']
+            },
+            {
+              model: Room,
+              as: 'room',
+              attributes: ['id', 'roomName']
+            }
+          ]
+        },
+        {
+          model: RentalOrderItem,
+          as: 'items',
+          include: [{
+            model: RentalItem,
+            as: 'rentalItem',
+            attributes: ['id', 'name']
+          }]
+        }
+      ],
+      order: [['createdAt', 'DESC']],
+      limit: parseInt(limit),
+      offset
+    });
+
+    return success(res, {
+      orders: orders.map(order => ({
+        id: order.id,
+        rentalOrderId: order.rentalOrderId,
+        orderType: order.orderType,
+        status: order.status,
+        deliveryStatus: order.deliveryStatus,
+        deliveryStatusLabel: RentalOrder.DELIVERY_STATUS_LABELS[order.deliveryStatus],
+        deliveredAt: order.deliveredAt,
+        totalAmount: parseFloat(order.totalAmount),
+        refundedAmount: parseFloat(order.refundedAmount || 0),
+        modifiableUntil: order.modifiableUntil,
+        paidAt: order.paidAt,
+        createdAt: order.createdAt,
+        contract: order.contract ? {
+          id: order.contract.id,
+          orderId: order.contract.orderId,
+          status: order.contract.status,
+          checkInDate: order.contract.checkInDate,
+          checkOutDate: order.contract.checkOutDate,
+          guest: order.contract.guest,
+          room: order.contract.room
+        } : null,
+        items: order.items?.map(item => ({
+          id: item.id,
+          name: item.rentalItem?.name,
+          quantity: item.quantity,
+          pricePerItem: parseFloat(item.pricePerItem),
+          totalPrice: parseFloat(item.totalPrice),
+          status: item.status
+        })) || []
+      })),
+      pagination: {
+        total: count,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(count / parseInt(limit))
+      }
+    }, '렌탈 주문 목록을 조회했습니다.');
+  } catch (err) {
+    console.error('렌탈 주문 목록 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 렌탈 주문 상세 조회 (관리자)
+ * GET /api/admin/rental-orders/:rentalOrderId
+ */
+const getRentalOrderDetail = async (req, res) => {
+  try {
+    const { rentalOrderId } = req.params;
+
+    const order = await RentalOrder.findOne({
+      where: { rentalOrderId },
+      include: [
+        {
+          model: Contract,
+          as: 'contract',
+          attributes: ['id', 'orderId', 'status', 'checkInDate', 'checkOutDate', 'guestId', 'hostId'],
+          include: [
+            {
+              model: User,
+              as: 'guest',
+              attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
+            },
+            {
+              model: User,
+              as: 'host',
+              attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
+            },
+            {
+              model: Room,
+              as: 'room',
+              attributes: ['id', 'roomName', 'address']
+            }
+          ]
+        },
+        {
+          model: RentalOrderItem,
+          as: 'items',
+          include: [{
+            model: RentalItem,
+            as: 'rentalItem',
+            attributes: ['id', 'name', 'category', 'price']
+          }]
+        }
+      ]
+    });
+
+    if (!order) {
+      return error(res, ErrorCodes.RENTAL_ORDER_NOT_FOUND, 404);
+    }
+
+    // 변경 이력 조회
+    const logs = await RentalOrderLog.findAll({
+      where: { rentalOrderId: order.id },
+      order: [['createdAt', 'DESC']],
+      limit: 50
+    });
+
+    return success(res, {
+      order: {
+        id: order.id,
+        rentalOrderId: order.rentalOrderId,
+        orderType: order.orderType,
+        status: order.status,
+        deliveryStatus: order.deliveryStatus,
+        deliveryStatusLabel: RentalOrder.DELIVERY_STATUS_LABELS[order.deliveryStatus],
+        deliveredAt: order.deliveredAt,
+        totalAmount: parseFloat(order.totalAmount),
+        refundedAmount: parseFloat(order.refundedAmount || 0),
+        modifiableUntil: order.modifiableUntil,
+        paymentKey: order.paymentKey,
+        paidAt: order.paidAt,
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+        contract: order.contract ? {
+          id: order.contract.id,
+          orderId: order.contract.orderId,
+          status: order.contract.status,
+          checkInDate: order.contract.checkInDate,
+          checkOutDate: order.contract.checkOutDate,
+          guest: order.contract.guest,
+          host: order.contract.host,
+          room: order.contract.room
+        } : null,
+        items: order.items?.map(item => ({
+          id: item.id,
+          rentalItemId: item.rentalItemId,
+          name: item.rentalItem?.name,
+          category: item.rentalItem?.category,
+          quantity: item.quantity,
+          pricePerItem: parseFloat(item.pricePerItem),
+          totalPrice: parseFloat(item.totalPrice),
+          status: item.status,
+          cancelledAt: item.cancelledAt,
+          cancelReason: item.cancelReason,
+          refundAmount: item.refundAmount ? parseFloat(item.refundAmount) : null
+        })) || []
+      },
+      logs: logs.map(log => ({
+        id: log.id,
+        action: log.action,
+        actionLabel: RentalOrderLog.ACTION_LABELS[log.action],
+        description: log.description,
+        metadata: log.metadata,
+        createdAt: log.createdAt
+      }))
+    }, '렌탈 주문 상세를 조회했습니다.');
+  } catch (err) {
+    console.error('렌탈 주문 상세 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 계약별 렌탈 이력 조회 (관리자)
+ * GET /api/admin/contracts/:contractId/rental-history
+ */
+const getContractRentalHistory = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+
+    // 계약 확인
+    const contract = await Contract.findByPk(contractId, {
+      attributes: ['id', 'orderId', 'status', 'checkInDate', 'checkOutDate'],
+      include: [
+        {
+          model: User,
+          as: 'guest',
+          attributes: ['id', 'name', 'nickname']
+        },
+        {
+          model: Room,
+          as: 'room',
+          attributes: ['id', 'roomName']
+        }
+      ]
+    });
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    // 해당 계약의 모든 렌탈 주문 조회
+    const orders = await RentalOrder.findAll({
+      where: { contractId },
+      include: [{
+        model: RentalOrderItem,
+        as: 'items',
+        include: [{
+          model: RentalItem,
+          as: 'rentalItem',
+          attributes: ['id', 'name']
+        }]
+      }],
+      order: [['createdAt', 'ASC']]
+    });
+
+    // 해당 계약의 모든 렌탈 로그 조회 (타임라인용)
+    const orderIds = orders.map(o => o.id);
+    const logs = await RentalOrderLog.findAll({
+      where: { rentalOrderId: { [Op.in]: orderIds } },
+      order: [['createdAt', 'ASC']]
+    });
+
+    // 요약 통계
+    const summary = {
+      totalOrders: orders.length,
+      totalPaid: orders
+        .filter(o => o.status === 'PAID' || o.status === 'PARTIAL_REFUND')
+        .reduce((sum, o) => sum + parseFloat(o.totalAmount), 0),
+      totalRefunded: orders.reduce((sum, o) => sum + parseFloat(o.refundedAmount || 0), 0),
+      activeItems: orders.flatMap(o => o.items || []).filter(i => i.status === 'ACTIVE').length,
+      cancelledItems: orders.flatMap(o => o.items || []).filter(i => i.status === 'CANCELLED').length
+    };
+
+    return success(res, {
+      contract: {
+        id: contract.id,
+        orderId: contract.orderId,
+        status: contract.status,
+        checkInDate: contract.checkInDate,
+        checkOutDate: contract.checkOutDate,
+        guest: contract.guest,
+        room: contract.room
+      },
+      summary,
+      orders: orders.map(order => ({
+        id: order.id,
+        rentalOrderId: order.rentalOrderId,
+        orderType: order.orderType,
+        status: order.status,
+        totalAmount: parseFloat(order.totalAmount),
+        refundedAmount: parseFloat(order.refundedAmount || 0),
+        paidAt: order.paidAt,
+        createdAt: order.createdAt,
+        items: order.items?.map(item => ({
+          id: item.id,
+          name: item.rentalItem?.name,
+          quantity: item.quantity,
+          totalPrice: parseFloat(item.totalPrice),
+          status: item.status,
+          cancelledAt: item.cancelledAt
+        })) || []
+      })),
+      timeline: logs.map(log => ({
+        id: log.id,
+        rentalOrderId: log.rentalOrderId,
+        action: log.action,
+        actionLabel: RentalOrderLog.ACTION_LABELS[log.action],
+        description: log.description,
+        metadata: log.metadata,
+        createdAt: log.createdAt
+      }))
+    }, '계약 렌탈 이력을 조회했습니다.');
+  } catch (err) {
+    console.error('계약 렌탈 이력 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 관리자 렌탈 아이템 취소 (강제 취소)
+ * POST /api/admin/rental-orders/:rentalOrderId/items/:itemId/cancel
+ */
+const adminCancelRentalItem = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { rentalOrderId, itemId } = req.params;
+    const { reason, refundAmount } = req.body;
+    const adminId = req.admin.id;
+
+    if (!reason) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { field: 'reason' });
+    }
+
+    // 렌탈 주문 조회
+    const order = await RentalOrder.findOne({
+      where: { rentalOrderId },
+      transaction
+    });
+
+    if (!order) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.RENTAL_ORDER_NOT_FOUND, 404);
+    }
+
+    // 아이템 조회
+    const item = await RentalOrderItem.findOne({
+      where: { id: itemId, rentalOrderId: order.id },
+      include: [{
+        model: RentalItem,
+        as: 'rentalItem',
+        attributes: ['id', 'name']
+      }],
+      transaction
+    });
+
+    if (!item) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.RENTAL_ORDER_ITEM_NOT_FOUND, 404);
+    }
+
+    if (item.status === 'CANCELLED') {
+      await transaction.rollback();
+      return error(res, ErrorCodes.RENTAL_ITEM_ALREADY_CANCELLED, 400);
+    }
+
+    // 환불 금액 결정 (지정되지 않으면 전액)
+    const finalRefundAmount = refundAmount !== undefined
+      ? parseFloat(refundAmount)
+      : parseFloat(item.totalPrice);
+
+    // 아이템 취소 처리
+    await item.update({
+      status: 'CANCELLED',
+      cancelledAt: new Date(),
+      cancelReason: `[관리자] ${reason}`,
+      refundAmount: finalRefundAmount
+    }, { transaction });
+
+    // 주문 환불 금액 업데이트
+    await order.update({
+      refundedAmount: parseFloat(order.refundedAmount || 0) + finalRefundAmount,
+      status: 'PARTIAL_REFUND'
+    }, { transaction });
+
+    // 예약 상태 업데이트
+    await require('../models').RentalItemReservation.update(
+      { status: 'CANCELLED' },
+      {
+        where: {
+          rentalOrderId: order.id,
+          rentalOrderItemId: item.id
+        },
+        transaction
+      }
+    );
+
+    // 로그 기록
+    await RentalOrderLog.createLog({
+      rentalOrderId: order.id,
+      action: 'ADMIN_ITEM_CANCELLED',
+      description: `관리자가 아이템을 취소했습니다: ${item.rentalItem?.name || '알 수 없음'} x${item.quantity}`,
+      metadata: {
+        itemId: item.id,
+        itemName: item.rentalItem?.name,
+        quantity: item.quantity,
+        refundAmount: finalRefundAmount,
+        adminId,
+        reason
+      },
+      transaction
+    });
+
+    await transaction.commit();
+
+    return updated(res, {
+      rentalOrderId: order.rentalOrderId,
+      item: {
+        id: item.id,
+        name: item.rentalItem?.name,
+        status: 'CANCELLED',
+        refundAmount: finalRefundAmount
+      },
+      orderStatus: order.status,
+      totalRefunded: parseFloat(order.refundedAmount)
+    }, '렌탈 아이템이 취소되었습니다.');
+  } catch (err) {
+    await transaction.rollback();
+    console.error('관리자 렌탈 아이템 취소 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 렌탈 주문 배송 상태 변경
+ * PATCH /api/admin/rental-orders/:rentalOrderId/delivery-status
+ */
+const updateRentalOrderDeliveryStatus = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { rentalOrderId } = req.params;
+    const { deliveryStatus } = req.body;
+    const adminId = req.admin.id;
+
+    // 입력 검증
+    const validStatuses = ['PENDING', 'IN_TRANSIT', 'DELIVERED'];
+    if (!deliveryStatus || !validStatuses.includes(deliveryStatus)) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+        details: '유효한 배송 상태를 입력해주세요. (PENDING, IN_TRANSIT, DELIVERED)'
+      });
+    }
+
+    // 렌탈 주문 조회
+    const rentalOrder = await RentalOrder.findByPk(rentalOrderId, {
+      include: [{
+        model: RentalOrderItem,
+        as: 'items',
+        include: [{
+          model: RentalItem,
+          as: 'rentalItem',
+          attributes: ['name']
+        }]
+      }],
+      transaction
+    });
+
+    if (!rentalOrder) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.RENTAL_ORDER_NOT_FOUND, 404);
+    }
+
+    // 결제 완료된 주문만 배송 상태 변경 가능
+    if (!['PAID', 'PARTIAL_REFUND'].includes(rentalOrder.status)) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+        details: '결제 완료된 주문만 배송 상태를 변경할 수 있습니다.'
+      });
+    }
+
+    const previousStatus = rentalOrder.deliveryStatus;
+
+    // 이미 같은 상태인 경우
+    if (previousStatus === deliveryStatus) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+        details: `이미 '${RentalOrder.DELIVERY_STATUS_LABELS[deliveryStatus]}' 상태입니다.`
+      });
+    }
+
+    // 배송 상태 업데이트
+    const updateData = {
+      deliveryStatus
+    };
+
+    // 배송 완료 시 시간 기록
+    if (deliveryStatus === 'DELIVERED') {
+      updateData.deliveredAt = new Date();
+    }
+
+    await rentalOrder.update(updateData, { transaction });
+
+    // 이력 로그 기록
+    const actionType = deliveryStatus === 'DELIVERED' ? 'DELIVERY_COMPLETED' : 'DELIVERY_STARTED';
+    await RentalOrderLog.createLog({
+      contractId: rentalOrder.contractId,
+      rentalOrderId: rentalOrder.id,
+      action: actionType,
+      actor: 'ADMIN',
+      actorId: adminId,
+      metadata: {
+        previousStatus,
+        newStatus: deliveryStatus,
+        items: rentalOrder.items.map(item => ({
+          name: item.rentalItem?.name,
+          quantity: item.quantity
+        }))
+      },
+      description: `배송 상태 변경: ${RentalOrder.DELIVERY_STATUS_LABELS[previousStatus]} → ${RentalOrder.DELIVERY_STATUS_LABELS[deliveryStatus]}`,
+      req
+    }, transaction);
+
+    await transaction.commit();
+
+    return updated(res, {
+      rentalOrderId: rentalOrder.id,
+      orderId: rentalOrder.orderId,
+      previousDeliveryStatus: previousStatus,
+      deliveryStatus: deliveryStatus,
+      deliveryStatusLabel: RentalOrder.DELIVERY_STATUS_LABELS[deliveryStatus],
+      deliveredAt: rentalOrder.deliveredAt
+    }, `배송 상태가 '${RentalOrder.DELIVERY_STATUS_LABELS[deliveryStatus]}'(으)로 변경되었습니다.`);
+  } catch (err) {
+    await transaction.rollback();
+    console.error('렌탈 주문 배송 상태 변경 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   // 대시보드
   getDashboardStats,
@@ -608,10 +2284,34 @@ module.exports = {
   // 매물 관리
   getProperties,
   getPendingReviews,
+  getPropertyDetail,
   approveProperty,
   rejectProperty,
 
+  // 방 정보 관리 (관리자 전용)
+  getRoomManagementDetail,
+  updateRoomStatus,
+  getRoomStatusHistory,
+  updateRoomPassword,
+  getRoomPasswordHistory,
+  createRoomMemo,
+  updateRoomMemo,
+  deleteRoomMemo,
+
   // 예약 관리
   getReservations,
-  getReservationDetail
+  getReservationDetail,
+
+  // 환불 관리
+  getRefunds,
+  getRefundDetail,
+  approveRefund,
+  rejectRefund,
+
+  // 렌탈 주문 관리
+  getRentalOrders,
+  getRentalOrderDetail,
+  getContractRentalHistory,
+  adminCancelRentalItem,
+  updateRentalOrderDeliveryStatus
 };

@@ -4,32 +4,20 @@ const { Sequelize } = require('sequelize');
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT || 3306,
-  dialect: 'mysql'
+  dialect: 'mysql',
+  logging: false
 });
 
 const RoomFreeService = sequelize.define('RoomFreeService', {
   roomId: {
     type: DataTypes.INTEGER,
-    primaryKey: true,
-    references: {
-      model: 'rooms',
-      key: 'id'
-    },
-    onDelete: 'CASCADE'
-  },
-  agreeTerms: {
-    type: DataTypes.BOOLEAN,
-    allowNull: false,
-    defaultValue: false
+    primaryKey: true
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   cleaningService: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
     defaultValue: false
-  },
-  cleaningToolImageUrl: {
-    type: DataTypes.STRING(500),
-    allowNull: true
   },
   hairDryerRental: {
     type: DataTypes.BOOLEAN,
@@ -40,21 +28,6 @@ const RoomFreeService = sequelize.define('RoomFreeService', {
     type: DataTypes.BOOLEAN,
     allowNull: false,
     defaultValue: false
-  },
-  bedSizeSuperSingle: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    defaultValue: 0
-  },
-  bedSizeQueen: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    defaultValue: 0
-  },
-  bedSizeKing: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    defaultValue: 0
   },
   amenityKit: {
     type: DataTypes.BOOLEAN,

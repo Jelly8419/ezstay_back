@@ -16,7 +16,6 @@ const Admin = (sequelize) => sequelize.define('Admin', {
   username: {
     type: DataTypes.STRING(50),
     allowNull: false,
-    unique: true,
     comment: '관리자 아이디 (로그인 ID)'
   },
   password: {
@@ -63,7 +62,8 @@ const Admin = (sequelize) => sequelize.define('Admin', {
   indexes: [
     {
       unique: true,
-      fields: ['username']
+      fields: ['username'],
+      name: 'admins_username_unique' // 명시적인 이름 지정으로 중복 방지
     }
   ]
 });

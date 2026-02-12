@@ -2,10 +2,16 @@ const express = require('express');
 const router = express.Router();
 const { register, login, refreshToken, logout, getProfile, devBypassLogin } = require('../controllers/authController');
 const { kakaoLogin } = require('../controllers/oauthController');
+const { sendVerificationCode, verifyEmail, resendVerificationCode } = require('../controllers/emailVerificationController');
 const { authenticateToken } = require('../middleware/auth');
 const { authLimiter } = require('../middleware/rateLimiter');
 
-// 일반 회원가입/로그인 (Rate Limiting 적용)
+// === 이메일 인증 관련 라우트 (Rate Limiting 적용) ===
+router.post('/send-verification-code', authLimiter, sendVerificationCode);
+router.post('/verify-email', authLimiter, verifyEmail);
+router.post('/resend-verification-code', authLimiter, resendVerificationCode);
+
+// === 일반 회원가입/로그인 (Rate Limiting 적용) ===
 router.post('/register', authLimiter, register);
 router.post('/login', authLimiter, login);
 router.post('/refresh', refreshToken);
@@ -15,6 +21,10 @@ router.post('/logout', authenticateToken, logout);
 router.post('/kakao', kakaoLogin);
 router.get('/kakao', async (req, res) => {
   const { code } = req.query;
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  console.log('🔍 [Kakao Callback] FRONTEND_URL:', process.env.FRONTEND_URL);
+  console.log('🔍 [Kakao Callback] frontendUrl:', frontendUrl);
+
   if (code) {
     try {
       // code를 body로 변환해서 kakaoLogin 호출
@@ -26,19 +36,19 @@ router.get('/kakao', async (req, res) => {
         if (data.success) {
           // 성공 시 JWT 토큰만 전달 (사용자 데이터는 토큰에 포함됨)
           const { accessToken, refreshToken } = data.data;
-          res.redirect(`http://localhost:3000/auth/callback?token=${accessToken}&refresh=${refreshToken}`);
+          res.redirect(`${frontendUrl}/auth/callback?token=${accessToken}&refresh=${refreshToken}`);
         } else {
           // 실패 시 에러 메시지와 함께 리디렉트
-          res.redirect(`http://localhost:3000/auth/callback?error=${encodeURIComponent(data.message)}`);
+          res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent(data.message)}`);
         }
       };
 
       kakaoLogin(req, res);
     } catch (error) {
-      res.redirect(`http://localhost:3000/auth/callback?error=${encodeURIComponent('로그인 중 오류가 발생했습니다.')}`);
+      res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent('로그인 중 오류가 발생했습니다.')}`);
     }
   } else {
-    res.redirect(`http://localhost:3000/auth/callback?error=${encodeURIComponent('카카오 인증 코드가 필요합니다.')}`);
+    res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent('카카오 인증 코드가 필요합니다.')}`);
   }
 });
 
@@ -47,5 +57,67 @@ router.get('/profile', authenticateToken, getProfile);
 
 // 개발 환경 전용 로그인 우회 (프로덕션에서 자동 차단됨)
 router.get('/dev-bypass/:userid', devBypassLogin);
+
+// 개발 환경 전용 이메일 발송 테스트 (프로덕션에서 자동 차단됨)
+router.post('/test-email', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ success: false, message: '개발 환경에서만 사용 가능합니다.' });
+  }
+
+  try {
+    const { sendVerificationEmail, isConfigured } = require('../utils/email');
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'email 필드가 필요합니다.' });
+    }
+
+    // SendGrid 설정 확인
+    const configured = isConfigured();
+    console.log('📧 SendGrid 설정 여부:', configured);
+    console.log('📧 EMAIL_FROM:', process.env.EMAIL_FROM);
+    console.log('📧 수신자 이메일:', email);
+
+    if (!configured) {
+      return res.status(500).json({
+        success: false,
+        message: 'SendGrid API Key가 설정되지 않았습니다.',
+        debug: {
+          SENDGRID_API_KEY_EXISTS: !!process.env.SENDGRID_API_KEY,
+          EMAIL_FROM: process.env.EMAIL_FROM
+        }
+      });
+    }
+
+    // 테스트 이메일 발송
+    const testCode = '123456';
+    const result = await sendVerificationEmail(email, testCode, 'signup');
+
+    if (result) {
+      return res.json({
+        success: true,
+        message: '테스트 이메일이 발송되었습니다. SendGrid Activity Feed를 확인하세요.',
+        debug: {
+          from: process.env.EMAIL_FROM,
+          to: email,
+          code: testCode,
+          sendgridConfigured: configured
+        }
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        message: '이메일 발송에 실패했습니다. 서버 로그를 확인하세요.'
+      });
+    }
+  } catch (error) {
+    console.error('❌ 테스트 이메일 발송 에러:', error);
+    return res.status(500).json({
+      success: false,
+      message: '서버 오류',
+      error: error.message
+    });
+  }
+});
 
 module.exports = router;

@@ -4,7 +4,8 @@ const { Sequelize } = require('sequelize');
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT || 3306,
-  dialect: 'mysql'
+  dialect: 'mysql',
+  logging: false  // 쿼리 로그 비활성화
 });
 
 const Room = sequelize.define('Room', {
@@ -15,11 +16,8 @@ const Room = sequelize.define('Room', {
   },
   hostId: {
     type: DataTypes.INTEGER,
-    allowNull: false,
-    references: {
-      model: 'users',
-      key: 'id'
-    }
+    allowNull: false
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   // 기본 정보
   roomName: {
@@ -87,20 +85,6 @@ const Room = sequelize.define('Room', {
       min: 0
     }
   },
-  livingRoomCount: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    validate: {
-      min: 0
-    }
-  },
-  kitchenCount: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    validate: {
-      min: 0
-    }
-  },
   isDuplex: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
@@ -157,13 +141,14 @@ const Room = sequelize.define('Room', {
     comment: '장기 할인율 (%)'
   },
   quickMoveIn: {
-    type: DataTypes.STRING(100),
-    allowNull: true
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    comment: '빠른 입주 가능일 (일 단위, 예: 7 = 7일 이내)'
   },
   quickMoveInDiscount: {
     type: DataTypes.INTEGER,
     allowNull: true,
-    comment: '빠른 입주 할인율 (%)'
+    comment: '빠른 입주 할인 금액 (원, 고정 금액)'
   },
   includeElectricity: {
     type: DataTypes.BOOLEAN,
@@ -200,24 +185,60 @@ const Room = sequelize.define('Room', {
     type: DataTypes.STRING(50),
     allowNull: true
   },
+  // 입퇴실 시간 (정책: 입실 14~17시, 퇴실 8~11시, 1시간 단위)
+  checkInTime: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 14,
+    field: 'check_in_time',
+    comment: '입실 시간 (14~17, 정시 기준)',
+    validate: {
+      min: 14,
+      max: 17,
+      isInt: {
+        msg: '입실 시간은 정수만 입력 가능합니다.'
+      }
+    }
+  },
+  checkOutTime: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 11,
+    field: 'check_out_time',
+    comment: '퇴실 시간 (8~11, 정시 기준)',
+    validate: {
+      min: 8,
+      max: 11,
+      isInt: {
+        msg: '퇴실 시간은 정수만 입력 가능합니다.'
+      }
+    }
+  },
   // 방 소개
   description: {
     type: DataTypes.TEXT,
     allowNull: true
   },
-  transportation: {
-    type: DataTypes.TEXT,
-    allowNull: true
-  },
-  houseRules: {
-    type: DataTypes.TEXT,
-    allowNull: true
+  maxGuests: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 2,
+    field: 'max_guests',
+    comment: '최대 가능인원',
+    validate: {
+      min: 1,
+      max: 20,
+      isInt: {
+        msg: '최대 인원은 정수만 입력 가능합니다.'
+      }
+    }
   },
   // 상태 관리
   status: {
-    type: DataTypes.ENUM('draft', 'pending_review', 'approved', 'rejected', 'published'),
+    type: DataTypes.ENUM('draft', 'pending_review', 'approved', 'rejected', 'published', 'hidden_by_admin'),
     allowNull: false,
-    defaultValue: 'draft'
+    defaultValue: 'draft',
+    comment: '방 상태 (hidden_by_admin: 관리자가 임시로 숨긴 상태)'
   },
   submittedAt: {
     type: DataTypes.DATE,
@@ -235,11 +256,35 @@ const Room = sequelize.define('Room', {
     type: DataTypes.TEXT,
     allowNull: true,
     comment: '매물 반려 사유'
+  },
+  // 게시 상태 관리
+  isActive: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+    comment: '게시 여부 (true: 게시중, false: 비공개)'
+  },
+  deletedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: 'Soft Delete 타임스탬프'
   }
 }, {
   tableName: 'rooms',
   timestamps: true,
-  underscored: true
+  underscored: true,
+  indexes: [
+    {
+      fields: ['status', 'latitude', 'longitude'],
+      name: 'idx_status_location',
+      comment: '지도 영역 검색 최적화 (카카오맵 클러스터링)'
+    },
+    {
+      fields: ['deleted_at'],
+      name: 'idx_deleted_at',
+      comment: 'Soft Delete 조회 최적화'
+    }
+  ]
 });
 
 module.exports = { Room, sequelize };

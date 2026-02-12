@@ -15,7 +15,10 @@
 ## 프로젝트 구조
 ```
 ezstay_back/
-├── controllers/          # 비즈니스 로직 처리
+├── config/              # 설정 파일
+│   ├── app.config.js           # 애플리케이션 설정 (줌 레벨, 캐시 TTL 등)
+│   └── redis.js                # Redis 설정
+├── controllers/          # 비즈니스 로직 처리 (요청/응답 핸들링)
 │   ├── authController.js       # 이메일 회원가입/로그인
 │   ├── oauthController.js      # 소셜 로그인 (카카오)
 │   ├── userController.js       # 사용자 정보 관리
@@ -25,6 +28,8 @@ ezstay_back/
 │   ├── contractController.js   # 계약/예약 관리
 │   ├── chatController.js       # Firebase 실시간 채팅
 │   └── adminController.js      # 관리자 기능 (대시보드, 유저/매물/예약 관리)
+├── services/            # 비즈니스 로직 레이어 (도메인 로직 분리)
+│   └── roomService.js          # 방 조회 관련 비즈니스 로직
 ├── models/              # Sequelize 데이터 모델
 │   ├── User.js                # 공통 사용자 정보
 │   ├── LocalUser.js           # 이메일 회원
@@ -53,7 +58,8 @@ ezstay_back/
 ├── utils/               # 유틸리티
 │   ├── auth.js                # JWT 토큰 생성/검증 (Access + Refresh)
 │   ├── responseHelper.js      # 표준화된 API 응답 (에러 코드 포함)
-│   └── validator.js           # 입력 검증 (이메일, 비밀번호, 전화번호 등)
+│   ├── validator.js           # 입력 검증 (이메일, 비밀번호, 전화번호 등)
+│   └── transactionHelper.js   # 트랜잭션 헬퍼 (자동 commit/rollback)
 ├── uploads/             # 업로드된 파일 저장소
 ├── server.js            # Express 앱 진입점
 ├── .env                 # 환경변수
@@ -99,7 +105,7 @@ Room (방)
    - 주소 입력 시 카카오 로컬 API로 자동 위도/경도 변환
    - 좌표 변환 실패 시에도 등록은 계속 진행됨 (좌표는 선택사항)
 2. **요금 설정** (`PATCH /api/host/rooms/:roomId/pricing`)
-3. **사진 업로드** (`POST /api/host/rooms/:roomId/photos`) - 최소 6장, 최대 20장
+3. **사진 업로드** (`POST /api/host/rooms/:roomId/photos`) - 최소 5장, 최대 20장
 4. **편의시설** (`PATCH /api/host/rooms/:roomId/amenities`)
 5. **무료 부가서비스** (`PATCH /api/host/rooms/:roomId/free-services`)
 6. **방 소개** (`PATCH /api/host/rooms/:roomId/description`)
@@ -168,6 +174,7 @@ return error(res, ErrorCodes.INTERNAL_ERROR, 500);
 - **4xxx**: 검증 관련 (VALIDATION_ERROR, MISSING_REQUIRED_FIELDS, DUPLICATE_EMAIL)
 - **41xx**: 파일 업로드 (NO_FILE_UPLOADED, MIN_PHOTOS_REQUIRED)
 - **42xx**: 방 등록 (ROOM_INFO_INCOMPLETE, PRICING_INFO_REQUIRED)
+- **429x**: Rate Limiting (4290: 일반 API 제한, 4291: 인증 API 제한, 4292: 파일 업로드 제한, 4293: 비밀번호 재설정 제한, 4294: 관리자 인증 제한, 4295: 관리자 API 제한)
 - **5xxx**: 서버 관련 (INTERNAL_ERROR, DATABASE_ERROR)
 
 ### 인증 미들웨어 사용
@@ -192,10 +199,12 @@ router.post('/image', uploadSingleImage, controller);
 ## 환경 변수 (.env)
 ```
 PORT=3000
+NODE_ENV=development  # production으로 설정 권장
 DB_HOST=localhost
 DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=your_password
+DB_LOGGING=false  # true: SQL 쿼리 로그 출력 (DDL 제외) | false: 모든 DB 로그 끄기
 JWT_SECRET=your_jwt_secret
 JWT_REFRESH_SECRET=your_refresh_secret
 KAKAO_CLIENT_ID=your_kakao_rest_api_key  # 카카오 REST API 키 (OAuth + 로컬 API 공통 사용)
@@ -203,13 +212,41 @@ KAKAO_CLIENT_SECRET=your_kakao_client_secret
 KAKAO_CALLBACK_URL=http://localhost:3000/api/auth/oauth/kakao/callback
 ```
 
+### DB 로깅 제어
+- **개발 환경**: `DB_LOGGING=true`로 설정하여 필요한 쿼리만 확인 (ALTER, SHOW INDEX 자동 필터링)
+- **프로덕션 환경**: `DB_LOGGING=false`로 설정하여 성능 최적화 및 로그 정리
+
 ## 주요 명령어
+
+### 서버 실행
 ```bash
 # 개발 서버 실행 (nodemon)
 npm run dev
 
 # 프로덕션 서버 실행
 npm start
+```
+
+### 개발 도구 (테스트 환경 전용)
+```bash
+# 계약 승인 관리
+npm run dev:approve-all         # 모든 대기중인 계약 일괄 승인
+npm run dev:approve <contractId> # 특정 계약 승인
+npm run dev:reject <contractId>  # 특정 계약 거절
+npm run dev:contract-status      # 계약 상태 조회
+
+# 사용 예시
+npm run dev:approve-all
+npm run dev:approve 123
+npm run dev:contract-status
+```
+
+**문서**: [scripts/dev-tools/README.md](scripts/dev-tools/README.md) 참조
+
+**자동 승인 모드** (선택 사항):
+```bash
+# .env 파일에 추가 (완전 자동화가 필요한 경우에만)
+AUTO_APPROVE_CONTRACTS=true
 ```
 
 ## 보안 강화 사항 (2025-10)
@@ -236,12 +273,27 @@ ALLOWED_ORIGINS=http://localhost:3000,https://yourdomain.com
 ```
 
 ### 4. **Rate Limiting**
+**일반 사용자 API**:
 - 일반 API: 15분/100회
 - 로그인/회원가입: 15분/5회 (Brute Force 방어)
 - 파일 업로드: 1시간/20회
+- 비밀번호 재설정: 1시간/3회
+
+**관리자 API** (업무 특성상 완화):
+- 관리자 로그인: 15분/10회 (일반 사용자의 2배)
+- 관리자 일반 API: 15분/300회 (일반 사용자의 3배)
+
 ```javascript
-const { authLimiter } = require('../middleware/rateLimiter');
+const { authLimiter, adminAuthLimiter, adminApiLimiter } = require('../middleware/rateLimiter');
+
+// 일반 사용자 로그인
 router.post('/login', authLimiter, login);
+
+// 관리자 로그인
+router.post('/admin/auth/login', adminAuthLimiter, adminLogin);
+
+// 관리자 API (모든 인증된 관리자 라우트에 자동 적용)
+router.use(adminApiLimiter);
 ```
 
 ### 5. **입력 검증**
@@ -270,6 +322,200 @@ if (!passwordValidation.valid) {
 - Multer, JWT, Sequelize 에러 자동 처리
 - 프로덕션 환경에서 민감한 정보 노출 방지
 - 일관된 에러 응답 형식
+
+### 8. **Sequelize 모델 인덱스 중복 방지** (중요!)
+Sequelize 모델에서 `unique: true`와 `indexes`를 함께 사용하면 인덱스가 중복 생성되어 MySQL의 64개 인덱스 제한을 초과할 수 있습니다.
+
+**❌ 잘못된 예시** (중복 인덱스 생성):
+```javascript
+const Model = sequelize.define('Model', {
+  field: {
+    type: DataTypes.STRING,
+    unique: true  // ❌ 자동 인덱스 생성
+  }
+}, {
+  indexes: [
+    {
+      unique: true,
+      fields: ['field']  // ❌ 또 다른 인덱스 생성
+    }
+  ]
+});
+```
+
+**✅ 올바른 예시** (단일 인덱스):
+```javascript
+const Model = sequelize.define('Model', {
+  field: {
+    type: DataTypes.STRING
+    // unique: true 제거
+  }
+}, {
+  indexes: [
+    {
+      unique: true,
+      fields: ['field'],
+      name: 'model_field_unique'  // 명시적인 이름 지정 권장
+    }
+  ]
+});
+```
+
+**적용된 모델**:
+- [Admin.js](c:\study\ezstay_back\models\Admin.js): `username` 필드
+- [ChatRoom.js](c:\study\ezstay_back\models\ChatRoom.js): `contractId`, `firebaseChatRoomId` 필드
+- [LocalUser.js](c:\study\ezstay_back\models\LocalUser.js): `userId` 필드
+
+### 9. **Sequelize 외래키 중복 생성 방지** (매우 중요!)
+Sequelize 모델에서 컬럼 정의에 `references` 옵션과 `models/index.js`의 `belongsTo`/`hasMany`를 함께 사용하면 **외래키가 중복 생성**되어 심각한 문제가 발생할 수 있습니다.
+
+#### ⚠️ 문제 상황
+- 서버 재시작할 때마다 `sync({ alter: true })`가 동일한 외래키를 반복 생성
+- MySQL의 64개 인덱스 제한 초과 가능
+- 실제 발생 사례: `notices` 테이블에 외래키 62개 중복 생성 (`notices_ibfk_1` ~ `notices_ibfk_62`)
+
+**❌ 잘못된 예시** (이중 외래키 정의):
+```javascript
+// models/Notice.js
+const Notice = sequelize.define('Notice', {
+  createdBy: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    references: {        // ❌ 첫 번째 외래키 정의
+      model: 'Admins',
+      key: 'id'
+    }
+  }
+});
+
+// models/index.js
+Notice.belongsTo(Admin, {
+  foreignKey: 'createdBy',  // ❌ 두 번째 외래키 정의 (중복!)
+  as: 'author'
+});
+```
+
+**✅ 올바른 예시** (단일 외래키 정의):
+```javascript
+// models/Notice.js
+const Notice = sequelize.define('Notice', {
+  createdBy: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    comment: '작성한 관리자 ID'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
+  }
+});
+
+// models/index.js
+Notice.belongsTo(Admin, {
+  foreignKey: 'createdBy',  // ✅ 여기서만 외래키 정의
+  as: 'author'
+});
+```
+
+#### 📋 중요 원칙
+1. **모델 정의에서 `references` 옵션 사용 금지**
+2. **`models/index.js`에서 `belongsTo`/`hasMany`로만 관계 설정**
+3. **`sync({ alter: false })` 사용** (프로덕션/개발 공통)
+4. **스키마 변경은 마이그레이션 사용 권장**
+
+#### ✅ 적용된 모델 (2025-01-11 수정 완료)
+- [Notice.js](c:\study\ezstay_back\models\Notice.js): `createdBy`, `updatedBy`
+- [FAQ.js](c:\study\ezstay_back\models\FAQ.js): `categoryId`, `createdBy`, `updatedBy`
+- [Inquiry.js](c:\study\ezstay_back\models\Inquiry.js): `userId`, `answeredBy`
+- [ChatRoom.js](c:\study\ezstay_back\models\ChatRoom.js): `contractId`, `hostId`, `guestId`, `roomId`
+- [Contract.js](c:\study\ezstay_back\models\Contract.js): `roomId`, `hostId`, `guestId`
+- [LocalUser.js](c:\study\ezstay_back\models\LocalUser.js): `userId`
+- [SocialUser.js](c:\study\ezstay_back\models\SocialUser.js): `userId`
+- [RentalItemReservation.js](c:\study\ezstay_back\models\RentalItemReservation.js): `contractId`, `rentalItemId`
+- [Room.js](c:\study\ezstay_back\models\Room.js): `hostId`
+- [RoomAmenity.js](c:\study\ezstay_back\models\RoomAmenity.js): `roomId`
+- [RoomFreeService.js](c:\study\ezstay_back\models\RoomFreeService.js): `roomId`
+- [RoomPhoto.js](c:\study\ezstay_back\models\RoomPhoto.js): `roomId`
+- [UserBankAccount.js](c:\study\ezstay_back\models\UserBankAccount.js): `userId`
+
+#### 🔧 기존 DB 정리 (필요 시)
+중복 생성된 외래키는 자동으로 제거되지 않습니다. 수동 정리가 필요합니다:
+
+```sql
+-- 1. 기존 중복 외래키 제거
+SHOW CREATE TABLE notices;  -- 현재 외래키 확인
+ALTER TABLE notices DROP FOREIGN KEY notices_ibfk_1;
+-- ... (중복된 외래키 모두 제거)
+
+-- 2. 올바른 외래키 재생성
+ALTER TABLE notices
+ADD CONSTRAINT fk_notices_created_by
+FOREIGN KEY (createdBy) REFERENCES admins(id)
+ON DELETE NO ACTION ON UPDATE CASCADE;
+
+ALTER TABLE notices
+ADD CONSTRAINT fk_notices_updated_by
+FOREIGN KEY (updatedBy) REFERENCES admins(id)
+ON DELETE SET NULL ON UPDATE CASCADE;
+```
+
+## 데이터 보존 정책 (매우 중요!)
+
+### 회원 탈퇴 시 데이터 보존
+**절대 원칙**: 사용자 탈퇴 시 실제 데이터 삭제 금지 (법적 요구사항)
+
+#### Soft Delete 방식 사용
+```javascript
+// ✅ 올바른 방법: Soft Delete (UPDATE 쿼리)
+await User.update({
+  isActive: false,
+  refreshToken: null
+}, {
+  where: { id: userId }
+});
+
+// ❌ 절대 금지: Hard Delete (DELETE 쿼리)
+await User.destroy({ where: { id: userId } }); // 사용 금지!
+```
+
+#### 보호되는 데이터
+다음 관계는 **onDelete: 'NO ACTION'**으로 설정되어 CASCADE 삭제 방지:
+
+1. **계약 관련** (법적 보관 의무 5년)
+   - Contract (호스트/게스트 계약 정보)
+   - Payment (결제 정보)
+   - Refund (환불 이력)
+   - ContractStatusLog (계약 상태 변경 이력)
+   - PaymentFailureLog (결제 실패 로그)
+
+2. **부동산 관련** (비즈니스 데이터)
+   - Room (방 정보)
+   - RoomPhoto, RoomAmenity, EzService (방 상세 정보)
+
+3. **커뮤니케이션** (고객 서비스)
+   - ChatRoom (채팅 이력)
+   - Inquiry (문의 이력)
+
+4. **금융 정보** (감사 추적)
+   - UserBankAccount (계좌 정보)
+
+#### 법적 근거
+- **전자상거래법**: 거래 기록 5년 보관 의무
+- **개인정보보호법**: 부정 이용 방지 목적 보관 허용
+- **국세기본법**: 세무 관련 정보 5년 보관 의무
+
+#### 구현 상세
+[models/index.js](c:\study\ezstay_back\models\index.js)에서 모든 중요 관계에 다음 설정 적용:
+```javascript
+User.hasMany(Contract, {
+  foreignKey: 'hostId',
+  as: 'hostedContracts',
+  onDelete: 'NO ACTION',  // 사용자 삭제 시 계약 데이터 보존
+  onUpdate: 'CASCADE'     // 사용자 ID 변경 시 자동 업데이트
+});
+```
+
+#### 주의사항
+- `User.destroy()` 메서드 사용 절대 금지
+- 회원 탈퇴는 반드시 `DELETE /api/user/account` API 사용
+- Hard Delete 시도 시 외래키 제약 조건으로 에러 발생 (안전장치)
 
 ## 개발 시 주의사항
 
@@ -310,8 +556,8 @@ if (!passwordValidation.valid) {
    - 민감정보 제외: `entrancePassword`, `hostId`, `detailAddress`, `status`
 
 ## API 문서
-- **일반 API**: `API_DOCUMENTATION.md` 파일 참조
-- **관리자 API**: `ADMIN_API_DOCUMENTATION.md` 파일 참조
+- **일반 API**: `docs\API_DOCUMENTATION.md` 파일 참조
+- **관리자 API**: `docs\ADMIN_API_DOCUMENTATION.md` 파일 참조
 
 ## 관리자 기능 (2025-10-27 추가, v2.0.0 업데이트)
 
@@ -382,29 +628,5 @@ router.patch('/users/:id/status',
 - `GET /api/admin/reservations` - 예약 목록
 - `GET /api/admin/reservations/:contractId` - 예약 상세
 
-### 관리자 계정 생성
-Admin 테이블에 직접 생성합니다:
-```javascript
-// scripts/createAdmin.js
-const bcrypt = require('bcryptjs');
-const { Admin } = require('./models');
 
-async function createAdmin() {
-  const hashedPassword = await bcrypt.hash('admin1234!', 10);
 
-  await Admin.create({
-    username: 'admin',
-    password: hashedPassword,
-    name: '관리자',
-    phoneNumber: '010-1234-5678',
-    role: 'super_admin',
-    isActive: true
-  });
-
-  console.log('관리자 계정 생성 완료');
-}
-
-createAdmin();
-```
-
-상세한 관리자 API 문서는 `ADMIN_API_DOCUMENTATION.md` 파일을 참조하세요.

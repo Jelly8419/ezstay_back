@@ -1,5 +1,6 @@
 const { User, SocialUser, UserBankAccount, sequelize } = require('../models');
 const { generateTokens } = require('../utils/auth');
+const { success, error, ErrorCodes } = require('../utils/responseHelper');
 const axios = require('axios');
 
 const kakaoLogin = async (req, res) => {
@@ -9,10 +10,8 @@ const kakaoLogin = async (req, res) => {
     const { code, user_mode } = req.body;
 
     if (!code) {
-      return res.status(400).json({
-        success: false,
-        message: '카카오 인증 코드가 필요합니다.'
-      });
+      await transaction.rollback();
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
     // 카카오 토큰 획득
@@ -41,21 +40,33 @@ const kakaoLogin = async (req, res) => {
       console.log('카카오 토큰 응답:', tokenResponse.data);
     } catch (tokenError) {
       console.error('카카오 토큰 요청 실패:', tokenError.response?.data || tokenError.message);
-      throw tokenError;
+      await transaction.rollback();
+      return error(res, { code: 1008, message: '카카오 로그인에 실패했습니다. 다시 시도해주세요.' }, 401);
     }
 
     const { access_token, refresh_token, expires_in } = tokenResponse.data;
 
     // 카카오 사용자 정보 획득
-    const userResponse = await axios.get('https://kapi.kakao.com/v2/user/me', {
-      headers: {
-        Authorization: `Bearer ${access_token}`
-      }
-    });
+    let userResponse;
+    try {
+      userResponse = await axios.get('https://kapi.kakao.com/v2/user/me', {
+        headers: {
+          Authorization: `Bearer ${access_token}`
+        }
+      });
+    } catch (userInfoError) {
+      console.error('카카오 사용자 정보 획득 실패:', userInfoError.response?.data || userInfoError.message);
+      await transaction.rollback();
+      return error(res, { code: 1009, message: '카카오 계정 연동에 실패했습니다.' }, 401);
+    }
 
     const kakaoUser = userResponse.data;
     const { id: kakaoId, kakao_account } = kakaoUser;
     const { email, profile } = kakao_account;
+
+    // 닉네임 추출: profile.nickname 우선, 없으면 kakao_account.name
+    const kakaoNickname = profile?.nickname || null;
+    const kakaoName = kakao_account?.name || null;
 
     // 기존 소셜 사용자 확인
     let socialUser = await SocialUser.findOne({
@@ -80,28 +91,29 @@ const kakaoLogin = async (req, res) => {
         tokenExpiresAt: new Date(Date.now() + expires_in * 1000)
       }, { transaction });
     } else {
-      // 이메일로 기존 사용자 확인 (다른 방법으로 가입된 경우)
-      const existingUser = await User.findOne({
-        where: { email: email }
-      });
-
-      if (existingUser) {
-        await transaction.rollback();
-        return res.status(400).json({
-          success: false,
-          message: '이미 다른 방법으로 가입된 이메일입니다.'
+      // 신규 사용자 - 이메일 중복 체크 (기존 이메일 계정 존재 여부)
+      if (email) {
+        const existingLocalUser = await User.findOne({
+          where: {
+            email: email,
+            userType: 'local'
+          }
         });
+        if (existingLocalUser) {
+          await transaction.rollback();
+          return error(res, ErrorCodes.EMAIL_EXISTS_AS_LOCAL, 400);
+        }
       }
 
-      // 새 사용자 생성
+      // 신규 사용자 - 자동 회원가입
       user = await User.create({
         email: email,
-        name: profile.nickname,
-        profileImageUrl: profile.profile_image_url || null,
+        name: kakaoName || kakaoNickname,           // 실명 우선, 없으면 닉네임
+        nickname: kakaoNickname || kakaoName,        // 닉네임 우선, 없으면 실명
+        profileImageUrl: profile.profile_image_url,
         userType: 'social'
       }, { transaction });
 
-      // 소셜 사용자 정보 생성
       await SocialUser.create({
         userId: user.id,
         provider: 'kakao',
@@ -111,7 +123,7 @@ const kakaoLogin = async (req, res) => {
         refreshTokenProvider: refresh_token,
         tokenExpiresAt: new Date(Date.now() + expires_in * 1000),
         additionalData: {
-          nickname: profile.nickname,
+          name: kakao_account.name,
           profileImageUrl: profile.profile_image_url,
           thumbnailImageUrl: profile.thumbnail_image_url
         }
@@ -141,36 +153,27 @@ const kakaoLogin = async (req, res) => {
 
     await transaction.commit();
 
-    res.status(200).json({
-      success: true,
-      message: '카카오 로그인이 완료되었습니다.',
-      data: {
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          profileImageUrl: user.profileImageUrl,
-          userType: user.userType,
-          userMode: userMode,
-          phoneVerified: user.phoneVerified || false,
-          hasBank: !!bankAccount
-        },
-        accessToken,
-        refreshToken
-      }
-    });
-  } catch (error) {
+    return success(res, {
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        nickname: user.nickname,
+        profileImageUrl: user.profileImageUrl,
+        userType: user.userType,
+        userMode: userMode,
+        phoneVerified: user.phoneVerified || false,
+        hasBank: !!bankAccount
+      },
+      accessToken,
+      refreshToken
+    }, '카카오 로그인이 완료되었습니다.');
+  } catch (err) {
     await transaction.rollback();
-    console.error('Kakao login error:', error.response?.data || error.message);
-    res.status(500).json({
-      success: false,
-      message: '카카오 로그인 중 오류가 발생했습니다.',
-      error: error.message
-    });
+    console.error('Kakao login error:', err.response?.data || err.message);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
-
-
 module.exports = {
   kakaoLogin
 };

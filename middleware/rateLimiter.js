@@ -66,9 +66,44 @@ const passwordResetLimiter = rateLimit({
   legacyHeaders: false
 });
 
+/**
+ * 관리자 인증용 Rate Limiter (일반 사용자보다 완화)
+ * 15분 동안 최대 10회 로그인 시도
+ */
+const adminAuthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15분
+  max: 10, // 최대 10회 (일반 사용자의 2배)
+  message: {
+    success: false,
+    code: 4294,
+    message: '관리자 로그인 시도 횟수를 초과했습니다. 15분 후 다시 시도해주세요.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true // 성공한 요청은 카운트에서 제외
+});
+
+/**
+ * 관리자 일반 API용 Rate Limiter (업무 특성상 높은 한도)
+ * 15분 동안 최대 300회 요청
+ */
+const adminApiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15분
+  max: 300, // 최대 300회 (일반 사용자의 3배)
+  message: {
+    success: false,
+    code: 4295,
+    message: '요청 횟수를 초과했습니다. 잠시 후 다시 시도해주세요.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
 module.exports = {
   generalLimiter,
   authLimiter,
   uploadLimiter,
-  passwordResetLimiter
+  passwordResetLimiter,
+  adminAuthLimiter,
+  adminApiLimiter
 };

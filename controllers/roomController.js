@@ -1,7 +1,10 @@
-const { Room, RoomPhoto, RoomAmenity, RoomFreeService, User, RentalItem } = require('../models');
+const { Room, RoomPhoto, RoomAmenity, EzService, User, RentalItem, Contract } = require('../models');
 const { Op } = require('sequelize');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
 const { safeRedisOperation } = require('../config/redis');
+const crypto = require('crypto');
+const roomService = require('../services/roomService');
+const appConfig = require('../config/app.config');
 
 const createRoom = async (req, res) => {
   try {
@@ -15,8 +18,6 @@ const createRoom = async (req, res) => {
       elevatorAvailable,
       roomCount,
       bathroomCount,
-      livingRoomCount,
-      kitchenCount,
       isDuplex,
       hostId
     } = req.body;
@@ -31,8 +32,6 @@ const createRoom = async (req, res) => {
       elevatorAvailable,
       roomCount,
       bathroomCount,
-      livingRoomCount,
-      kitchenCount,
       isDuplex,
       hostId
     });
@@ -59,14 +58,40 @@ const getRooms = async (req, res) => {
 
 const getRoomById = async (req, res) => {
   try {
+    // 쿼리 파라미터에서 입실일/퇴실일 추출 (할인 계산용)
+    const { checkIn, checkOut } = req.query;
+
     const room = await Room.findOne({
       where: {
         id: req.params.id,
         status: 'published' // 게시된 방만 조회
       },
-      attributes: {
-        exclude: ['entrancePassword', 'detailAddress', 'status'] // 민감정보 제외 (hostId는 포함)
-      },
+      // ✅ 화이트리스트 방식: PRD 요구사항 필드만 명시적으로 선택
+      attributes: [
+        // 기본 정보
+        'id', 'roomName', 'address', 'latitude', 'longitude',
+        'area', 'floor', 'buildingType',
+
+        // 구조 정보
+        'parkingAvailable', 'parkingInfo',
+        'elevatorAvailable', 'roomCount', 'bathroomCount', 'isDuplex',
+
+        // 요금 정보 (PRD 필수)
+        'dailyRent', 'dailyMaintenanceFee', 'maintenanceDetail',
+        'includeElectricity', 'includeWater', 'includeGas', 'includeInternet',
+        'cleaningFee', 'minContractWeeks', 'refundPolicy',
+
+        // 할인 정보
+        'longTermWeeks', 'longTermDiscount', 'quickMoveIn', 'quickMoveInDiscount',
+
+        // 상세 정보
+        'description', 'maxGuests', 'checkInTime', 'checkOutTime',
+
+        // 타임스탬프
+        'createdAt', 'updatedAt'
+
+        // ❌ 제외: entrancePassword, detailAddress, status, hostId (보안)
+      ],
       include: [
         {
           model: RoomPhoto,
@@ -78,16 +103,21 @@ const getRoomById = async (req, res) => {
           model: RoomAmenity,
           as: 'amenity',
           required: false
+          // wifiPassword는 자동으로 포함되지만 아래에서 제거됨
         },
         {
-          model: RoomFreeService,
-          as: 'freeService',
+          model: EzService,
+          as: 'ezService',
+          attributes: [
+            'cleaningService', 'autoPasswordChange'
+            // ⚠️ roomPassword 제외 (보안)
+          ],
           required: false
         },
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'profileImageUrl'],
+          attributes: ['id', 'name', 'nickname', 'profileImageUrl', 'phoneVerified'],
           required: false
         }
       ],
@@ -114,75 +144,81 @@ const getRoomById = async (req, res) => {
       roomData.host.profileImageUrl = `${baseUrl}${roomData.host.profileImageUrl}`;
     }
 
-    // hostId는 응답에서 제외 (host 객체로 대체)
-    delete roomData.hostId;
+    // 게스트 API이므로 민감 정보 제거 및 JSON 파싱
+    if (roomData.amenity) {
+      delete roomData.amenity.wifiPassword;  // 와이파이 비밀번호는 계약 후 제공
 
-    // === 대여 물품 재고 정보 추가 ===
-    // freeService에서 true인 항목에 대해서만 해당 카테고리의 물품 목록 조회
+      // JSON 문자열을 객체로 파싱 (프론트엔드 편의성)
+      try {
+        if (roomData.amenity.basicOptions && typeof roomData.amenity.basicOptions === 'string') {
+          roomData.amenity.basicOptions = JSON.parse(roomData.amenity.basicOptions);
+        }
+        if (roomData.amenity.additionalOptions && typeof roomData.amenity.additionalOptions === 'string') {
+          roomData.amenity.additionalOptions = JSON.parse(roomData.amenity.additionalOptions);
+        }
+        if (roomData.amenity.convenienceOptions && typeof roomData.amenity.convenienceOptions === 'string') {
+          roomData.amenity.convenienceOptions = JSON.parse(roomData.amenity.convenienceOptions);
+        }
+      } catch (parseError) {
+        console.error('Amenity JSON 파싱 실패:', parseError.message);
+        // 파싱 실패 시 원본 데이터 유지
+      }
+    }
+
+    // ✅ PRD 요구사항: 고정값 및 계산 필드 추가
+    roomData.deposit = 300000; // 보증금 30만원 고정
+    roomData.weeklyRent = roomData.dailyRent ? roomData.dailyRent * 7 : null; // 주간 임대료 계산
+
+    // === 할인 정보 계산 (빠른할인 → 장기할인 순차 적용) ===
+    const discountResult = roomService.calculateDiscounts(roomData, checkIn, checkOut);
+
+    roomData.finalDailyRent = discountResult.finalDailyRent;
+    roomData.totalDiscountAmount = discountResult.totalDiscountAmount;
+    roomData.appliedDiscounts = discountResult.appliedDiscounts; // ['quick', 'longTerm'] 등
+    roomData.discounts = {
+      quick: {
+        quickMoveIn: discountResult.quick.quickMoveIn,
+        quickMoveInDiscount: discountResult.quick.quickMoveInDiscount,
+        isApplicable: discountResult.quick.isApplicable,
+        discountAmount: discountResult.quick.discountAmount,
+        daysUntilCheckIn: discountResult.quick.daysUntilCheckIn
+      },
+      longTerm: {
+        longTermWeeks: discountResult.longTerm.longTermWeeks,
+        longTermDiscount: discountResult.longTerm.longTermDiscount,
+        isApplicable: discountResult.longTerm.isApplicable,
+        discountAmount: discountResult.longTerm.discountAmount,
+        stayWeeks: discountResult.longTerm.stayWeeks
+      }
+    };
+    // === 할인 정보 계산 끝 ===
+
+    // === 렌탈 아이템 정보 추가 ===
+    // 플랫폼에서 직접 판매하는 렌탈 아이템 (호스트 동의 불필요)
+    // 모든 활성화된 렌탈 아이템을 표시
     const availableRentalItems = {};
 
-    if (roomData.freeService) {
-      const freeService = roomData.freeService;
+    // 모든 카테고리의 렌탈 아이템 조회
+    const rentalCategories = ['hair_dryer', 'bedding_set', 'amenity_kit', 'towel_set'];
+    const categoryKeys = {
+      'hair_dryer': 'hairDryers',
+      'bedding_set': 'beddingSets',
+      'amenity_kit': 'amenityKits',
+      'towel_set': 'towelSets'
+    };
 
-      // RentalItem.FREE_SERVICE_MAPPING을 참조하여 해당하는 물품 조회
-      // hair_dryer_rental: true → 'hair_dryer' 카테고리 물품 조회
-      if (freeService.hairDryerRental) {
-        const hairDryers = await RentalItem.getAvailableItemsByType('hair_dryer');
-        if (hairDryers.length > 0) {
-          availableRentalItems.hairDryers = hairDryers.map(item => ({
-            id: item.id,
-            name: item.name,
-            description: item.description,
-            price: parseFloat(item.price),
-            availableStock: item.availableStock,
-            imageUrl: item.imageUrl
-          }));
-        }
-      }
-
-      // bedding_service: true → 'bedding_set' 카테고리 물품 조회
-      if (freeService.beddingService) {
-        const beddingSets = await RentalItem.getAvailableItemsByType('bedding_set');
-        if (beddingSets.length > 0) {
-          availableRentalItems.beddingSets = beddingSets.map(item => ({
-            id: item.id,
-            name: item.name,
-            description: item.description,
-            price: parseFloat(item.price),
-            availableStock: item.availableStock,
-            imageUrl: item.imageUrl
-          }));
-        }
-      }
-
-      // amenity_kit: true → 'amenity_kit' 카테고리 물품 조회
-      if (freeService.amenityKit) {
-        const amenityKits = await RentalItem.getAvailableItemsByType('amenity_kit');
-        if (amenityKits.length > 0) {
-          availableRentalItems.amenityKits = amenityKits.map(item => ({
-            id: item.id,
-            name: item.name,
-            description: item.description,
-            price: parseFloat(item.price),
-            availableStock: item.availableStock,
-            imageUrl: item.imageUrl
-          }));
-        }
-      }
-
-      // towel_set_rental: true → 'towel_set' 카테고리 물품 조회
-      if (freeService.towelSetRental) {
-        const towelSets = await RentalItem.getAvailableItemsByType('towel_set');
-        if (towelSets.length > 0) {
-          availableRentalItems.towelSets = towelSets.map(item => ({
-            id: item.id,
-            name: item.name,
-            description: item.description,
-            price: parseFloat(item.price),
-            availableStock: item.availableStock,
-            imageUrl: item.imageUrl
-          }));
-        }
+    for (const category of rentalCategories) {
+      const items = await RentalItem.getAvailableItemsByType(category);
+      if (items.length > 0) {
+        const key = categoryKeys[category];
+        availableRentalItems[key] = items.map(item => ({
+          id: item.id,
+          name: item.name,
+          description: item.description,
+          price: parseFloat(item.price),
+          availableStock: item.availableStock,
+          imageUrl: item.imageUrl
+        }));
       }
     }
 
@@ -199,7 +235,7 @@ const getRoomById = async (req, res) => {
 };
 
 /**
- * 지도 영역 내 방 목록 조회 (카카오맵 클러스터링용 + Redis 캐싱)
+ * 지도 영역 내 방 목록 조회 (카카오맵 클러스터링용 + Redis 캐싱 + HTTP 캐싱 + 사전 캐싱)
  * @route GET /api/rooms/map
  * @query {number} swLat - 남서쪽 위도 (Southwest Latitude)
  * @query {number} swLng - 남서쪽 경도 (Southwest Longitude)
@@ -210,164 +246,84 @@ const getRoomById = async (req, res) => {
  */
 const getRoomsForMap = async (req, res) => {
   try {
-    const { swLat, swLng, neLat, neLng, zoom } = req.query;
+    const { swLat, swLng, neLat, neLng, zoom, checkIn, checkOut } = req.query;
 
-    // 줌 레벨 6 이상(너무 축소된 상태)일 때는 매물을 보여주지 않음
-    if (zoom) {
-      const zoomLevel = parseInt(zoom);
-      if (zoomLevel >= 6) {
-        return success(res, {
-          count: 0,
-          rooms: [],
-          message: '지도를 더 확대해주세요.'
-        }, '지도를 더 확대하면 매물을 확인할 수 있습니다.');
-      }
+    // 날짜 범위 검증
+    const dateValidation = roomService.validateDateRange(checkIn, checkOut);
+    if (!dateValidation.valid) {
+      return error(res, dateValidation.error, 400);
     }
 
-    // 줌 레벨에 따른 limit 자동 설정
-    // 카카오맵: 줌 레벨이 작을수록 상세(확대), 클수록 넓은 영역(축소)
-    let limit = 500; // 기본값
-    if (zoom) {
-      const zoomLevel = parseInt(zoom);
-      if (zoomLevel >= 5) {
-        limit = 200; // 중간 영역 (동 레벨)
-      } else if (zoomLevel >= 3) {
-        limit = 300; // 좁은 영역
-      } else {
-        limit = 500; // 상세 영역 (거리/건물 레벨)
-      }
+    // 좌표 검증
+    const boundsValidation = roomService.validateMapBounds(swLat, swLng, neLat, neLng);
+    if (!boundsValidation.valid) {
+      return error(res, boundsValidation.error, 400);
     }
 
-    // 사용자 지정 limit이 있으면 우선 적용 (단, 최대 500개로 제한)
-    if (req.query.limit) {
-      limit = Math.min(parseInt(req.query.limit), 500);
+    const coords = boundsValidation.coords;
+    const dateFilter = checkIn && checkOut ? `${checkIn}_${checkOut}` : 'any';
+
+    // ETag 생성 및 HTTP 캐시 검증
+    const etag = await roomService.generateETag(coords, zoom, dateFilter);
+    if (req.headers['if-none-match'] === etag) {
+      console.log('✅ HTTP 304 Not Modified - 브라우저 캐시 사용');
+      return res.status(304).end();
     }
 
-    // 필수 파라미터 검증
-    if (!swLat || !swLng || !neLat || !neLng) {
-      return error(res, {
-        code: 4001,
-        message: '지도 영역 좌표가 필요합니다. (swLat, swLng, neLat, neLng)'
-      }, 400);
+    // 줌 레벨에 따른 limit 계산
+    const limit = roomService.calculateLimit(zoom, req.query.limit);
+    if (limit === 0) {
+      return success(res, {
+        count: 0,
+        rooms: [],
+        message: '지도를 더 확대해주세요.'
+      }, '지도를 더 확대하면 매물을 확인할 수 있습니다.');
     }
-
-    // 좌표 유효성 검증
-    const swLatNum = parseFloat(swLat);
-    const swLngNum = parseFloat(swLng);
-    const neLatNum = parseFloat(neLat);
-    const neLngNum = parseFloat(neLng);
-
-    if (isNaN(swLatNum) || isNaN(swLngNum) || isNaN(neLatNum) || isNaN(neLngNum)) {
-      return error(res, {
-        code: 4002,
-        message: '좌표는 숫자 형식이어야 합니다.'
-      }, 400);
-    }
-
-    // 위도/경도 범위 검증
-    if (swLatNum < -90 || swLatNum > 90 || neLatNum < -90 || neLatNum > 90) {
-      return error(res, {
-        code: 4003,
-        message: '위도는 -90 ~ 90 범위여야 합니다.'
-      }, 400);
-    }
-
-    if (swLngNum < -180 || swLngNum > 180 || neLngNum < -180 || neLngNum > 180) {
-      return error(res, {
-        code: 4004,
-        message: '경도는 -180 ~ 180 범위여야 합니다.'
-      }, 400);
-    }
-
-    // === Redis 캐싱 로직 시작 ===
-    // 캐시 키는 정확한 검색 영역(4개 좌표)으로 생성하여 부정확한 캐시 히트 방지
-    // 소수점 4자리로 반올림 (약 11m 정밀도, 캐시 효율성 증가)
-    const roundedSwLat = swLatNum.toFixed(4);
-    const roundedSwLng = swLngNum.toFixed(4);
-    const roundedNeLat = neLatNum.toFixed(4);
-    const roundedNeLng = neLngNum.toFixed(4);
-
-    const cacheKey = `rooms:map:${roundedSwLat},${roundedSwLng},${roundedNeLat},${roundedNeLng}:zoom${zoom || 'default'}`;
 
     // Redis 캐시 확인
-    const cachedData = await safeRedisOperation(async (client) => {
-      return await client.get(cacheKey);
-    });
+    const cacheKey = roomService.generateCacheKey(coords, zoom, dateFilter);
+    const cachedData = await roomService.getCachedRooms(cacheKey);
 
     if (cachedData) {
-      console.log('✅ Cache HIT:', cacheKey);
-      const parsedData = JSON.parse(cachedData);
-      return success(res, parsedData, '지도 영역 내 방 목록을 조회했습니다. (캐시)');
+      res.set({
+        'ETag': etag,
+        'Cache-Control': `public, max-age=${appConfig.cache.ttl.BROWSER}, must-revalidate`,
+        'Vary': 'Accept-Encoding'
+      });
+      return success(res, cachedData, '지도 영역 내 방 목록을 조회했습니다. (캐시)');
     }
 
-    console.log('❌ Cache MISS:', cacheKey, '- DB 조회 중...');
-    // === Redis 캐싱 로직 끝 ===
+    // 예약 불가능한 방 조회
+    const excludeRoomIds = await roomService.getUnavailableRoomIds(checkIn, checkOut);
 
-    // 좌표 범위 내 방 조회 (DB)
-    const rooms = await Room.findAll({
-      where: {
-        status: 'published',
-        latitude: {
-          [Op.between]: [swLatNum, neLatNum],
-          [Op.ne]: null // null 값 제외
-        },
-        longitude: {
-          [Op.between]: [swLngNum, neLngNum],
-          [Op.ne]: null // null 값 제외
-        }
-      },
-      attributes: [
-        'id',
-        'roomName',
-        'address',
-        'latitude',
-        'longitude',
-        'dailyRent',
-        'area',
-        'roomCount',
-        'bathroomCount',
-        'buildingType'
-      ],
-      include: [{
-        model: RoomPhoto,
-        as: 'photos',
-        attributes: ['id', 'url'],
-        limit: 1,
-        required: false,
-        separate: true, // N+1 문제 방지
-        order: [['order', 'ASC']]
-      }],
-      limit: limit,
-      order: [['created_at', 'DESC']]
+    // DB에서 방 목록 조회
+    const rooms = await roomService.fetchRoomsFromDB(coords, excludeRoomIds, limit);
+
+    // 응답 데이터 가공 (할인 적용 여부 계산 포함)
+    const responseData = roomService.transformRoomsForMap(rooms, checkIn, checkOut);
+
+    // Redis 캐시 저장
+    await roomService.cacheRooms(cacheKey, responseData);
+
+    // 인접 영역 사전 캐싱 (비동기)
+    setImmediate(() => {
+      roomService.prefetchAdjacentAreas(
+        coords.swLatNum,
+        coords.swLngNum,
+        coords.neLatNum,
+        coords.neLngNum,
+        zoom
+      ).catch(err => {
+        console.error('사전 캐싱 실패:', err.message);
+      });
     });
 
-    // 응답 데이터 가공
-    const mapData = rooms.map(room => ({
-      id: room.id,
-      roomName: room.roomName,
-      address: room.address,
-      latitude: parseFloat(room.latitude),
-      longitude: parseFloat(room.longitude),
-      dailyRent: room.dailyRent,
-      area: parseFloat(room.area),
-      roomCount: room.roomCount,
-      bathroomCount: room.bathroomCount,
-      buildingType: room.buildingType,
-      thumbnail: room.photos && room.photos.length > 0 ? room.photos[0].url : null
-    }));
-
-    const responseData = {
-      count: mapData.length,
-      rooms: mapData
-    };
-
-    // === Redis 캐싱 저장 ===
-    // 5분(300초) TTL로 캐싱
-    await safeRedisOperation(async (client) => {
-      await client.setEx(cacheKey, 300, JSON.stringify(responseData));
-      console.log('💾 캐시 저장 완료:', cacheKey, '(TTL: 5분)');
+    // HTTP 캐싱 헤더 설정
+    res.set({
+      'ETag': etag,
+      'Cache-Control': `public, max-age=${appConfig.cache.ttl.BROWSER}, must-revalidate`,
+      'Vary': 'Accept-Encoding'
     });
-    // === Redis 캐싱 저장 끝 ===
 
     return success(res, responseData, '지도 영역 내 방 목록을 조회했습니다.');
 

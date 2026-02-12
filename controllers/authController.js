@@ -2,47 +2,71 @@ const { User, LocalUser, SocialUser, UserBankAccount, sequelize } = require('../
 const { generateTokens, hashPassword, comparePassword, verifyToken } = require('../utils/auth');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
 const { validateEmail, validatePassword } = require('../utils/validator');
+const { withTransaction } = require('../utils/transactionHelper');
 const { Op } = require('sequelize');
 
+/**
+ * 회원가입 (이메일)
+ * @route POST /api/auth/register
+ * @body {string} email - 이메일 주소
+ * @body {string} password - 비밀번호 (최소 8자, 대문자+소문자+숫자)
+ * @body {string} [user_mode] - 사용자 모드 (guest | host)
+ * @returns {201} 회원가입 성공 (사용자 정보 + JWT 토큰)
+ */
 const register = async (req, res) => {
-  const transaction = await sequelize.transaction();
+  const { email, password, user_mode } = req.body;
 
-  try {
-    const { email, password, user_mode } = req.body;
+  const emailValidation = validateEmail(email);
+  if (!emailValidation.valid) {
+    return error(res, ErrorCodes.INVALID_EMAIL, 400);
+  }
 
-    // 입력값 검증
-    const emailValidation = validateEmail(email);
-    if (!emailValidation.valid) {
-      await transaction.rollback();
-      return error(res, ErrorCodes.INVALID_EMAIL, 400);
-    }
+  const passwordValidation = validatePassword(password);
+  if (!passwordValidation.valid) {
+    return error(res, { code: 4004, message: passwordValidation.message }, 400);
+  }
 
-    const passwordValidation = validatePassword(password);
-    if (!passwordValidation.valid) {
-      await transaction.rollback();
-      return error(res, { code: 4004, message: passwordValidation.message }, 400);
-    }
+  // === 이메일 인증 확인 (신규) ===
+  const { EmailVerificationCode } = require('../models');
+  const verifiedRecord = await EmailVerificationCode.findOne({
+    where: {
+      email,
+      verified: true
+    },
+    order: [['verifiedAt', 'DESC']]
+  });
 
-    const existingUser = await User.findOne({
-      where: { email }
-    });
+  if (!verifiedRecord) {
+    return error(res, ErrorCodes.EMAIL_NOT_VERIFIED, 400);
+  }
 
-    if (existingUser) {
-      await transaction.rollback();
-      return error(res, ErrorCodes.DUPLICATE_EMAIL, 400);
-    }
+  // 인증 후 10분 이내에만 회원가입 가능 (선택사항)
+  const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+  if (verifiedRecord.verifiedAt < tenMinutesAgo) {
+    return error(res, {
+      code: 4014,
+      message: '인증 시간이 만료되었습니다. 다시 인증해주세요.'
+    }, 400);
+  }
+  // === 이메일 인증 확인 끝 ===
 
-    // 기본 사용자 정보 생성
+  const existingUser = await User.findOne({ where: { email } });
+  if (existingUser) {
+    return error(res, ErrorCodes.DUPLICATE_EMAIL, 400);
+  }
+
+  const result = await withTransaction(async (transaction) => {
     const newUser = await User.create({
       email,
       userType: 'local'
     }, { transaction });
 
-    // 일반 회원 전용 정보 생성
     const hashedPassword = await hashPassword(password);
     await LocalUser.create({
       userId: newUser.id,
-      password: hashedPassword
+      password: hashedPassword,
+      emailVerified: true, // ✅ 인증 완료 상태로 생성
+      emailVerificationToken: null
     }, { transaction });
 
     const { accessToken, refreshToken } = generateTokens({
@@ -54,13 +78,12 @@ const register = async (req, res) => {
 
     await newUser.update({ refreshToken }, { transaction });
 
-    await transaction.commit();
-
-    return created(res, {
+    return {
       user: {
         id: newUser.id,
         email: newUser.email,
         name: newUser.name || null,
+        nickname: newUser.nickname || null,
         profileImageUrl: newUser.profileImageUrl,
         userType: newUser.userType,
         userMode: user_mode === 'host' ? 'host' : 'guest',
@@ -69,10 +92,13 @@ const register = async (req, res) => {
       },
       accessToken,
       refreshToken
-    }, '회원가입이 완료되었습니다.');
-  } catch (err) {
-    await transaction.rollback();
-    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+    };
+  });
+
+  if (result.success) {
+    return created(res, result.data, '회원가입이 완료되었습니다.');
+  } else {
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, result.error.message);
   }
 };
 
@@ -107,10 +133,18 @@ const login = async (req, res) => {
       return error(res, ErrorCodes.USER_NOT_FOUND, 401);
     }
 
+    // 계정 상태 확인 (비밀번호 검증 전)
+    if (user.accountStatus === 'suspended') {
+      return error(res, ErrorCodes.ACCOUNT_SUSPENDED, 403);
+    }
+    if (user.accountStatus === 'withdrawn') {
+      return error(res, ErrorCodes.ACCOUNT_WITHDRAWN, 403);
+    }
+
     // 계정 잠금 확인
     const localProfile = user.localProfile;
     if (localProfile.lockUntil && localProfile.lockUntil > new Date()) {
-      return error(res, { code: 1004, message: '계정이 일시적으로 잠겨있습니다. 나중에 다시 시도해주세요.' }, 401);
+      return error(res, ErrorCodes.ACCOUNT_LOCKED, 401);
     }
 
     const isPasswordValid = await comparePassword(password, localProfile.password);
@@ -120,18 +154,14 @@ const login = async (req, res) => {
       const failedAttempts = localProfile.failedLoginAttempts + 1;
       const updateData = { failedLoginAttempts: failedAttempts };
 
-      // 5회 실패 시 30분 잠금
+      // 5회 실패 시 10분 잠금
       if (failedAttempts >= 5) {
-        updateData.lockUntil = new Date(Date.now() + 30 * 60 * 1000);
+        updateData.lockUntil = new Date(Date.now() + 10 * 60 * 1000);
       }
 
       await localProfile.update(updateData);
 
       return error(res, ErrorCodes.PASSWORD_MISMATCH, 401);
-    }
-
-    if (!user.isActive) {
-      return error(res, { code: 1005, message: '비활성화된 계정입니다.' }, 401);
     }
 
     // 로그인 성공 시 실패 횟수 초기화
@@ -166,6 +196,7 @@ const login = async (req, res) => {
         id: user.id,
         email: user.email,
         name: user.name,
+        nickname: user.nickname,
         profileImageUrl: user.profileImageUrl,
         userType: user.userType,
         userMode: userMode,
@@ -204,7 +235,7 @@ const refreshToken = async (req, res) => {
       where: {
         id: decoded.userId,
         refreshToken: token,
-        isActive: true
+        accountStatus: 'active'
       }
     });
 
@@ -250,13 +281,21 @@ const getProfile = async (req, res) => {
   try {
     const user = req.user;
 
+    // 계좌 등록 여부 확인
+    const bankAccount = await UserBankAccount.findOne({
+      where: { userId: user.id }
+    });
+
     return success(res, {
       user: {
         id: user.id,
         email: user.email,
         name: user.name,
+        nickname: user.nickname,
         profileImageUrl: user.profileImageUrl,
-        provider: user.provider
+        userType: user.userType,
+        phoneVerified: user.phoneVerified || false,
+        hasBank: !!bankAccount
       }
     });
   } catch (err) {
@@ -297,11 +336,11 @@ const devBypassLogin = async (req, res) => {
       return error(res, ErrorCodes.USER_NOT_FOUND, 404);
     }
 
-    if (!user.isActive) {
-      return error(res, {
-        code: 1005,
-        message: '비활성화된 계정입니다.'
-      }, 401);
+    if (user.accountStatus === 'suspended') {
+      return error(res, ErrorCodes.ACCOUNT_SUSPENDED, 403);
+    }
+    if (user.accountStatus === 'withdrawn') {
+      return error(res, ErrorCodes.ACCOUNT_WITHDRAWN, 403);
     }
 
     // 계좌 등록 여부 확인
@@ -332,6 +371,7 @@ const devBypassLogin = async (req, res) => {
         id: user.id,
         email: user.email,
         name: user.name,
+        nickname: user.nickname,
         profileImageUrl: user.profileImageUrl,
         userType: user.userType,
         userMode: userMode,

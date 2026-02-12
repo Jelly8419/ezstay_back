@@ -18,7 +18,7 @@ const authenticateToken = async (req, res, next) => {
       attributes: { exclude: ['password', 'refreshToken'] }
     });
 
-    if (!user || !user.isActive) {
+    if (!user || user.accountStatus !== 'active') {
       return res.status(401).json({
         success: false,
         message: '유효하지 않은 사용자입니다.'
@@ -46,7 +46,7 @@ const optionalAuth = async (req, res, next) => {
         attributes: { exclude: ['password', 'refreshToken'] }
       });
 
-      if (user && user.isActive) {
+      if (user && user.accountStatus === 'active') {
         req.user = user;
       }
     } catch (error) {

@@ -4,8 +4,10 @@ const {
   createCustomToken,
   createChatRoomMetadata,
   getChatRoomMetadata,
-  getUserChatRooms
+  getUserChatRooms,
+  sendSystemMessage
 } = require('../config/firebaseAdmin');
+const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 const { Op } = require('sequelize');
 
 /**
@@ -60,12 +62,12 @@ const createChatRoom = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'email', 'profileImageUrl']
+          attributes: ['id', 'name', 'nickname', 'email', 'profileImageUrl']
         },
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'email', 'profileImageUrl']
+          attributes: ['id', 'name', 'nickname', 'email', 'profileImageUrl']
         }
       ]
     });
@@ -124,11 +126,13 @@ const createChatRoom = async (req, res) => {
       hostInfo: {
         id: contract.host.id,
         name: contract.host.name,
+        nickname: contract.host.nickname,
         profileImageUrl: contract.host.profileImageUrl
       },
       guestInfo: {
         id: contract.guest.id,
         name: contract.guest.name,
+        nickname: contract.guest.nickname,
         profileImageUrl: contract.guest.profileImageUrl
       },
       checkInDate: contract.checkInDate,
@@ -149,10 +153,34 @@ const createChatRoom = async (req, res) => {
 /**
  * 내 채팅방 목록 조회
  * GET /api/chats/rooms
+ * Query params:
+ *   - status: 계약 상태 필터 (APPROVED, PAYMENT_COMPLETED, IN_PROGRESS, COMPLETED, CANCELLED, REJECTED 등)
+ *             CANCELLED는 모든 취소 상태를 포함 (CANCELLED_BY_GUEST, CANCELLED_BY_HOST, PAYMENT_EXPIRED 등)
  */
 const getMyChatRooms = async (req, res) => {
   try {
     const userId = req.user.id;
+    const { status } = req.query;
+
+    // 계약 상태 필터 조건 생성
+    let contractWhereClause = {};
+    if (status) {
+      // CANCELLED는 모든 취소/만료 상태를 포함하는 그룹 필터
+      if (status === 'CANCELLED') {
+        contractWhereClause.status = {
+          [Op.in]: [
+            'CANCELLED_BY_GUEST',
+            'CANCELLED_BY_HOST',
+            'CANCELLED_BY_ADMIN_WITH_REFUND',
+            'CANCELLED_BY_ADMIN_NO_REFUND',
+            'PAYMENT_EXPIRED',
+            'APPROVAL_EXPIRED'
+          ]
+        };
+      } else {
+        contractWhereClause.status = status;
+      }
+    }
 
     // MySQL에서 채팅방 목록 조회
     const chatRooms = await ChatRoom.findAll({
@@ -166,7 +194,8 @@ const getMyChatRooms = async (req, res) => {
         {
           model: Contract,
           as: 'contract',
-          attributes: ['id', 'status', 'checkInDate', 'checkOutDate']
+          attributes: ['id', 'status', 'checkInDate', 'checkOutDate'],
+          where: Object.keys(contractWhereClause).length > 0 ? contractWhereClause : undefined
         },
         {
           model: Room,
@@ -176,27 +205,36 @@ const getMyChatRooms = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'email', 'profileImageUrl']
+          attributes: ['id', 'name', 'nickname', 'email', 'profileImageUrl']
         },
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'email', 'profileImageUrl']
+          attributes: ['id', 'name', 'nickname', 'email', 'profileImageUrl']
         }
       ],
       order: [['updatedAt', 'DESC']]
     });
 
     // Firestore에서 마지막 메시지 정보 가져오기 (선택사항)
+    // 계약 종료 상태 목록 (읽기 전용 판단용)
+    const terminatedStatuses = [
+      'COMPLETED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_HOST',
+      'CANCELLED_BY_ADMIN_WITH_REFUND', 'CANCELLED_BY_ADMIN_NO_REFUND',
+      'PAYMENT_EXPIRED', 'APPROVAL_EXPIRED', 'REFUND_COMPLETED'
+    ];
+
     const chatRoomsWithMetadata = await Promise.all(
       chatRooms.map(async (chatRoom) => {
         try {
           const metadata = await getChatRoomMetadata(chatRoom.firebaseChatRoomId);
+          const isReadOnly = terminatedStatuses.includes(chatRoom.contract?.status);
           return {
             ...chatRoom.toJSON(),
             lastMessage: metadata?.lastMessageText || null,
             lastMessageAt: metadata?.lastMessageAt || null,
-            unreadCount: metadata?.unreadCount?.[userId] || 0
+            unreadCount: metadata?.unreadCount?.[userId] || 0,
+            isReadOnly
           };
         } catch (err) {
           console.error('Firestore 메타데이터 조회 실패:', err);
@@ -241,12 +279,12 @@ const getChatRoomDetail = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'email', 'profileImageUrl', 'phoneNumber']
+          attributes: ['id', 'name', 'nickname', 'email', 'profileImageUrl', 'phoneNumber']
         },
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'email', 'profileImageUrl', 'phoneNumber']
+          attributes: ['id', 'name', 'nickname', 'email', 'profileImageUrl', 'phoneNumber']
         }
       ]
     });
@@ -266,9 +304,20 @@ const getChatRoomDetail = async (req, res) => {
     // Firestore에서 메타데이터 조회
     const metadata = await getChatRoomMetadata(chatRoomId);
 
+    // 계약 종료 후 채팅 제한 (읽기 전용)
+    const contractStatus = chatRoom.contract?.status;
+    const terminatedStatuses = [
+      'COMPLETED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_HOST',
+      'CANCELLED_BY_ADMIN_WITH_REFUND', 'CANCELLED_BY_ADMIN_NO_REFUND',
+      'PAYMENT_EXPIRED', 'APPROVAL_EXPIRED', 'REFUND_COMPLETED'
+    ];
+    const isReadOnly = terminatedStatuses.includes(contractStatus);
+
     return success(res, {
       chatRoom: chatRoom.toJSON(),
-      metadata
+      metadata,
+      isReadOnly,
+      readOnlyReason: isReadOnly ? '계약이 종료되어 채팅이 읽기 전용입니다.' : null
     }, '채팅방 상세 정보 조회 성공');
   } catch (err) {
     console.error('채팅방 상세 조회 오류:', err);
@@ -305,12 +354,12 @@ const getChatRoomByContractId = async (req, res) => {
         {
           model: User,
           as: 'host',
-          attributes: ['id', 'name', 'profileImageUrl']
+          attributes: ['id', 'name', 'nickname', 'profileImageUrl']
         },
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'profileImageUrl']
+          attributes: ['id', 'name', 'nickname', 'profileImageUrl']
         }
       ]
     });
@@ -331,12 +380,12 @@ const getChatRoomByContractId = async (req, res) => {
           {
             model: User,
             as: 'host',
-            attributes: ['id', 'name', 'profileImageUrl']
+            attributes: ['id', 'name', 'nickname', 'profileImageUrl']
           },
           {
             model: User,
             as: 'guest',
-            attributes: ['id', 'name', 'profileImageUrl']
+            attributes: ['id', 'name', 'nickname', 'profileImageUrl']
           }
         ]
       });
@@ -389,11 +438,13 @@ const getChatRoomByContractId = async (req, res) => {
           hostInfo: {
             id: contract.host.id,
             name: contract.host.name,
+            nickname: contract.host.nickname,
             profileImageUrl: contract.host.profileImageUrl
           },
           guestInfo: {
             id: contract.guest.id,
             name: contract.guest.name,
+            nickname: contract.guest.nickname,
             profileImageUrl: contract.guest.profileImageUrl
           },
           checkInDate: contract.checkInDate,
@@ -421,12 +472,12 @@ const getChatRoomByContractId = async (req, res) => {
             {
               model: User,
               as: 'host',
-              attributes: ['id', 'name', 'profileImageUrl']
+              attributes: ['id', 'name', 'nickname', 'profileImageUrl']
             },
             {
               model: User,
               as: 'guest',
-              attributes: ['id', 'name', 'profileImageUrl']
+              attributes: ['id', 'name', 'nickname', 'profileImageUrl']
             }
           ]
         });
@@ -452,10 +503,72 @@ const getChatRoomByContractId = async (req, res) => {
   }
 };
 
+/**
+ * 시스템 메시지 테스트 발송 (개발/테스트용)
+ * POST /api/chats/rooms/:chatRoomId/system-message
+ */
+const sendTestSystemMessage = async (req, res) => {
+  try {
+    const { chatRoomId } = req.params;
+    const { messageType, customText, metadata } = req.body;
+    const userId = req.user.id;
+
+    // 채팅방 조회 및 권한 확인
+    const chatRoom = await ChatRoom.findOne({
+      where: { firebaseChatRoomId: chatRoomId }
+    });
+
+    if (!chatRoom) {
+      return error(res, {
+        code: 3002,
+        message: '채팅방을 찾을 수 없습니다.'
+      }, 404);
+    }
+
+    // 권한 확인 (호스트 또는 게스트만)
+    if (chatRoom.hostId !== userId && chatRoom.guestId !== userId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    // 메시지 타입 검증
+    const validTypes = Object.values(SystemMessageTypes);
+    if (messageType && !validTypes.includes(messageType)) {
+      return error(res, {
+        code: 4000,
+        message: '유효하지 않은 시스템 메시지 타입입니다.',
+        validTypes
+      }, 400);
+    }
+
+    // 메시지 텍스트 생성
+    const messageText = customText || getSystemMessageTemplate(
+      messageType || SystemMessageTypes.IMPORTANT_NOTICE,
+      metadata || {}
+    );
+
+    // 시스템 메시지 발송
+    const result = await sendSystemMessage(
+      chatRoomId,
+      messageText,
+      messageType || SystemMessageTypes.IMPORTANT_NOTICE,
+      metadata || {}
+    );
+
+    return success(res, {
+      message: result,
+      chatRoomId
+    }, '시스템 메시지 발송 완료');
+  } catch (err) {
+    console.error('시스템 메시지 테스트 발송 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
 module.exports = {
   getCustomToken,
   createChatRoom,
   getMyChatRooms,
   getChatRoomDetail,
-  getChatRoomByContractId
+  getChatRoomByContractId,
+  sendTestSystemMessage
 };

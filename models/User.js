@@ -4,7 +4,8 @@ const { Sequelize } = require('sequelize');
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT || 3306,
-  dialect: 'mysql'
+  dialect: 'mysql',
+  logging: false
 });
 
 const User = sequelize.define('User', {
@@ -24,6 +25,11 @@ const User = sequelize.define('User', {
   name: {
     type: DataTypes.STRING(100),
     allowNull: true
+  },
+  nickname: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+    comment: '표시 이름 (카카오: profile.nickname, 이메일: 본인인증 name)'
   },
   phoneNumber: {
     type: DataTypes.STRING(20),
@@ -58,6 +64,12 @@ const User = sequelize.define('User', {
     type: DataTypes.BOOLEAN,
     allowNull: false,
     defaultValue: true
+  },
+  accountStatus: {
+    type: DataTypes.ENUM('active', 'suspended', 'withdrawn'),
+    allowNull: false,
+    defaultValue: 'active',
+    comment: '계정 상태: active(활성), suspended(정지), withdrawn(탈퇴)'
   },
   lastLoginAt: {
     type: DataTypes.DATE,

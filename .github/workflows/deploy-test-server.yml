@@ -1,0 +1,160 @@
+name: Deploy to Test Server
+
+on:
+  push:
+    branches:
+      - develop  # develop 브랜치에 푸시될 때 자동 배포
+  pull_request:
+    branches:
+      - develop
+    types: [closed]  # develop으로 PR 병합될 때 자동 배포
+
+jobs:
+  deploy:
+    name: Deploy to Test Server
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          ref: develop
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests (optional)
+        run: |
+          if [ -f "package.json" ] && grep -q "\"test\":" package.json; then
+            npm test
+          else
+            echo "No tests configured, skipping..."
+          fi
+        continue-on-error: true
+
+      - name: Get GitHub Actions Runner IP
+        id: ip
+        uses: haythem/public-ip@v1.3
+
+      - name: Add GitHub Actions IP to EC2 Security Group
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          RUNNER_IP="${{ steps.ip.outputs.ipv4 }}"
+          echo "🌐 GitHub Actions Runner IP: $RUNNER_IP"
+
+          # EC2 보안 그룹에 현재 Runner IP 추가
+          aws ec2 authorize-security-group-ingress \
+            --group-id ${{ secrets.EC2_SECURITY_GROUP_ID }} \
+            --protocol tcp \
+            --port 22 \
+            --cidr ${RUNNER_IP}/32 \
+            || echo "⚠️ IP already exists in security group or error occurred"
+
+          # 보안 그룹 규칙 적용 대기 (10초)
+          echo "⏳ Waiting for security group rules to propagate..."
+          sleep 10
+
+      - name: Deploy to Test Server via SSH
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.TEST_SERVER_HOST }}
+          username: ${{ secrets.TEST_SERVER_USER }}
+          key: ${{ secrets.TEST_SERVER_SSH_KEY }}
+          port: 22
+          script: |
+            set -e  # 에러 발생 시 즉시 중단
+
+            echo "📦 배포 시작: $(date)"
+            cd /opt/ezstay/backend
+
+            # 현재 커밋 해시 백업 (롤백용)
+            CURRENT_COMMIT=$(git rev-parse HEAD)
+            echo "현재 버전: $CURRENT_COMMIT"
+
+            # 최신 코드 가져오기
+            echo "🔄 Git Pull..."
+            git fetch origin
+            git checkout develop
+
+            # 로컬 변경사항 정리 (package-lock.json 등 자동 생성 파일)
+            echo "🧹 로컬 변경사항 정리..."
+            git restore package-lock.json 2>/dev/null || true
+            git restore . 2>/dev/null || true
+
+            git pull origin develop
+
+            # node_modules 존재 여부 확인 + package.json 변경 감지
+            if [ ! -d "node_modules" ]; then
+              echo "📦 node_modules 없음 - 의존성 설치..."
+              npm ci --legacy-peer-deps
+            elif git diff $CURRENT_COMMIT HEAD --name-only | grep -qE "package(-lock)?\.json"; then
+              echo "📦 의존성 파일 변경 감지 - 의존성 재설치..."
+              rm -rf node_modules
+              npm ci --legacy-peer-deps
+            else
+              echo "✅ 의존성 파일 변경 없음 - 설치 스킵"
+            fi
+
+            # PM2로 무중단 배포 (reload)
+            echo "🔄 PM2 Reload (무중단 배포)..."
+            pm2 reload ezstay-api || pm2 start server.js --name ezstay-api
+
+            # 헬스체크 (5초 대기)
+            echo "🏥 헬스체크 중..."
+            sleep 5
+
+            # 포트 8080 또는 3000에서 헬스체크
+            if curl -f http://localhost:8080/health > /dev/null 2>&1 || curl -f http://localhost:3000/health > /dev/null 2>&1; then
+              echo "✅ 백엔드 서비스 정상"
+              echo "🎉 배포 완료: $(date)"
+            else
+              echo "❌ 헬스체크 실패 - 롤백 시작..."
+              git reset --hard $CURRENT_COMMIT
+              rm -rf node_modules
+              npm ci --legacy-peer-deps  # npm ci로 안전하게 의존성 설치
+              pm2 reload ezstay-api
+              echo "🔙 롤백 완료: $CURRENT_COMMIT"
+              exit 1
+            fi
+
+            # PM2 상태 출력
+            pm2 status
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ ${{ job.status }} == 'success' ]; then
+            echo "🎉 Deployment to test server succeeded!"
+          else
+            echo "❌ Deployment to test server failed!"
+          fi
+
+      - name: Remove GitHub Actions IP from EC2 Security Group
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          RUNNER_IP="${{ steps.ip.outputs.ipv4 }}"
+          echo "🧹 Removing GitHub Actions Runner IP: $RUNNER_IP"
+
+          # EC2 보안 그룹에서 현재 Runner IP 제거
+          aws ec2 revoke-security-group-ingress \
+            --group-id ${{ secrets.EC2_SECURITY_GROUP_ID }} \
+            --protocol tcp \
+            --port 22 \
+            --cidr ${RUNNER_IP}/32 \
+            || echo "⚠️ IP does not exist or already removed"
+
+    

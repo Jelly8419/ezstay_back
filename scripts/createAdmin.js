@@ -7,6 +7,7 @@
 
 const bcrypt = require('bcryptjs');
 const readline = require('readline');
+require('dotenv').config();
 const { Admin, sequelize } = require('../models');
 
 const rl = readline.createInterface({

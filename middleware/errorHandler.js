@@ -116,7 +116,7 @@ const notFoundHandler = (req, res, next) => {
   res.status(404).json({
     success: false,
     code: 3001,
-    message: '요청한 리소스를 찾을 수 없습니다.',
+    message: '요청한 리소스를 찾을 수 없습니다요.',
     path: req.path
   });
 };

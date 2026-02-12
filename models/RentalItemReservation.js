@@ -7,7 +7,8 @@ const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process
   timezone: '+09:00',
   dialectOptions: {
     timezone: '+09:00'
-  }
+  },
+  logging: false
 });
 
 /**
@@ -24,21 +25,28 @@ const RentalItemReservation = sequelize.define('RentalItemReservation', {
     type: DataTypes.INTEGER,
     allowNull: false,
     field: 'contract_id',
-    references: {
-      model: 'contracts',
-      key: 'id'
-    },
     comment: '계약 ID'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
+  },
+  rentalOrderId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    field: 'rental_order_id',
+    comment: '렌탈 주문 ID (RentalOrder 연결)'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
+  },
+  rentalOrderItemId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    field: 'rental_order_item_id',
+    comment: '렌탈 주문 아이템 ID (RentalOrderItem 연결)'
   },
   rentalItemId: {
     type: DataTypes.INTEGER,
     allowNull: false,
     field: 'rental_item_id',
-    references: {
-      model: 'rental_items',
-      key: 'id'
-    },
     comment: '렌탈 아이템 ID'
+    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
   quantity: {
     type: DataTypes.INTEGER,
@@ -108,6 +116,10 @@ const RentalItemReservation = sequelize.define('RentalItemReservation', {
     {
       fields: ['rental_item_id'],
       name: 'idx_rental_item_id'
+    },
+    {
+      fields: ['rental_order_id'],
+      name: 'idx_reservation_rental_order_id'
     },
     {
       fields: ['status'],

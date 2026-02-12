@@ -189,6 +189,56 @@ const deactivateChatRoom = async (chatRoomId) => {
   }
 };
 
+/**
+ * 시스템 메시지 발송
+ * @param {string} chatRoomId - 채팅방 ID (예: contract_123)
+ * @param {string} text - 메시지 내용
+ * @param {string} systemMessageType - 시스템 메시지 타입
+ * @param {object} metadata - 추가 메타데이터 (선택)
+ * @returns {Promise<object>} 생성된 시스템 메시지 정보
+ */
+const sendSystemMessage = async (chatRoomId, text, systemMessageType, metadata = {}) => {
+  try {
+    const db = getFirestore();
+
+    const systemMessage = {
+      chatRoomId,
+      senderId: null,
+      senderName: '시스템',
+      text,
+      type: 'system',
+      systemMessageType,
+      metadata,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),  // 프론트엔드 호환
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),  // 백엔드 호환 (유지)
+      readBy: []
+    };
+
+    // messages 서브컬렉션에 추가
+    const messageRef = await db.collection('chatRooms')
+      .doc(chatRoomId)
+      .collection('messages')
+      .add(systemMessage);
+
+    // 채팅방 메타데이터 업데이트 (마지막 메시지 정보)
+    await db.collection('chatRooms').doc(chatRoomId).update({
+      lastMessageText: text,
+      lastMessageSenderId: null,
+      lastMessageAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    console.log(`✅ 시스템 메시지 발송 완료: ${chatRoomId} - ${systemMessageType}`);
+    return {
+      id: messageRef.id,
+      ...systemMessage
+    };
+  } catch (error) {
+    console.error('시스템 메시지 발송 실패:', error);
+    throw error;
+  }
+};
+
 module.exports = {
   initializeFirebase,
   getFirestore,
@@ -197,5 +247,6 @@ module.exports = {
   createChatRoomMetadata,
   getChatRoomMetadata,
   getUserChatRooms,
-  deactivateChatRoom
+  deactivateChatRoom,
+  sendSystemMessage
 };

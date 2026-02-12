@@ -2,6 +2,143 @@ const { RentalItem } = require('../models');
 const { Op } = require('sequelize');
 const { ErrorCodes, success, error, created, updated, deleted } = require('../utils/responseHelper');
 
+// ============================================
+// 게스트용 공개 API (인증 불필요)
+// ============================================
+
+/**
+ * 활성화된 렌탈 아이템 목록 조회 (게스트용)
+ * @route GET /api/rental-items
+ * @query {string} itemType - 물품 카테고리 필터 (선택)
+ * @query {boolean} inStock - 재고 있는 것만 조회 (선택, 기본 true)
+ */
+const getPublicRentalItems = async (req, res) => {
+  try {
+    const { itemType, inStock = 'true' } = req.query;
+    const where = {
+      isActive: true
+    };
+
+    if (itemType) {
+      where.itemType = itemType;
+    }
+
+    if (inStock === 'true') {
+      where.availableStock = { [Op.gt]: 0 };
+    }
+
+    const items = await RentalItem.findAll({
+      where,
+      attributes: ['id', 'itemType', 'name', 'description', 'price', 'availableStock', 'imageUrl'],
+      order: [
+        ['itemType', 'ASC'],
+        ['price', 'ASC']
+      ]
+    });
+
+    // 카테고리 한글명 추가
+    const itemsWithLabels = items.map(item => ({
+      ...item.toJSON(),
+      itemTypeLabel: RentalItem.ITEM_TYPE_LABELS[item.itemType] || item.itemType
+    }));
+
+    return success(res, itemsWithLabels, '대여 물품 목록을 조회했습니다.');
+  } catch (err) {
+    console.error('getPublicRentalItems Error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 특정 렌탈 아이템 상세 조회 (게스트용)
+ * @route GET /api/rental-items/:id
+ */
+const getPublicRentalItemById = async (req, res) => {
+  try {
+    const item = await RentalItem.findOne({
+      where: {
+        id: req.params.id,
+        isActive: true
+      },
+      attributes: ['id', 'itemType', 'name', 'description', 'price', 'availableStock', 'imageUrl']
+    });
+
+    if (!item) {
+      return error(res, {
+        code: 3010,
+        message: '대여 물품을 찾을 수 없습니다.'
+      }, 404);
+    }
+
+    const itemWithLabel = {
+      ...item.toJSON(),
+      itemTypeLabel: RentalItem.ITEM_TYPE_LABELS[item.itemType] || item.itemType
+    };
+
+    return success(res, itemWithLabel, '대여 물품 정보를 조회했습니다.');
+  } catch (err) {
+    console.error('getPublicRentalItemById Error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 카테고리별 렌탈 아이템 조회 (게스트용)
+ * @route GET /api/rental-items/type/:itemType
+ */
+const getPublicRentalItemsByType = async (req, res) => {
+  try {
+    const { itemType } = req.params;
+
+    // 유효한 카테고리인지 검증
+    const validTypes = ['hair_dryer', 'bedding_set', 'amenity_kit', 'towel_set', 'other'];
+    if (!validTypes.includes(itemType)) {
+      return error(res, {
+        code: 4010,
+        message: `유효하지 않은 물품 카테고리입니다. (${validTypes.join(', ')})`
+      }, 400);
+    }
+
+    const items = await RentalItem.getAvailableItemsByType(itemType);
+
+    const itemsWithLabels = items.map(item => ({
+      ...item.toJSON(),
+      itemTypeLabel: RentalItem.ITEM_TYPE_LABELS[item.itemType] || item.itemType
+    }));
+
+    return success(res, {
+      itemType,
+      itemTypeLabel: RentalItem.ITEM_TYPE_LABELS[itemType],
+      items: itemsWithLabels
+    }, '카테고리별 대여 물품을 조회했습니다.');
+  } catch (err) {
+    console.error('getPublicRentalItemsByType Error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 물품 카테고리 목록 조회 (게스트용)
+ * @route GET /api/rental-items/categories
+ */
+const getRentalCategories = async (req, res) => {
+  try {
+    const categories = Object.entries(RentalItem.ITEM_TYPE_LABELS).map(([key, label]) => ({
+      value: key,
+      label
+    }));
+
+    return success(res, categories, '대여 물품 카테고리 목록을 조회했습니다.');
+  } catch (err) {
+    console.error('getRentalCategories Error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+// ============================================
+// 관리자용 API (인증 필요)
+// ============================================
+
 /**
  * 모든 대여 물품 조회 (관리자용)
  * @route GET /api/admin/rental-items
@@ -275,6 +412,12 @@ const getRentalItemStats = async (req, res) => {
 };
 
 module.exports = {
+  // 게스트용 공개 API
+  getPublicRentalItems,
+  getPublicRentalItemById,
+  getPublicRentalItemsByType,
+  getRentalCategories,
+  // 관리자용 API
   getAllRentalItems,
   getRentalItemById,
   createRentalItem,

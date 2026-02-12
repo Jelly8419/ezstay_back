@@ -177,8 +177,7 @@ async function seedDummyData() {
 
         // 방 소개
         description: `${location.name}에 위치한 아늑하고 편안한 ${buildingType}입니다. 주변에 편의시설이 잘 갖춰져 있으며, 교통이 편리합니다. 면적 ${area}㎡, ${roomCount}룸 구조로 쾌적한 생활이 가능합니다.`,
-        transportation: `지하철역 도보 5분 거리, 버스 정류장 2분 거리`,
-        houseRules: '반려동물 동반 가능, 흡연 금지, 파티 금지',
+        maxGuests: randomInt(2, 6),
 
         // 상태
         status: 'published', // 지도 조회 테스트를 위해 모두 published
@@ -224,13 +223,11 @@ async function seedDummyData() {
       // 무료 부가서비스 추가
       await RoomFreeService.create({
         roomId: room.id,
-        agreeTerms: true,
         cleaningService: randomBoolean(),
         hairDryerRental: randomBoolean(),
         beddingService: randomBoolean(),
-        bedSizeSuperSingle: randomInt(0, 2),
-        bedSizeQueen: randomInt(0, 2),
-        bedSizeKing: randomInt(0, 1),
+        amenityKit: randomBoolean(),
+        towelSetRental: randomBoolean(),
         autoPasswordChange: randomBoolean(),
         roomPassword: String(randomInt(1000, 9999))
       }, { transaction });
