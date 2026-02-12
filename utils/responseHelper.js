@@ -9,6 +9,9 @@ const ErrorCodes = {
   UNAUTHORIZED: { code: 1001, message: '인증이 필요합니다.' },
   INVALID_TOKEN: { code: 1002, message: '유효하지 않은 토큰입니다.' },
   TOKEN_EXPIRED: { code: 1003, message: '토큰이 만료되었습니다.' },
+  ACCOUNT_LOCKED: { code: 1004, message: '로그인 시도가 여러 번 실패하여 10분간 로그인할 수 없습니다.' },
+  ACCOUNT_SUSPENDED: { code: 1006, message: '회원님의 계정이 정지되었습니다. 고객센터로 문의 부탁드립니다.' },
+  ACCOUNT_WITHDRAWN: { code: 1007, message: '탈퇴한 계정입니다. 재가입 하시겠습니까?' },
 
   // 권한 관련 (2xxx)
   FORBIDDEN: { code: 2001, message: '권한이 없습니다.' },
@@ -37,6 +40,8 @@ const ErrorCodes = {
   CODE_NOT_FOUND: { code: 4011, message: '인증코드를 찾을 수 없습니다.' },
   EMAIL_NOT_VERIFIED: { code: 4012, message: '이메일 인증이 필요합니다.' },
   EMAIL_SEND_FAILED: { code: 4013, message: '이메일 발송에 실패했습니다.' },
+  ALREADY_VERIFIED: { code: 4015, message: '이미 본인인증이 완료된 계정입니다.' },
+  EMAIL_EXISTS_AS_LOCAL: { code: 4016, message: '이미 이메일로 가입된 계정입니다. 이메일 로그인을 이용해주세요.' },
 
   // 파일 업로드 관련 (4xxx)
   NO_FILE_UPLOADED: { code: 4101, message: '파일을 업로드해주세요.' },

@@ -50,7 +50,7 @@ const corsOptions = {
 
     // 환경변수로 지정된 도메인 허용 (개발/프로덕션 공통)
     const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [];
-    if (origin && allowedOrigins.includes(origin)) {
+    if (!origin || allowedOrigins.includes(origin)) {
       console.log(`[CORS] Allowed origin from env: ${origin}`);
       return callback(null, true);
     }
@@ -155,6 +155,10 @@ startAutoMessageScheduler();
 // 관리자 액션 로그 자동 정리 스케줄러 시작
 const cleanupActionLogs = require('./schedulers/cleanupActionLogs');
 cleanupActionLogs();
+
+// 미완료 회원가입 자동 정리 스케줄러 시작 (7일 초과 미인증 계정)
+const cleanupIncompleteRegistrations = require('./schedulers/cleanupIncompleteRegistrations');
+cleanupIncompleteRegistrations();
 
 // 렌탈 주문 만료 스케줄러 시작 (15분 미결제 자동 취소)
 const { startRentalOrderScheduler } = require('./schedulers/rentalOrderScheduler');

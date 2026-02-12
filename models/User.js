@@ -65,6 +65,12 @@ const User = sequelize.define('User', {
     allowNull: false,
     defaultValue: true
   },
+  accountStatus: {
+    type: DataTypes.ENUM('active', 'suspended', 'withdrawn'),
+    allowNull: false,
+    defaultValue: 'active',
+    comment: '계정 상태: active(활성), suspended(정지), withdrawn(탈퇴)'
+  },
   lastLoginAt: {
     type: DataTypes.DATE,
     allowNull: true

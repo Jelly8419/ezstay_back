@@ -133,10 +133,18 @@ const login = async (req, res) => {
       return error(res, ErrorCodes.USER_NOT_FOUND, 401);
     }
 
+    // 계정 상태 확인 (비밀번호 검증 전)
+    if (user.accountStatus === 'suspended') {
+      return error(res, ErrorCodes.ACCOUNT_SUSPENDED, 403);
+    }
+    if (user.accountStatus === 'withdrawn') {
+      return error(res, ErrorCodes.ACCOUNT_WITHDRAWN, 403);
+    }
+
     // 계정 잠금 확인
     const localProfile = user.localProfile;
     if (localProfile.lockUntil && localProfile.lockUntil > new Date()) {
-      return error(res, { code: 1004, message: '계정이 일시적으로 잠겨있습니다. 나중에 다시 시도해주세요.' }, 401);
+      return error(res, ErrorCodes.ACCOUNT_LOCKED, 401);
     }
 
     const isPasswordValid = await comparePassword(password, localProfile.password);
@@ -146,18 +154,14 @@ const login = async (req, res) => {
       const failedAttempts = localProfile.failedLoginAttempts + 1;
       const updateData = { failedLoginAttempts: failedAttempts };
 
-      // 5회 실패 시 30분 잠금
+      // 5회 실패 시 10분 잠금
       if (failedAttempts >= 5) {
-        updateData.lockUntil = new Date(Date.now() + 30 * 60 * 1000);
+        updateData.lockUntil = new Date(Date.now() + 10 * 60 * 1000);
       }
 
       await localProfile.update(updateData);
 
       return error(res, ErrorCodes.PASSWORD_MISMATCH, 401);
-    }
-
-    if (!user.isActive) {
-      return error(res, { code: 1005, message: '비활성화된 계정입니다.' }, 401);
     }
 
     // 로그인 성공 시 실패 횟수 초기화
@@ -231,7 +235,7 @@ const refreshToken = async (req, res) => {
       where: {
         id: decoded.userId,
         refreshToken: token,
-        isActive: true
+        accountStatus: 'active'
       }
     });
 
@@ -332,11 +336,11 @@ const devBypassLogin = async (req, res) => {
       return error(res, ErrorCodes.USER_NOT_FOUND, 404);
     }
 
-    if (!user.isActive) {
-      return error(res, {
-        code: 1005,
-        message: '비활성화된 계정입니다.'
-      }, 401);
+    if (user.accountStatus === 'suspended') {
+      return error(res, ErrorCodes.ACCOUNT_SUSPENDED, 403);
+    }
+    if (user.accountStatus === 'withdrawn') {
+      return error(res, ErrorCodes.ACCOUNT_WITHDRAWN, 403);
     }
 
     // 계좌 등록 여부 확인

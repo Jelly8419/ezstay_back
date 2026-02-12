@@ -11,6 +11,13 @@ const saveGuestVerification = async (req, res) => {
     const { name, phone_number, terms } = req.body;
     const userId = req.user.id;
 
+    // 이미 본인인증 완료된 사용자 체크
+    const currentUser = await User.findByPk(userId);
+    if (currentUser && currentUser.phoneVerified) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.ALREADY_VERIFIED, 400);
+    }
+
     // 필수 필드 검증
     if (!name || !phone_number) {
       await transaction.rollback();
@@ -86,6 +93,13 @@ const saveHostVerification = async (req, res) => {
     } = req.body;
 
     const userId = req.user.id;
+
+    // 이미 본인인증 완료된 사용자 체크
+    const currentUser = await User.findByPk(userId);
+    if (currentUser && currentUser.phoneVerified) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.ALREADY_VERIFIED, 400);
+    }
 
     // 모든 필드 필수 검증
     if (!name || !phone_number || !bank_code || !account_num || !account_holder_name) {
@@ -396,6 +410,7 @@ const deleteAccount = async (req, res) => {
     // 사용자 계정 비활성화 (Soft Delete)
     const [updated] = await User.update({
       isActive: false,
+      accountStatus: 'withdrawn',
       refreshToken: null // 리프레시 토큰 삭제
     }, {
       where: { id: userId },

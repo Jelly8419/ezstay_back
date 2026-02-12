@@ -308,24 +308,36 @@ const getUserDetail = async (req, res) => {
 };
 
 /**
- * 유저 상태 변경 (활성/비활성)
+ * 유저 상태 변경 (활성/비활성/정지)
  * PATCH /api/admin/users/:userId/status
+ * body: { accountStatus: 'active' | 'suspended' | 'withdrawn' } 또는 { isActive: boolean } (하위호환)
  */
 const updateUserStatus = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { isActive } = req.body;
-
-    if (typeof isActive !== 'boolean') {
-      return error(res, ErrorCodes.VALIDATION_ERROR, 400);
-    }
+    const { isActive, accountStatus } = req.body;
 
     const user = await User.findByPk(userId);
     if (!user) {
       return error(res, ErrorCodes.USER_NOT_FOUND, 404);
     }
 
-    user.isActive = isActive;
+    // accountStatus가 제공된 경우 (새 방식)
+    if (accountStatus) {
+      if (!['active', 'suspended', 'withdrawn'].includes(accountStatus)) {
+        return error(res, ErrorCodes.VALIDATION_ERROR, 400);
+      }
+      user.accountStatus = accountStatus;
+      user.isActive = accountStatus === 'active';
+    }
+    // isActive만 제공된 경우 (하위호환)
+    else if (typeof isActive === 'boolean') {
+      user.isActive = isActive;
+      user.accountStatus = isActive ? 'active' : 'suspended';
+    } else {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400);
+    }
+
     await user.save();
 
     return success(res, user, '유저 상태 변경 성공');
