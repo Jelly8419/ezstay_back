@@ -44,7 +44,7 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+          AWS_DEFAULT_REGION: ap-northeast-2
         run: |
           RUNNER_IP="${{ steps.ip.outputs.ipv4 }}"
           echo "🌐 GitHub Actions Runner IP: $RUNNER_IP"
@@ -136,7 +136,7 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+          AWS_DEFAULT_REGION: ap-northeast-2
         run: |
           RUNNER_IP="${{ steps.ip.outputs.ipv4 }}"
           echo "🧹 Removing GitHub Actions Runner IP: $RUNNER_IP"
