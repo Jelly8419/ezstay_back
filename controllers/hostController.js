@@ -32,6 +32,13 @@ const createRoom = async (req, res) => {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
+    // 서비스 지역 검증
+    const { region } = require('../config/app.config');
+    const isAllowedRegion = region.ALLOWED.some(r => address.startsWith(r));
+    if (!isAllowedRegion) {
+      return error(res, ErrorCodes.REGION_NOT_SUPPORTED, 400);
+    }
+
     // 주소를 좌표로 변환
     let latitude = null;
     let longitude = null;

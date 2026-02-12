@@ -62,6 +62,7 @@ const ErrorCodes = {
   ROOM_STATUS_NOT_APPROVED: { code: 4231, message: '게시 상태 변경은 승인된 방만 가능합니다.' },
   ROOM_ALREADY_DELETED: { code: 4232, message: '이미 삭제된 방입니다.' },
   DUPLICATE_ROOM_FAILED: { code: 4233, message: '방 복제에 실패했습니다.' },
+  REGION_NOT_SUPPORTED: { code: 4234, message: '현재 서비스 지역이 아닙니다. 서울 지역만 등록 가능합니다.' },
 
   // 고객센터 관련 (4xxx)
   NOTICE_NOT_FOUND: { code: 4301, message: '공지사항을 찾을 수 없습니다.' },
