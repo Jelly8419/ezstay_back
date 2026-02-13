@@ -4,6 +4,7 @@ const { convertRoadAddressToCoordinates } = require('../utils/geocoding');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 const { calculateProgress } = require('../utils/roomProgress');
 const { Op } = require('sequelize');
+const { getFileUrl } = require('../middleware/upload');
 
 // 1. 기본 정보 등록
 const createRoom = async (req, res) => {
@@ -266,11 +267,11 @@ const uploadPhotos = async (req, res) => {
     const photoUrls = [];
     for (let i = 0; i < req.files.length; i++) {
       // 상대 경로로 저장 (프론트엔드에서 baseURL + path 형태로 사용)
-      const relativePath = `/uploads/rooms/${req.files[i].filename}`;
+      const photoUrl = await getFileUrl(req.files[i]);
 
       const photo = await RoomPhoto.create({
         roomId: room.id,
-        url: relativePath,
+        url: photoUrl,
         order: maxOrder + 1 + i
       }, { transaction });
 
