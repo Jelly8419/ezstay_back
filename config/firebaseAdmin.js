@@ -201,6 +201,14 @@ const sendSystemMessage = async (chatRoomId, text, systemMessageType, metadata =
   try {
     const db = getFirestore();
 
+    // 채팅방 문서 존재 여부 확인
+    const chatRoomRef = db.collection('chatRooms').doc(chatRoomId);
+    const chatRoomDoc = await chatRoomRef.get();
+    if (!chatRoomDoc.exists) {
+      console.warn(`⚠️ 채팅방이 존재하지 않아 시스템 메시지 발송 스킵: ${chatRoomId}`);
+      return null;
+    }
+
     const systemMessage = {
       chatRoomId,
       senderId: null,
@@ -215,13 +223,12 @@ const sendSystemMessage = async (chatRoomId, text, systemMessageType, metadata =
     };
 
     // messages 서브컬렉션에 추가
-    const messageRef = await db.collection('chatRooms')
-      .doc(chatRoomId)
+    const messageRef = await chatRoomRef
       .collection('messages')
       .add(systemMessage);
 
     // 채팅방 메타데이터 업데이트 (마지막 메시지 정보)
-    await db.collection('chatRooms').doc(chatRoomId).update({
+    await chatRoomRef.update({
       lastMessageText: text,
       lastMessageSenderId: null,
       lastMessageAt: admin.firestore.FieldValue.serverTimestamp(),

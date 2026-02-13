@@ -31,6 +31,11 @@ module.exports = {
     }
   },
 
+  // 서비스 지역 제한
+  region: {
+    ALLOWED: ['서울']  // 허용 지역 목록 (주소 앞부분 매칭)
+  },
+
   // 캐시 관련 설정
   cache: {
     ttl: {

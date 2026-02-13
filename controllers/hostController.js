@@ -4,6 +4,7 @@ const { convertRoadAddressToCoordinates } = require('../utils/geocoding');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 const { calculateProgress } = require('../utils/roomProgress');
 const { Op } = require('sequelize');
+const { getFileUrl } = require('../middleware/upload');
 
 // 1. 기본 정보 등록
 const createRoom = async (req, res) => {
@@ -30,6 +31,13 @@ const createRoom = async (req, res) => {
     // 필수 필드 검증
     if (!roomName || !address || !detailAddress || !area || !buildingType) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    }
+
+    // 서비스 지역 검증
+    const { region } = require('../config/app.config');
+    const isAllowedRegion = region.ALLOWED.some(r => address.startsWith(r));
+    if (!isAllowedRegion) {
+      return error(res, ErrorCodes.REGION_NOT_SUPPORTED, 400);
     }
 
     // 주소를 좌표로 변환
@@ -259,11 +267,11 @@ const uploadPhotos = async (req, res) => {
     const photoUrls = [];
     for (let i = 0; i < req.files.length; i++) {
       // 상대 경로로 저장 (프론트엔드에서 baseURL + path 형태로 사용)
-      const relativePath = `/uploads/rooms/${req.files[i].filename}`;
+      const photoUrl = await getFileUrl(req.files[i]);
 
       const photo = await RoomPhoto.create({
         roomId: room.id,
-        url: relativePath,
+        url: photoUrl,
         order: maxOrder + 1 + i
       }, { transaction });
 
