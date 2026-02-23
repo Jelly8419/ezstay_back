@@ -91,29 +91,39 @@ const kakaoLogin = async (req, res) => {
         tokenExpiresAt: new Date(Date.now() + expires_in * 1000)
       }, { transaction });
     } else {
-      // 신규 사용자 - 이메일 중복 체크 (기존 이메일 계정 존재 여부)
+      // 이메일로 기존 유저 확인
       if (email) {
-        const existingLocalUser = await User.findOne({
-          where: {
-            email: email,
-            userType: 'local'
-          }
+        const existingUser = await User.findOne({
+          where: { email: email }
         });
-        if (existingLocalUser) {
+
+        if (existingUser && existingUser.userType === 'local') {
+          // 로컬 회원이면 차단
           await transaction.rollback();
-          return error(res, ErrorCodes.EMAIL_EXISTS_AS_LOCAL, 400);
+          return error(res, {
+            ...ErrorCodes.EMAIL_EXISTS_AS_LOCAL,
+            message: `이미 이메일로 가입된 계정입니다.(${email}) 이메일로 로그인해주세요.`
+          }, 400);
+        }
+
+        if (existingUser) {
+          // 기존 소셜 유저에 카카오 계정 연결
+          user = existingUser;
         }
       }
 
-      // 신규 사용자 - 자동 회원가입
-      user = await User.create({
-        email: email,
-        name: kakaoName || kakaoNickname,           // 실명 우선, 없으면 닉네임
-        nickname: kakaoNickname || kakaoName,        // 닉네임 우선, 없으면 실명
-        profileImageUrl: profile.profile_image_url,
-        userType: 'social'
-      }, { transaction });
+      if (!user) {
+        // 완전 신규 사용자 - 자동 회원가입
+        user = await User.create({
+          email: email,
+          name: kakaoName || kakaoNickname,
+          nickname: kakaoNickname || kakaoName,
+          profileImageUrl: profile?.profile_image_url,
+          userType: 'social'
+        }, { transaction });
+      }
 
+      // 소셜 계정 연결
       await SocialUser.create({
         userId: user.id,
         provider: 'kakao',
@@ -124,8 +134,8 @@ const kakaoLogin = async (req, res) => {
         tokenExpiresAt: new Date(Date.now() + expires_in * 1000),
         additionalData: {
           name: kakao_account.name,
-          profileImageUrl: profile.profile_image_url,
-          thumbnailImageUrl: profile.thumbnail_image_url
+          profileImageUrl: profile?.profile_image_url,
+          thumbnailImageUrl: profile?.thumbnail_image_url
         }
       }, { transaction });
     }

@@ -1,4 +1,4 @@
-const { EmailVerificationCode, User } = require('../models');
+const { EmailVerificationCode, User, SocialUser } = require('../models');
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
 const { validateEmail } = require('../utils/validator');
 const { sendVerificationEmail } = require('../utils/email');
@@ -29,6 +29,16 @@ const sendVerificationCode = async (req, res) => {
     if (type === 'signup') {
       const existingUser = await User.findOne({ where: { email } });
       if (existingUser) {
+        if (existingUser.userType === 'social') {
+          const socialAccount = await SocialUser.findOne({
+            where: { userId: existingUser.id }
+          });
+          const platform = socialAccount?.provider || '소셜';
+          return error(res, {
+            ...ErrorCodes.EMAIL_EXISTS_AS_SOCIAL,
+            message: `이미 가입된 이메일입니다. ${platform} 로그인을 시도해 주세요`
+          }, 400);
+        }
         return error(res, ErrorCodes.DUPLICATE_EMAIL, 400);
       }
     }

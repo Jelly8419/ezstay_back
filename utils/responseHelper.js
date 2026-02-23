@@ -41,7 +41,8 @@ const ErrorCodes = {
   EMAIL_NOT_VERIFIED: { code: 4012, message: '이메일 인증이 필요합니다.' },
   EMAIL_SEND_FAILED: { code: 4013, message: '이메일 발송에 실패했습니다.' },
   ALREADY_VERIFIED: { code: 4015, message: '이미 본인인증이 완료된 계정입니다.' },
-  EMAIL_EXISTS_AS_LOCAL: { code: 4016, message: '이미 이메일로 가입된 계정입니다. 이메일 로그인을 이용해주세요.' },
+  EMAIL_EXISTS_AS_LOCAL: { code: 4016, message: '이미 이메일로 가입된 계정입니다. 이메일로 로그인해주세요.' },
+  EMAIL_EXISTS_AS_SOCIAL: { code: 4017, message: '이미 소셜 계정으로 가입된 이메일입니다.' },
 
   // 파일 업로드 관련 (4xxx)
   NO_FILE_UPLOADED: { code: 4101, message: '파일을 업로드해주세요.' },
