@@ -10,6 +10,12 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// 리버스 프록시(Nginx, ALB 등) 뒤에서 클라이언트 IP를 정확히 식별하기 위한 설정
+// express-rate-limit이 X-Forwarded-For 헤더를 신뢰할 수 있도록 함
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
+
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
