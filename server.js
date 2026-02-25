@@ -193,6 +193,7 @@ const { adminRouter: rentalItemAdminRoutes } = require('./routes/rentalItemRoute
 const scheduleRoutes = require('./routes/scheduleRoutes');
 const rentalOrderRoutes = require('./routes/rentalOrderRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const kmcRoutes = require('./routes/kmcRoutes');
 
 app.use('/api/rooms', roomRoutes);
 app.use('/api/auth', authRoutes);
@@ -209,6 +210,7 @@ app.use('/api/rental-items', rentalItemRoutes);  // 게스트용 공개 API
 app.use('/api/admin/rental-items', rentalItemAdminRoutes);  // 관리자용 API
 app.use('/api', rentalOrderRoutes);  // 렌탈 주문 API
 app.use('/api/notifications', notificationRoutes);  // 알림 API
+app.use('/api/auth', kmcRoutes);  // KMC 본인인증
 
 app.get('/', (req, res) => {
   res.json({ message: 'Rental API Server is running!' });
