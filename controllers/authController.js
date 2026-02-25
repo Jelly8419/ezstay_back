@@ -1,4 +1,4 @@
-const { User, LocalUser, SocialUser, UserBankAccount, sequelize } = require('../models');
+const { User, LocalUser, SocialUser, UserBankAccount, EmailVerificationCode, sequelize } = require('../models');
 const { generateTokens, hashPassword, comparePassword, verifyToken } = require('../utils/auth');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
 const { validateEmail, validatePassword } = require('../utils/validator');
@@ -9,7 +9,7 @@ const { Op } = require('sequelize');
  * 회원가입 (이메일)
  * @route POST /api/auth/register
  * @body {string} email - 이메일 주소
- * @body {string} password - 비밀번호 (최소 8자, 대문자+소문자+숫자)
+ * @body {string} password - 비밀번호 (8~16자, 영문+숫자)
  * @body {string} [user_mode] - 사용자 모드 (guest | host)
  * @returns {201} 회원가입 성공 (사용자 정보 + JWT 토큰)
  */
@@ -397,11 +397,100 @@ const devBypassLogin = async (req, res) => {
   }
 };
 
+/**
+ * 비밀번호 재설정 (비로그인 상태)
+ * @route POST /api/auth/reset-password
+ * @body {string} email - 이메일 주소
+ * @body {string} newPassword - 새 비밀번호 (8~16자, 영문+숫자)
+ */
+const resetPassword = async (req, res) => {
+  try {
+    const { email, newPassword } = req.body;
+
+    // 필수 필드 검증
+    if (!email || !newPassword) {
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    }
+
+    // 이메일 검증
+    const emailValidation = validateEmail(email);
+    if (!emailValidation.valid) {
+      return error(res, ErrorCodes.INVALID_EMAIL, 400);
+    }
+
+    // 새 비밀번호 강도 검증
+    const passwordValidation = validatePassword(newPassword);
+    if (!passwordValidation.valid) {
+      return error(res, { code: 4004, message: passwordValidation.message }, 400);
+    }
+
+    // 이메일 인증 완료 여부 확인 (password_reset 타입)
+    const verifiedRecord = await EmailVerificationCode.findOne({
+      where: {
+        email,
+        verified: true
+      },
+      order: [['verifiedAt', 'DESC']]
+    });
+
+    if (!verifiedRecord) {
+      return error(res, { code: 4015, message: '이메일 인증이 필요합니다.' }, 400);
+    }
+
+    // 인증 후 10분 이내에만 재설정 가능
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+    if (verifiedRecord.verifiedAt < tenMinutesAgo) {
+      return error(res, {
+        code: 4014,
+        message: '인증 시간이 만료되었습니다. 다시 인증해주세요.'
+      }, 400);
+    }
+
+    // 사용자 조회
+    const user = await User.findOne({
+      where: { email, userType: 'local' }
+    });
+
+    if (!user) {
+      return error(res, ErrorCodes.USER_NOT_FOUND, 404);
+    }
+
+    // LocalUser 조회
+    const localUser = await LocalUser.findOne({
+      where: { userId: user.id }
+    });
+
+    if (!localUser) {
+      return error(res, ErrorCodes.USER_NOT_FOUND, 404);
+    }
+
+    // 기존 비밀번호와 동일한지 확인
+    const isSamePassword = await comparePassword(newPassword, localUser.password);
+    if (isSamePassword) {
+      return error(res, { code: 4007, message: '새 비밀번호는 현재 비밀번호와 달라야 합니다.' }, 400);
+    }
+
+    // 비밀번호 해싱 및 업데이트
+    const hashedPassword = await hashPassword(newPassword);
+    await localUser.update({ password: hashedPassword });
+
+    // 사용된 인증 레코드 무효화 (재사용 방지)
+    await verifiedRecord.destroy();
+
+    return success(res, null, '비밀번호가 재설정되었습니다.');
+
+  } catch (err) {
+    console.error('비밀번호 재설정 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, process.env.NODE_ENV === 'development' ? err.message : undefined);
+  }
+};
+
 module.exports = {
   register,
   login,
   refreshToken,
   logout,
   getProfile,
-  devBypassLogin
+  devBypassLogin,
+  resetPassword
 };
