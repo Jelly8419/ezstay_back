@@ -181,7 +181,7 @@ const updatePricing = async (req, res) => {
       includeGas,
       includeInternet,
       cleaningFee,
-      minContractWeeks,
+      minContractDays,
       refundPolicy
     } = req.body;
 
@@ -206,7 +206,7 @@ const updatePricing = async (req, res) => {
       includeGas: includeGas || false,
       includeInternet: includeInternet || false,
       cleaningFee,
-      minContractWeeks,
+      minContractDays,
       refundPolicy
     });
 
@@ -768,7 +768,7 @@ const getRoom = async (req, res) => {
       includeGas: room.includeGas,
       includeInternet: room.includeInternet,
       cleaningFee: room.cleaningFee,
-      minContractWeeks: room.minContractWeeks,
+      minContractDays: room.minContractDays,
       refundPolicy: room.refundPolicy,
 
       // 사진
@@ -967,7 +967,7 @@ const duplicateRoom = async (req, res) => {
       includeGas: originalRoom.includeGas,
       includeInternet: originalRoom.includeInternet,
       cleaningFee: originalRoom.cleaningFee,
-      minContractWeeks: originalRoom.minContractWeeks,
+      minContractDays: originalRoom.minContractDays,
       refundPolicy: originalRoom.refundPolicy,
       description: originalRoom.description,
       maxGuests: originalRoom.maxGuests,

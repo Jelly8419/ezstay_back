@@ -175,11 +175,11 @@ const Room = sequelize.define('Room', {
     allowNull: true,
     comment: '청소비 (1회)'
   },
-  minContractWeeks: {
+  minContractDays: {
     type: DataTypes.INTEGER,
     allowNull: true,
-    field: 'min_contract_weeks',
-    comment: '최소 계약 주수'
+    field: 'min_contract_days',
+    comment: '최소 계약 일수 (7-90)'
   },
   refundPolicy: {
     type: DataTypes.STRING(50),

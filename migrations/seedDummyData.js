@@ -172,7 +172,7 @@ async function seedDummyData() {
         includeGas: randomBoolean(),
         includeInternet: randomBoolean(),
         cleaningFee: randomInt(30000, 100000),
-        minContractWeeks: randomInt(4, 12),
+        minContractDays: randomInt(7, 90),
         refundPolicy: randomChoice(['flexible', 'moderate', 'strict']),
 
         // 방 소개

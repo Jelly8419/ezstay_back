@@ -161,16 +161,15 @@ const createContractRequest = async (req, res) => {
       );
     }
 
-    // 5. 최소 계약 주수 확인
-    if (room.minContractWeeks) {
-      const totalWeeks = Math.floor(totalDays / 7);
-      if (totalWeeks < room.minContractWeeks) {
+    // 5. 방별 최소 계약 일수 확인
+    if (room.minContractDays) {
+      if (totalDays < room.minContractDays) {
         await transaction.rollback();
         return error(
           res,
           {
             code: 4305,
-            message: `최소 ${room.minContractWeeks}주 이상 예약해야 합니다`
+            message: `최소 ${room.minContractDays}일 이상 예약해야 합니다`
           },
           400
         );
@@ -178,15 +177,16 @@ const createContractRequest = async (req, res) => {
     }
 
     // 6. 렌탈 아이템 6일 정책 검증
-    // 입주일(checkInDate)로부터 현재 시점이 6일 이내라면 렌탈 아이템 신청 불가
+    // 입주일 6일 전 23:59:59까지 렌탈 아이템 선택 가능
+    // 예: 입주일 2/16 → 2/10 23:59:59까지 가능, 2/11 00:00:00부터 불가
     if (rentalItems && Array.isArray(rentalItems) && rentalItems.length > 0) {
       const now = new Date();
       const checkIn = new Date(checkInDate);
-      const diffMs = checkIn.getTime() - now.getTime();
-      const diffDays = diffMs / (1000 * 60 * 60 * 24);
+      const rentalDeadline = new Date(checkIn);
+      rentalDeadline.setDate(rentalDeadline.getDate() - 6);
+      rentalDeadline.setHours(23, 59, 59, 999);
 
-      // 6일 이내인 경우 (예: 1월31일 14:00 입주, 1월25일 15:00 요청 → 약 5.96일 → 6일 이내)
-      if (diffDays < 6) {
+      if (now > rentalDeadline) {
         await transaction.rollback();
         return error(
           res,
@@ -195,8 +195,7 @@ const createContractRequest = async (req, res) => {
           {
             checkInDate,
             requestedAt: now.toISOString(),
-            daysUntilCheckIn: Math.floor(diffDays * 100) / 100, // 소수점 2자리
-            minimumDaysRequired: 6,
+            rentalDeadline: rentalDeadline.toISOString(),
             hint: '렌탈 아이템 없이 계약을 진행하거나, 입주 후 추가 렌탈 주문을 이용해주세요.'
           }
         );
