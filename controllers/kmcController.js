@@ -263,7 +263,7 @@ const handleCallback = async (req, res) => {
     if (!apiToken || !certNum) {
       console.error('[KMC] 콜백 파라미터 누락:', { apiToken: !!apiToken, certNum: !!certNum });
       const frontendUrl = process.env.KMC_FRONTEND_CALLBACK_URL || process.env.FRONTEND_URL || 'https://ezstay.io';
-      return res.redirect(`${frontendUrl}/register?kmc_error=missing_params`);
+      return res.redirect(`${frontendUrl}/kmc/callback?kmc_error=missing_params`);
     }
 
     // 프론트 콜백 URL로 리다이렉트 (토큰을 쿼리 파라미터로 전달)
@@ -271,11 +271,11 @@ const handleCallback = async (req, res) => {
     const encodedToken = encodeURIComponent(apiToken);
     const encodedCertNum = encodeURIComponent(certNum);
 
-    return res.redirect(`${frontendUrl}/register?apiToken=${encodedToken}&certNum=${encodedCertNum}`);
+    return res.redirect(`${frontendUrl}/kmc/callback?apiToken=${encodedToken}&certNum=${encodedCertNum}`);
   } catch (err) {
     console.error('[KMC] 콜백 처리 실패:', err.message);
     const frontendUrl = process.env.KMC_FRONTEND_CALLBACK_URL || process.env.FRONTEND_URL || 'https://ezstay.io';
-    return res.redirect(`${frontendUrl}/register?kmc_error=callback_failed`);
+    return res.redirect(`${frontendUrl}/kmc/callback?kmc_error=callback_failed`);
   }
 };
 
