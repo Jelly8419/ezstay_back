@@ -14,7 +14,7 @@ const { Op } = require('sequelize');
  * @returns {201} 회원가입 성공 (사용자 정보 + JWT 토큰)
  */
 const register = async (req, res) => {
-  const { email, password, user_mode } = req.body;
+  const { email, password, user_mode, name, phoneNumber, birth, gender, di } = req.body;
 
   const emailValidation = validateEmail(email);
   if (!emailValidation.valid) {
@@ -66,10 +66,23 @@ const register = async (req, res) => {
     return error(res, ErrorCodes.DUPLICATE_EMAIL, 400);
   }
 
+  // DI 중복 체크 (같은 사람이 다른 이메일로 가입 방지)
+  if (di) {
+    const existingDi = await User.findOne({ where: { di, isActive: true } });
+    if (existingDi) {
+      return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
+    }
+  }
+
   const result = await withTransaction(async (transaction) => {
     const newUser = await User.create({
       email,
-      userType: 'local'
+      userType: 'local',
+      ...(name && { name }),
+      ...(phoneNumber && { phoneNumber, phoneVerified: true, phoneVerifiedAt: new Date() }),
+      ...(birth !== undefined && birth !== null && birth !== '' && { birth }),
+      ...(gender !== undefined && gender !== null && { gender }),
+      ...(di !== undefined && di !== null && di !== '' && { di })
     }, { transaction });
 
     const hashedPassword = await hashPassword(password);

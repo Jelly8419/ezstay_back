@@ -234,7 +234,8 @@ const verifyResult = async (req, res) => {
       name: verificationData.name,
       phoneNumber: verificationData.phoneNo,
       birth: verificationData.birth,
-      gender: verificationData.gender
+      gender: verificationData.gender,
+      di: verificationData.di
     }, '본인인증이 완료되었습니다.');
 
   } catch (err) {
