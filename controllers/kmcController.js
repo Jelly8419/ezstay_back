@@ -64,12 +64,7 @@ const requestVerification = async (req, res) => {
 
     return success(res, {
       trCert,
-      cpId,
-      trUrl,
-      certNum,
-      reqDate,
-      certMet,
-      plusInfo
+      trUrl
     }, '본인인증 요청 데이터가 생성되었습니다.');
 
   } catch (err) {
