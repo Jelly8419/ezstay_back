@@ -70,6 +70,8 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
   exposedHeaders: ['Content-Length', 'Content-Type']
 };
+// KMC 본인인증 콜백은 KMC 서버에서 직접 POST하므로 CORS 제외
+app.use('/api/auth/kmc/callback', cors());
 app.use(cors(corsOptions));
 
 app.use(morgan('combined'));
