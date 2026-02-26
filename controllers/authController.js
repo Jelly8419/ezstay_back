@@ -14,7 +14,7 @@ const { Op } = require('sequelize');
  * @returns {201} 회원가입 성공 (사용자 정보 + JWT 토큰)
  */
 const register = async (req, res) => {
-  const { email, password, user_mode, name, phoneNumber, birth, gender, di } = req.body;
+  const { email, password, user_mode, name, phoneNumber, birth, gender, di, terms } = req.body;
 
   const emailValidation = validateEmail(email);
   if (!emailValidation.valid) {
@@ -78,11 +78,18 @@ const register = async (req, res) => {
     const newUser = await User.create({
       email,
       userType: 'local',
-      ...(name && { name }),
+      ...(name && { name, nickname: name }),
       ...(phoneNumber && { phoneNumber, phoneVerified: true, phoneVerifiedAt: new Date() }),
       ...(birth !== undefined && birth !== null && birth !== '' && { birth }),
       ...(gender !== undefined && gender !== null && { gender }),
-      ...(di !== undefined && di !== null && di !== '' && { di })
+      ...(di !== undefined && di !== null && di !== '' && { di }),
+      ...(terms && {
+        serviceTermsAgreed: terms.service_terms || false,
+        privacyPolicyAgreed: terms.privacy_policy || false,
+        marketingConsent: terms.marketing_consent || false,
+        ageConfirmed: terms.age_confirmed || false,
+        termsAgreedAt: new Date()
+      })
     }, { transaction });
 
     const hashedPassword = await hashPassword(password);
