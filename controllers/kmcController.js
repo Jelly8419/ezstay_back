@@ -195,23 +195,20 @@ const verifyResult = async (req, res) => {
       di: DI                    // 중복가입확인정보 (DI)
     };
 
-    // 6. 사용자 정보 업데이트 (로그인 상태인 경우)
+    // 6. DI 중복 가입 체크 (1인 1계정)
+    if (verificationData.di) {
+      const existingDiUser = await User.findOne({
+        where: { di: verificationData.di, isActive: true }
+      });
+
+      if (existingDiUser && (!req.user || existingDiUser.id !== req.user.id)) {
+        return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
+      }
+    }
+
+    // 7. 사용자 정보 업데이트 (로그인 상태인 경우)
     if (req.user) {
       const userId = req.user.id;
-
-      // DI로 중복 인증 체크 (다른 사용자가 이미 이 DI로 인증한 경우)
-      if (verificationData.di) {
-        const existingUser = await User.findOne({
-          where: {
-            di: verificationData.di,
-            isActive: true
-          }
-        });
-
-        if (existingUser && existingUser.id !== userId) {
-          return error(res, { code: 4410, message: '이미 다른 계정에서 본인인증이 완료된 정보입니다.' }, 409);
-        }
-      }
 
       await User.update({
         name: verificationData.name,
