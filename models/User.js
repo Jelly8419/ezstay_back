@@ -104,6 +104,27 @@ const User = sequelize.define('User', {
     type: DataTypes.DATE,
     allowNull: true,
     comment: '약관 동의 시간'
+  },
+  // KMC 본인인증 정보
+  ci: {
+    type: DataTypes.STRING(255),
+    allowNull: true,
+    comment: 'KMC 연계정보(CI) - 서비스 간 동일인 식별'
+  },
+  di: {
+    type: DataTypes.STRING(255),
+    allowNull: true,
+    comment: 'KMC 중복가입확인정보(DI) - 동일 서비스 내 중복가입 방지'
+  },
+  birth: {
+    type: DataTypes.STRING(8),
+    allowNull: true,
+    comment: '생년월일 (YYYYMMDD)'
+  },
+  gender: {
+    type: DataTypes.STRING(1),
+    allowNull: true,
+    comment: '성별 (M/F)'
   }
 }, {
   tableName: 'users',

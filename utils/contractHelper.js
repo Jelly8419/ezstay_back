@@ -343,11 +343,18 @@ function validateDates(checkInDate, checkOutDate) {
   // 숙박 일수 계산
   const calculatedDays = Math.ceil((checkOut - checkIn) / (1000 * 60 * 60 * 24));
 
-  // 최소 숙박 일수 체크 (1일 이상)
-  if (calculatedDays < 1) {
+  // 임대기간 검증 (플랫폼 정책: 7~90일)
+  if (calculatedDays < 7) {
     return {
       valid: false,
-      message: '최소 1일 이상 예약해야 합니다'
+      message: '최소 7일 이상 예약해야 합니다'
+    };
+  }
+
+  if (calculatedDays > 90) {
+    return {
+      valid: false,
+      message: '최대 90일까지 예약 가능합니다'
     };
   }
 

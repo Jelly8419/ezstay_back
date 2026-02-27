@@ -117,6 +117,16 @@ const ErrorCodes = {
   SETTLEMENT_NOT_FOUND: { code: 4901, message: '정산 정보를 찾을 수 없습니다.' },
   INVALID_USER_MODE: { code: 4802, message: 'userMode는 guest 또는 host여야 합니다.' },
 
+  // KMC 본인인증 관련 (44xx)
+  KMC_ENCRYPTION_FAILED: { code: 4401, message: '인증 요청 생성에 실패했습니다.' },
+  KMC_DECRYPTION_FAILED: { code: 4402, message: '인증 결과 처리에 실패했습니다.' },
+  KMC_TOKEN_EXPIRED: { code: 4403, message: '인증 토큰이 만료되었습니다.' },
+  KMC_TOKEN_NOT_FOUND: { code: 4404, message: '인증 토큰을 찾을 수 없습니다.' },
+  KMC_VERIFY_FAILED: { code: 4405, message: '본인인증에 실패했습니다.' },
+  KMC_TAMPERING_DETECTED: { code: 4406, message: '인증 데이터 위변조가 감지되었습니다.' },
+  KMC_API_ERROR: { code: 4407, message: 'KMC 서버 연동 중 오류가 발생했습니다.' },
+  KMC_WORKER_NOT_READY: { code: 4408, message: '인증 모듈이 준비되지 않았습니다.' },
+
   // 서버 관련 (5xxx)
   INTERNAL_ERROR: { code: 5001, message: '서버 오류가 발생했습니다.' },
   DATABASE_ERROR: { code: 5002, message: '데이터베이스 오류가 발생했습니다.' },

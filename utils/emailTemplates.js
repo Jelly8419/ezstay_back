@@ -110,7 +110,7 @@ const getEmailTemplate = (code, type = 'signup') => {
     <div class="footer">
       <p>
         본 메일은 발신 전용입니다.<br>
-        문의사항은 <a href="mailto:support@ezstay.com">support@ezstay.com</a>으로 연락주세요.
+        문의사항은 <a href="mailto:support@ezstay.io">support@ezstay.io</a>으로 연락주세요.
       </p>
       <p>&copy; 2025 Ezstay. All rights reserved.</p>
     </div>

@@ -18,7 +18,7 @@ const validateEmail = (email) => {
 /**
  * 비밀번호 유효성 검증
  * - 8~16자 이내
- * - 영문자, 숫자, 특수문자 각 1개 이상 포함 필수
+ * - 영문자, 숫자 각 1개 이상 포함 필수
  */
 const validatePassword = (password) => {
   if (!password) {
@@ -31,12 +31,11 @@ const validatePassword = (password) => {
 
   const hasLetter = /[a-zA-Z]/.test(password);
   const hasNumber = /[0-9]/.test(password);
-  const hasSpecialChar = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(password);
 
-  if (!(hasLetter && hasNumber && hasSpecialChar)) {
+  if (!(hasLetter && hasNumber)) {
     return {
       valid: false,
-      message: '비밀번호는 영문자, 숫자, 특수문자를 각각 1개 이상 포함해야 합니다.'
+      message: '비밀번호는 영문자, 숫자를 각각 1개 이상 포함해야 합니다.'
     };
   }
 

@@ -79,7 +79,7 @@ const getRoomById = async (req, res) => {
         // 요금 정보 (PRD 필수)
         'dailyRent', 'dailyMaintenanceFee', 'maintenanceDetail',
         'includeElectricity', 'includeWater', 'includeGas', 'includeInternet',
-        'cleaningFee', 'minContractWeeks', 'refundPolicy',
+        'cleaningFee', 'minContractDays', 'refundPolicy',
 
         // 할인 정보
         'longTermWeeks', 'longTermDiscount', 'quickMoveIn', 'quickMoveInDiscount',

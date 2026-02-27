@@ -647,7 +647,7 @@ const getPropertyDetail = async (req, res) => {
       includeGas: room.includeGas,
       includeInternet: room.includeInternet,
       cleaningFee: room.cleaningFee,
-      minContractWeeks: room.minContractWeeks,
+      minContractDays: room.minContractDays,
       refundPolicy: room.refundPolicy,
 
       // 사진

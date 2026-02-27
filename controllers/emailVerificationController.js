@@ -43,6 +43,24 @@ const sendVerificationCode = async (req, res) => {
       }
     }
 
+    // 비밀번호 재설정 타입인 경우 로컬 회원 확인
+    if (type === 'password_reset') {
+      const existingUser = await User.findOne({ where: { email } });
+      if (!existingUser) {
+        return error(res, ErrorCodes.USER_NOT_FOUND, 404);
+      }
+      if (existingUser.userType === 'social') {
+        const socialAccount = await SocialUser.findOne({
+          where: { userId: existingUser.id }
+        });
+        const platform = socialAccount?.provider || '소셜';
+        return error(res, {
+          code: 4016,
+          message: `소셜 로그인 회원입니다. ${platform} 로그인을 이용해주세요.`
+        }, 400);
+      }
+    }
+
     // 재발송 제한 확인 (1분)
     const recentCode = await EmailVerificationCode.findOne({
       where: {
