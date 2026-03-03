@@ -353,7 +353,8 @@ const Contract = sequelize.define('Contract', {
       'CANCELLED_BY_ADMIN_NO_REFUND',   // 관리자 취소 (환불 X)
       'REFUNDED',                      // 환불 완료
       'APPROVAL_EXPIRED',              // 미승인 만료
-      'PAYMENT_EXPIRED'                // 미결제 만료
+      'PAYMENT_EXPIRED',               // 미결제 만료
+      'CANCEL_REQUESTED'               // 취소 요청 (관리자 승인 대기)
     ),
     allowNull: false,
     defaultValue: 'PENDING_APPROVAL',
@@ -469,11 +470,46 @@ const Contract = sequelize.define('Contract', {
     comment: '반환 가능 보증금 (보증금 - 차감액)'
   },
   depositStatus: {
-    type: DataTypes.ENUM('HOLDING', 'RETURN_PENDING', 'RETURNED', 'PARTIALLY_RETURNED', 'FORFEITED'),
+    type: DataTypes.ENUM('HOLDING', 'RETURN_PENDING', 'RETURN_HOLD', 'RETURN_CONFIRMED', 'DEDUCTION_CONFIRMED', 'RETURNED'),
     allowNull: false,
     defaultValue: 'HOLDING',
     field: 'deposit_status',
-    comment: '보증금 상태 (HOLDING=보관중, RETURN_PENDING=반환대기, RETURNED=반환완료, PARTIALLY_RETURNED=부분반환, FORFEITED=몰수)'
+    comment: '보증금 상태 (HOLDING=보관중, RETURN_PENDING=반환대기, RETURN_HOLD=반환보류, RETURN_CONFIRMED=반환확정, DEDUCTION_CONFIRMED=차감확정, RETURNED=반환완료)'
+  },
+
+  // 퇴실 세부 상태 (PRD v2)
+  checkoutStatus: {
+    type: DataTypes.ENUM('NOT_STARTED', 'GUEST_COMPLETED', 'HOST_CONFIRMED', 'HOLD_REQUESTED', 'HOST_PENDING'),
+    allowNull: false,
+    defaultValue: 'NOT_STARTED',
+    field: 'checkout_status',
+    comment: '퇴실 세부 상태 (NOT_STARTED=시작전, GUEST_COMPLETED=게스트퇴실완료, HOST_CONFIRMED=호스트확인완료, HOLD_REQUESTED=보류신청대기, HOST_PENDING=보류승인후합의중)'
+  },
+
+  // 보증금 보류 관련 필드
+  holdRequestedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    field: 'hold_requested_at',
+    comment: '호스트 보류 신청 시점'
+  },
+  holdRemainingMs: {
+    type: DataTypes.BIGINT,
+    allowNull: true,
+    field: 'hold_remaining_ms',
+    comment: '보류 거절 시 남은 카운트다운(ms)'
+  },
+  holdApprovedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    field: 'hold_approved_at',
+    comment: '관리자 보류 승인 시점 (합의 데드라인 기준)'
+  },
+  holdApprovedByAdminId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    field: 'hold_approved_by_admin_id',
+    comment: '보류 승인 관리자 ID'
   },
 
   // 정산 관리 (관리자용)
@@ -568,6 +604,11 @@ const Contract = sequelize.define('Contract', {
       fields: ['deposit_status'],
       name: 'idx_deposit_status',
       comment: '보증금 상태 조회 최적화'
+    },
+    {
+      fields: ['checkout_status'],
+      name: 'idx_checkout_status',
+      comment: '퇴실 세부 상태 조회 최적화 (스케줄러 HOST_PENDING 제외 등)'
     }
   ]
 });
@@ -588,7 +629,18 @@ Contract.STATUS_LABELS = {
   CANCELLED_BY_ADMIN_NO_REFUND: '관리자 취소 (환불 없음)',
   REFUNDED: '환불 완료',
   APPROVAL_EXPIRED: '미승인 만료',
-  PAYMENT_EXPIRED: '미결제 만료'
+  PAYMENT_EXPIRED: '미결제 만료',
+  CANCEL_REQUESTED: '취소 요청 (관리자 승인 대기)'
+};
+
+/**
+ * 퇴실 세부 상태 한글명 매핑
+ */
+Contract.CHECKOUT_STATUS_LABELS = {
+  NOT_STARTED: '퇴실 전',
+  GUEST_COMPLETED: '게스트 퇴실 완료',
+  HOST_CONFIRMED: '호스트 확인 완료',
+  HOST_PENDING: '퇴실 확인 보류'
 };
 
 /**

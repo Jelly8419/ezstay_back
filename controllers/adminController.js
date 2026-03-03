@@ -1,9 +1,13 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, ContractStatusLog, ChatRoom, DepositAgreement, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 const { calculateProgress } = require('../utils/roomProgress');
+const { sendSystemMessage } = require('../config/firebaseAdmin');
+const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
+const { CANCEL_TYPES } = require('../utils/notificationMessages');
+const { calculateRefund } = require('../utils/refundCalculator');
 
 /**
  * 대시보드 통계 조회
@@ -1676,10 +1680,23 @@ const rejectRefund = async (req, res) => {
     // 계약 상태 복원 (환불 요청 전 상태로)
     const contract = await Contract.findByPk(refund.contractId, { transaction });
     if (contract) {
-      // 환불 거절 시 계약 상태를 PAYMENT_COMPLETED 또는 IN_PROGRESS로 복원
-      // (실제 비즈니스 로직에 따라 조정 필요)
+      // ContractStatusLog에서 CANCEL_REQUESTED로 변경되기 전 상태 조회
+      let restoreStatus = 'PAYMENT_COMPLETED'; // 기본값
+      const statusLog = await ContractStatusLog.findOne({
+        where: {
+          contractId: contract.id,
+          toStatus: 'CANCEL_REQUESTED'
+        },
+        order: [['createdAt', 'DESC']],
+        transaction
+      });
+
+      if (statusLog) {
+        restoreStatus = statusLog.fromStatus;
+      }
+
       await contract.update({
-        status: 'PAYMENT_COMPLETED'
+        status: restoreStatus
       }, { transaction });
     }
 
@@ -2049,14 +2066,18 @@ const getContractRentalHistory = async (req, res) => {
 };
 
 /**
- * 관리자 렌탈 아이템 취소 (강제 취소)
- * POST /api/admin/rental-orders/:rentalOrderId/items/:itemId/cancel
+ * 관리자 렌탈 주문 전체 취소 (강제 취소)
+ * POST /api/admin/rental-orders/:rentalOrderId/cancel
+ *
+ * @description 관리자가 렌탈 주문 전체를 취소합니다 (주문 단위)
+ * @body { reason: string, refundAmount?: number }
+ * - refundAmount 미지정 시 주문 전체 금액 환불
  */
-const adminCancelRentalItem = async (req, res) => {
+const adminCancelRentalOrder = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const { rentalOrderId, itemId } = req.params;
+    const { rentalOrderId } = req.params;
     const { reason, refundAmount } = req.body;
     const adminId = req.admin.id;
 
@@ -2076,9 +2097,18 @@ const adminCancelRentalItem = async (req, res) => {
       return error(res, ErrorCodes.RENTAL_ORDER_NOT_FOUND, 404);
     }
 
-    // 아이템 조회
-    const item = await RentalOrderItem.findOne({
-      where: { id: itemId, rentalOrderId: order.id },
+    // 이미 전체 환불된 주문인지 확인
+    if (order.status === 'FULLY_REFUNDED') {
+      await transaction.rollback();
+      return error(res, ErrorCodes.RENTAL_ORDER_ALREADY_CANCELLED, 400);
+    }
+
+    // 활성 아이템 조회
+    const activeItems = await RentalOrderItem.findAll({
+      where: {
+        rentalOrderId: order.id,
+        status: { [require('sequelize').Op.ne]: 'CANCELLED' }
+      },
       include: [{
         model: RentalItem,
         as: 'rentalItem',
@@ -2087,43 +2117,44 @@ const adminCancelRentalItem = async (req, res) => {
       transaction
     });
 
-    if (!item) {
+    if (activeItems.length === 0) {
       await transaction.rollback();
-      return error(res, ErrorCodes.RENTAL_ORDER_ITEM_NOT_FOUND, 404);
+      return error(res, ErrorCodes.RENTAL_ORDER_ALREADY_CANCELLED, 400);
     }
 
-    if (item.status === 'CANCELLED') {
-      await transaction.rollback();
-      return error(res, ErrorCodes.RENTAL_ITEM_ALREADY_CANCELLED, 400);
-    }
-
-    // 환불 금액 결정 (지정되지 않으면 전액)
+    // 환불 금액 결정 (지정되지 않으면 활성 아이템 전체 금액)
+    const orderTotal = activeItems.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
     const finalRefundAmount = refundAmount !== undefined
       ? parseFloat(refundAmount)
-      : parseFloat(item.totalPrice);
+      : orderTotal;
 
-    // 아이템 취소 처리
-    await item.update({
-      status: 'CANCELLED',
-      cancelledAt: new Date(),
-      cancelReason: `[관리자] ${reason}`,
-      refundAmount: finalRefundAmount
-    }, { transaction });
+    // TODO: PG(토스페이먼츠) 연동 후, 환불 시 토스 환불 API 호출 필요
+    // cancelPaidRentalOrder() 함수(utils/rentalOrderHelper.js)의 토스 환불 로직 참고
+    // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
 
-    // 주문 환불 금액 업데이트
+    // 전체 아이템 취소 처리
+    const cancelledItemNames = [];
+    for (const item of activeItems) {
+      await item.update({
+        status: 'CANCELLED',
+        cancelledAt: new Date(),
+        cancelReason: `[관리자] ${reason}`,
+        refundAmount: parseFloat(item.totalPrice)
+      }, { transaction });
+      cancelledItemNames.push(`${item.rentalItem?.name || '알 수 없음'} x${item.quantity}`);
+    }
+
+    // 주문 상태 업데이트
     await order.update({
       refundedAmount: parseFloat(order.refundedAmount || 0) + finalRefundAmount,
-      status: 'PARTIAL_REFUND'
+      status: 'FULLY_REFUNDED'
     }, { transaction });
 
-    // 예약 상태 업데이트
+    // 전체 예약 상태 업데이트
     await require('../models').RentalItemReservation.update(
       { status: 'CANCELLED' },
       {
-        where: {
-          rentalOrderId: order.id,
-          rentalOrderItemId: item.id
-        },
+        where: { rentalOrderId: order.id },
         transaction
       }
     );
@@ -2131,12 +2162,15 @@ const adminCancelRentalItem = async (req, res) => {
     // 로그 기록
     await RentalOrderLog.createLog({
       rentalOrderId: order.id,
-      action: 'ADMIN_ITEM_CANCELLED',
-      description: `관리자가 아이템을 취소했습니다: ${item.rentalItem?.name || '알 수 없음'} x${item.quantity}`,
+      action: 'ADMIN_ORDER_CANCELLED',
+      description: `관리자가 주문 전체를 취소했습니다: ${cancelledItemNames.join(', ')}`,
       metadata: {
-        itemId: item.id,
-        itemName: item.rentalItem?.name,
-        quantity: item.quantity,
+        cancelledItems: activeItems.map(item => ({
+          id: item.id,
+          name: item.rentalItem?.name,
+          quantity: item.quantity,
+          price: parseFloat(item.totalPrice)
+        })),
         refundAmount: finalRefundAmount,
         adminId,
         reason
@@ -2148,18 +2182,18 @@ const adminCancelRentalItem = async (req, res) => {
 
     return updated(res, {
       rentalOrderId: order.rentalOrderId,
-      item: {
+      cancelledItems: activeItems.map(item => ({
         id: item.id,
         name: item.rentalItem?.name,
-        status: 'CANCELLED',
-        refundAmount: finalRefundAmount
-      },
-      orderStatus: order.status,
-      totalRefunded: parseFloat(order.refundedAmount)
-    }, '렌탈 아이템이 취소되었습니다.');
+        quantity: item.quantity,
+        status: 'CANCELLED'
+      })),
+      orderStatus: 'FULLY_REFUNDED',
+      totalRefunded: finalRefundAmount
+    }, '렌탈 주문이 전체 취소되었습니다.');
   } catch (err) {
     await transaction.rollback();
-    console.error('관리자 렌탈 아이템 취소 오류:', err);
+    console.error('관리자 렌탈 주문 취소 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
 };
@@ -2271,6 +2305,866 @@ const updateRentalOrderDeliveryStatus = async (req, res) => {
   }
 };
 
+/**
+ * 관리자 강제 취소
+ * POST /api/admin/reservations/:contractId/force-cancel
+ *
+ * 정책 3.15: 관리자는 운영 판단에 따라 계약을 강제 종료할 수 있다.
+ * - 모든 활성 상태에서 가능
+ * - withRefund에 따라 CANCELLED_BY_ADMIN_WITH_REFUND / CANCELLED_BY_ADMIN_NO_REFUND
+ */
+const adminForceCancel = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { contractId } = req.params;
+    const { reason, withRefund } = req.body;
+    const adminId = req.admin.id;
+
+    if (!reason || !reason.trim()) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { field: 'reason' });
+    }
+
+    const contract = await Contract.findByPk(contractId, {
+      include: [
+        { model: ChatRoom, as: 'chatRoom', attributes: ['firebaseChatRoomId'] }
+      ],
+      transaction
+    });
+
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    // 강제 취소 가능한 활성 상태
+    const cancellableStatuses = [
+      'PENDING_APPROVAL', 'APPROVED', 'PAYMENT_COMPLETED',
+      'IN_PROGRESS', 'CANCEL_REQUESTED'
+    ];
+    if (!cancellableStatuses.includes(contract.status)) {
+      await transaction.rollback();
+      return error(res, {
+        code: 4630,
+        message: '강제 취소 가능한 상태가 아닙니다.',
+        currentStatus: contract.status
+      }, 400);
+    }
+
+    // 취소 유형 결정
+    let cancellationType;
+    if (['PENDING_APPROVAL', 'APPROVED'].includes(contract.status)) {
+      cancellationType = 'BEFORE_PAYMENT';
+    } else if (contract.status === 'PAYMENT_COMPLETED') {
+      cancellationType = 'AFTER_PAYMENT';
+    } else {
+      cancellationType = 'DURING_STAY';
+    }
+
+    const previousStatus = contract.status;
+    const newStatus = withRefund ? 'CANCELLED_BY_ADMIN_WITH_REFUND' : 'CANCELLED_BY_ADMIN_NO_REFUND';
+
+    await contract.update({
+      status: newStatus,
+      cancelledAt: new Date(),
+      cancellationReason: `[관리자] ${reason}`,
+      cancellationType,
+      cancelledByAdminId: adminId
+    }, { transaction });
+
+    // 상태 변경 로그
+    await ContractStatusLog.createLog({
+      contractId: contract.id,
+      fromStatus: previousStatus,
+      toStatus: newStatus,
+      changedBy: 'ADMIN',
+      changedByUserId: adminId,
+      reason: `관리자 강제 취소: ${reason}`,
+      metadata: {
+        type: 'ADMIN_FORCE_CANCEL',
+        withRefund,
+        cancellationType,
+        adminId
+      },
+      transaction
+    });
+
+    // 환불 포함 취소인 경우 Refund 레코드 생성
+    let refund = null;
+    if (withRefund && cancellationType !== 'BEFORE_PAYMENT') {
+      const cancellationDate = new Date();
+      const refundResult = await calculateRefund(contract, cancellationDate);
+
+      if (refundResult.success) {
+        const refundData = refundResult.data;
+        refund = await Refund.create({
+          contractId: contract.id,
+          refundStatus: 'APPROVED',
+
+          policyTypeUsed: refundData.policyTypeUsed,
+          cancellationDate,
+          checkInDate: contract.checkInDate,
+          daysBeforeCheckin: refundData.daysBeforeCheckin,
+          isSameDayCancellation: refundData.isSameDayCancellation,
+          cancellationFaultType: refundData.cancellationFaultType,
+          hasEzCleaningService: refundData.hasEzCleaningService,
+
+          originalDeposit: refundData.originalDeposit,
+          originalPlatformFee: refundData.originalPlatformFee,
+          originalRentalFee: contract.rentalFee,
+          originalCleaningFee: contract.cleaningFee,
+          originalMaintenanceFee: contract.maintenanceFee,
+          originalTotalAmount: contract.finalTotalAmount,
+
+          usageFee: refundData.usageFee,
+          usageFeeRefundAmount: refundData.usageFeeRefundAmount,
+          depositRefundAmount: refundData.depositRefundAmount,
+
+          rentalFeeRefundRate: refundData.rentalFeeRefundRate,
+          rentalFeeRefundAmount: refundData.rentalFeeRefundAmount,
+          cleaningFeeRefundAmount: refundData.cleaningFeeRefundAmount,
+          maintenanceFeeRefundAmount: refundData.maintenanceFeeRefundAmount,
+          totalRefundAmount: refundData.totalRefundAmount,
+
+          penaltyAmount: refundData.penaltyAmount,
+          hostPenaltyAmount: refundData.hostPenaltyAmount,
+          hostPenaltyFee: refundData.hostPenaltyFee,
+
+          guestServiceFeeRefunded: refundData.guestServiceFeeRefunded,
+          platformFeeDeducted: refundData.platformFeeDeducted,
+          finalRefundAmount: refundData.finalRefundAmount,
+
+          refundMethod: 'ORIGINAL_PAYMENT',
+          cancellationReason: `[관리자 강제 취소] ${reason}`,
+          adminNotes: `관리자(ID:${adminId}) 강제 취소 처리`,
+
+          requestedAt: cancellationDate,
+          approvedAt: cancellationDate
+        }, { transaction });
+      }
+    }
+
+    await transaction.commit();
+
+    // 채팅 시스템 메시지 (트랜잭션 외부)
+    try {
+      if (contract.chatRoom && contract.chatRoom.firebaseChatRoomId) {
+        const messageText = getSystemMessageTemplate(
+          SystemMessageTypes.CONTRACT_FORCE_CANCELLED,
+          { reason }
+        );
+        await sendSystemMessage(
+          contract.chatRoom.firebaseChatRoomId,
+          messageText,
+          SystemMessageTypes.CONTRACT_FORCE_CANCELLED,
+          { contractId: contract.id }
+        );
+      }
+    } catch (chatErr) {
+      console.error('강제 취소 시스템 메시지 전송 실패 (무시됨):', chatErr);
+    }
+
+    // 알림 발송
+    try {
+      await NotificationService.notifyContractCanceled(contract, CANCEL_TYPES.ADMIN_CANCEL);
+    } catch (notifyErr) {
+      console.error('강제 취소 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    return success(res, {
+      contractId: contract.id,
+      previousStatus,
+      newStatus,
+      withRefund,
+      cancellationType,
+      reason,
+      refundId: refund ? refund.id : null,
+      totalRefundAmount: refund ? refund.totalRefundAmount : null
+    }, '계약이 강제 취소되었습니다.');
+
+  } catch (err) {
+    await transaction.rollback();
+    console.error('관리자 강제 취소 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 호스트 취소 요청 승인
+ * POST /api/admin/reservations/:contractId/approve-cancel-request
+ *
+ * 정책 3.14.2: 취소 요청 → 관리자가 승인하면 계약 종료 처리
+ */
+const approveHostCancelRequest = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { contractId } = req.params;
+    const { withRefund, adminNote } = req.body;
+    const adminId = req.admin.id;
+
+    const contract = await Contract.findByPk(contractId, {
+      include: [
+        { model: ChatRoom, as: 'chatRoom', attributes: ['firebaseChatRoomId'] }
+      ],
+      transaction
+    });
+
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.status !== 'IN_PROGRESS') {
+      await transaction.rollback();
+      return error(res, {
+        code: 4631,
+        message: '임대 진행 중 상태에서만 취소 요청 승인이 가능합니다.',
+        currentStatus: contract.status
+      }, 400);
+    }
+
+    // 호스트 취소 요청 존재 확인 (ContractStatusLog에서)
+    const cancelRequest = await ContractStatusLog.findOne({
+      where: {
+        contractId,
+        metadata: { [Op.like]: '%CANCEL_REQUEST_BY_HOST%' }
+      },
+      order: [['createdAt', 'DESC']],
+      transaction
+    });
+
+    if (!cancelRequest) {
+      await transaction.rollback();
+      return error(res, {
+        code: 4632,
+        message: '해당 계약에 대한 호스트 취소 요청을 찾을 수 없습니다.'
+      }, 404);
+    }
+
+    const previousStatus = contract.status;
+
+    await contract.update({
+      status: 'CANCELLED_BY_HOST',
+      cancelledAt: new Date(),
+      cancellationReason: `호스트 취소 요청 승인 (관리자: ${adminNote || '사유 없음'})`,
+      cancellationType: 'DURING_STAY'
+    }, { transaction });
+
+    // 상태 변경 로그
+    await ContractStatusLog.createLog({
+      contractId: contract.id,
+      fromStatus: previousStatus,
+      toStatus: 'CANCELLED_BY_HOST',
+      changedBy: 'ADMIN',
+      changedByUserId: adminId,
+      reason: `호스트 취소 요청 승인: ${adminNote || ''}`,
+      metadata: {
+        type: 'HOST_CANCEL_REQUEST_APPROVED',
+        withRefund,
+        adminId,
+        adminNote,
+        originalRequestLogId: cancelRequest.id
+      },
+      transaction
+    });
+
+    // 환불 포함인 경우 Refund 레코드 생성 (호스트 귀책)
+    let refund = null;
+    if (withRefund) {
+      const cancellationDate = new Date();
+      const refundResult = await calculateRefund(contract, cancellationDate, { faultType: 'HOST' });
+
+      if (refundResult.success) {
+        const refundData = refundResult.data;
+        refund = await Refund.create({
+          contractId: contract.id,
+          refundStatus: 'APPROVED',
+
+          policyTypeUsed: refundData.policyTypeUsed,
+          cancellationDate,
+          checkInDate: contract.checkInDate,
+          daysBeforeCheckin: refundData.daysBeforeCheckin,
+          isSameDayCancellation: refundData.isSameDayCancellation,
+          cancellationFaultType: 'HOST',
+          hasEzCleaningService: refundData.hasEzCleaningService,
+
+          originalDeposit: refundData.originalDeposit,
+          originalPlatformFee: refundData.originalPlatformFee,
+          originalRentalFee: contract.rentalFee,
+          originalCleaningFee: contract.cleaningFee,
+          originalMaintenanceFee: contract.maintenanceFee,
+          originalTotalAmount: contract.finalTotalAmount,
+
+          usageFee: refundData.usageFee,
+          usageFeeRefundAmount: refundData.usageFeeRefundAmount,
+          depositRefundAmount: refundData.depositRefundAmount,
+
+          rentalFeeRefundRate: refundData.rentalFeeRefundRate,
+          rentalFeeRefundAmount: refundData.rentalFeeRefundAmount,
+          cleaningFeeRefundAmount: refundData.cleaningFeeRefundAmount,
+          maintenanceFeeRefundAmount: refundData.maintenanceFeeRefundAmount,
+          totalRefundAmount: refundData.totalRefundAmount,
+
+          penaltyAmount: refundData.penaltyAmount,
+          hostPenaltyAmount: refundData.hostPenaltyAmount,
+          hostPenaltyFee: refundData.hostPenaltyFee,
+
+          guestServiceFeeRefunded: refundData.guestServiceFeeRefunded,
+          platformFeeDeducted: refundData.platformFeeDeducted,
+          finalRefundAmount: refundData.finalRefundAmount,
+
+          // 호스트 부담금 (위약금 + 게스트 서비스 수수료)
+          hostBurdenAmount: refundData.penaltyAmount + refundData.originalPlatformFee,
+          hostBurdenStatus: 'PENDING',
+          guestCompensationAmount: refundData.penaltyAmount,
+          guestCompensationStatus: refundData.penaltyAmount > 0 ? 'PENDING' : null,
+
+          refundMethod: 'ORIGINAL_PAYMENT',
+          cancellationReason: `호스트 취소 요청 승인`,
+          adminNotes: adminNote || null,
+
+          requestedAt: cancellationDate,
+          approvedAt: cancellationDate
+        }, { transaction });
+      }
+    }
+
+    await transaction.commit();
+
+    // 채팅 시스템 메시지
+    try {
+      if (contract.chatRoom && contract.chatRoom.firebaseChatRoomId) {
+        const messageText = getSystemMessageTemplate(SystemMessageTypes.HOST_CANCEL_REQUEST_APPROVED);
+        await sendSystemMessage(
+          contract.chatRoom.firebaseChatRoomId,
+          messageText,
+          SystemMessageTypes.HOST_CANCEL_REQUEST_APPROVED,
+          { contractId: contract.id }
+        );
+      }
+    } catch (chatErr) {
+      console.error('취소 요청 승인 시스템 메시지 전송 실패 (무시됨):', chatErr);
+    }
+
+    // 호스트 알림
+    try {
+      await NotificationService.sendNotification({
+        userId: contract.hostId,
+        type: 'CONTRACT',
+        title: '취소 요청 승인',
+        message: '호스트님의 취소 요청이 관리자에 의해 승인되었습니다.',
+        data: { contractId: contract.id }
+      });
+    } catch (notifyErr) {
+      console.error('호스트 취소 승인 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    // 게스트 알림
+    try {
+      await NotificationService.sendNotification({
+        userId: contract.guestId,
+        type: 'CONTRACT',
+        title: '계약 취소 안내',
+        message: '관리자 승인으로 계약이 취소되었습니다. 환불 절차가 진행됩니다.',
+        data: { contractId: contract.id }
+      });
+    } catch (notifyErr) {
+      console.error('게스트 취소 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    return success(res, {
+      contractId: contract.id,
+      previousStatus,
+      newStatus: 'CANCELLED_BY_HOST',
+      withRefund,
+      adminNote,
+      refundId: refund ? refund.id : null,
+      totalRefundAmount: refund ? refund.totalRefundAmount : null,
+      hostBurdenAmount: refund ? refund.hostBurdenAmount : null
+    }, '호스트 취소 요청이 승인되었습니다.');
+
+  } catch (err) {
+    await transaction.rollback();
+    console.error('호스트 취소 요청 승인 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 호스트 취소 요청 거절
+ * POST /api/admin/reservations/:contractId/reject-cancel-request
+ */
+const rejectHostCancelRequest = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const { adminNote } = req.body;
+    const adminId = req.admin.id;
+
+    const contract = await Contract.findByPk(contractId, {
+      include: [
+        { model: ChatRoom, as: 'chatRoom', attributes: ['firebaseChatRoomId'] }
+      ]
+    });
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.status !== 'IN_PROGRESS') {
+      return error(res, {
+        code: 4633,
+        message: '임대 진행 중 상태에서만 취소 요청 거절이 가능합니다.',
+        currentStatus: contract.status
+      }, 400);
+    }
+
+    // 호스트 취소 요청 존재 확인
+    const cancelRequest = await ContractStatusLog.findOne({
+      where: {
+        contractId,
+        metadata: { [Op.like]: '%CANCEL_REQUEST_BY_HOST%' }
+      },
+      order: [['createdAt', 'DESC']]
+    });
+
+    if (!cancelRequest) {
+      return error(res, {
+        code: 4634,
+        message: '해당 계약에 대한 호스트 취소 요청을 찾을 수 없습니다.'
+      }, 404);
+    }
+
+    // 상태 변경 없음 (IN_PROGRESS 유지), 거절 기록만 남김
+    await ContractStatusLog.createLog({
+      contractId: contract.id,
+      fromStatus: 'IN_PROGRESS',
+      toStatus: 'IN_PROGRESS',
+      changedBy: 'ADMIN',
+      changedByUserId: adminId,
+      reason: `호스트 취소 요청 거절: ${adminNote || ''}`,
+      metadata: {
+        type: 'HOST_CANCEL_REQUEST_REJECTED',
+        adminId,
+        adminNote,
+        originalRequestLogId: cancelRequest.id
+      }
+    });
+
+    // 채팅 시스템 메시지
+    try {
+      if (contract.chatRoom && contract.chatRoom.firebaseChatRoomId) {
+        const messageText = getSystemMessageTemplate(SystemMessageTypes.HOST_CANCEL_REQUEST_REJECTED);
+        await sendSystemMessage(
+          contract.chatRoom.firebaseChatRoomId,
+          messageText,
+          SystemMessageTypes.HOST_CANCEL_REQUEST_REJECTED,
+          { contractId: contract.id }
+        );
+      }
+    } catch (chatErr) {
+      console.error('취소 요청 거절 시스템 메시지 전송 실패 (무시됨):', chatErr);
+    }
+
+    // 호스트 알림
+    try {
+      await NotificationService.sendNotification({
+        userId: contract.hostId,
+        type: 'CONTRACT',
+        title: '취소 요청 거절',
+        message: '호스트님의 취소 요청이 관리자에 의해 거절되었습니다.',
+        data: { contractId: contract.id }
+      });
+    } catch (notifyErr) {
+      console.error('호스트 취소 거절 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    return success(res, {
+      contractId: contract.id,
+      status: 'IN_PROGRESS',
+      adminNote
+    }, '호스트 취소 요청이 거절되었습니다.');
+
+  } catch (err) {
+    console.error('호스트 취소 요청 거절 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 보증금 보류 신청 목록 조회
+ * GET /api/admin/deposits/pending-holds
+ */
+const getPendingDepositHolds = async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const offset = (page - 1) * limit;
+
+    const { count, rows: contracts } = await Contract.findAndCountAll({
+      where: { checkoutStatus: 'HOLD_REQUESTED' },
+      include: [
+        { model: User, as: 'guest', attributes: ['id', 'name', 'email', 'phoneNumber'] },
+        { model: User, as: 'host', attributes: ['id', 'name', 'email', 'phoneNumber'] },
+        { model: Room, as: 'room', attributes: ['id', 'title', 'address'] }
+      ],
+      order: [['holdRequestedAt', 'ASC']],
+      limit: parseInt(limit),
+      offset
+    });
+
+    return success(res, {
+      holds: contracts.map(c => ({
+        contractId: c.id,
+        guest: c.guest,
+        host: c.host,
+        room: c.room ? { id: c.room.id, title: c.room.title, address: c.room.address } : null,
+        deposit: c.deposit,
+        holdRequestedAt: c.holdRequestedAt,
+        holdReason: c.deductionReason,
+        holdRemainingMs: c.holdRemainingMs
+      })),
+      pagination: {
+        total: count,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(count / limit)
+      }
+    }, '보증금 보류 신청 목록을 조회했습니다.');
+
+  } catch (err) {
+    console.error('보증금 보류 신청 목록 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 보증금 보류 신청 승인
+ * POST /api/admin/deposits/:contractId/approve-hold
+ * 정책 7.8.1: 승인 시 보증금 상태 → 반환보류, 합의 프로세스 시작
+ */
+const approveDepositHold = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { contractId } = req.params;
+    const adminId = req.user.id;
+
+    const contract = await Contract.findByPk(contractId, {
+      include: [
+        { model: User, as: 'guest', attributes: ['id', 'name'] },
+        { model: User, as: 'host', attributes: ['id', 'name'] }
+      ],
+      transaction
+    });
+
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.checkoutStatus !== 'HOLD_REQUESTED') {
+      await transaction.rollback();
+      return error(res, {
+        code: 4670,
+        message: '보류 신청 대기 상태가 아닙니다.'
+      }, 400);
+    }
+
+    const now = new Date();
+
+    // 정책 7.8.1: 승인 → 반환보류, 합의 프로세스 시작
+    await contract.update({
+      checkoutStatus: 'HOST_PENDING',
+      depositStatus: 'RETURN_HOLD',
+      holdApprovedAt: now,
+      holdApprovedByAdminId: adminId
+    }, { transaction });
+
+    // 계약 상태 변경 로그
+    await ContractStatusLog.create({
+      contractId: contract.id,
+      fromStatus: 'COMPLETED',
+      toStatus: 'COMPLETED',
+      changedBy: adminId,
+      changedByRole: 'admin',
+      reason: '관리자 보증금 보류 승인',
+      metadata: JSON.stringify({
+        type: 'DEPOSIT_HOLD_APPROVED',
+        checkoutStatusChange: 'HOLD_REQUESTED → HOST_PENDING',
+        depositStatusChange: 'HOLDING → RETURN_HOLD',
+        holdApprovedAt: now
+      })
+    }, { transaction });
+
+    await transaction.commit();
+
+    // 채팅방 시스템 메시지 발송
+    try {
+      const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
+      if (chatRoom && chatRoom.firebaseChatRoomId) {
+        const messageText = getSystemMessageTemplate(SystemMessageTypes.DEPOSIT_HOLD_APPROVED);
+        await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, SystemMessageTypes.DEPOSIT_HOLD_APPROVED);
+      }
+    } catch (chatErr) {
+      console.error('보류 승인 시스템 메시지 전송 실패 (무시됨):', chatErr);
+    }
+
+    // 양측 알림 발송
+    try {
+      const notifyTargets = [contract.hostId, contract.guestId];
+      for (const userId of notifyTargets) {
+        await NotificationService.sendNotification({
+          userId,
+          type: 'CONTRACT',
+          title: '보증금 보류 승인',
+          message: '관리자가 보증금 보류를 승인했습니다. 합의 절차가 시작됩니다. (기한: 10일)',
+          data: { contractId: contract.id }
+        });
+      }
+    } catch (notifyErr) {
+      console.error('보류 승인 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    return updated(res, {
+      contractId: contract.id,
+      checkoutStatus: 'HOST_PENDING',
+      depositStatus: 'RETURN_HOLD',
+      holdApprovedAt: now,
+      agreementDeadline: new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000)
+    }, '보증금 보류가 승인되었습니다. 합의 기한: 10일');
+
+  } catch (err) {
+    await transaction.rollback();
+    console.error('보증금 보류 승인 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 보증금 보류 신청 거절
+ * POST /api/admin/deposits/:contractId/reject-hold
+ * 정책 7.8.2: 거절 시 카운트다운 재개 (남은 시간 기준)
+ */
+const rejectDepositHold = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { contractId } = req.params;
+    const adminId = req.user.id;
+    const { reason } = req.body;
+
+    const contract = await Contract.findByPk(contractId, { transaction });
+
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.checkoutStatus !== 'HOLD_REQUESTED') {
+      await transaction.rollback();
+      return error(res, {
+        code: 4671,
+        message: '보류 신청 대기 상태가 아닙니다.'
+      }, 400);
+    }
+
+    // 정책 7.8.2: 거절 → GUEST_COMPLETED 복원, 카운트다운 재개
+    // 남은 시간 기준으로 새 checkoutRequestedAt 계산
+    const now = new Date();
+    let newCheckoutRequestedAt = contract.checkoutRequestedAt;
+
+    if (contract.holdRemainingMs != null && contract.holdRemainingMs > 0) {
+      // 카운트다운 재개: 현재 시점에서 남은 시간만큼 역산하여 새 기준 시점 설정
+      // autoConfirmCheckout은 checkoutRequestedAt + 48h 기준이므로
+      // 새 기준 = now - (48h - remainingMs) = now - 48h + remainingMs
+      const fortyEightHoursMs = 48 * 60 * 60 * 1000;
+      newCheckoutRequestedAt = new Date(now.getTime() - fortyEightHoursMs + contract.holdRemainingMs);
+    }
+
+    await contract.update({
+      checkoutStatus: 'GUEST_COMPLETED',
+      checkoutRequestedAt: newCheckoutRequestedAt,
+      holdRequestedAt: null,
+      holdRemainingMs: null
+    }, { transaction });
+
+    // 계약 상태 변경 로그
+    await ContractStatusLog.create({
+      contractId: contract.id,
+      fromStatus: 'COMPLETED',
+      toStatus: 'COMPLETED',
+      changedBy: adminId,
+      changedByRole: 'admin',
+      reason: reason || '관리자 보증금 보류 거절',
+      metadata: JSON.stringify({
+        type: 'DEPOSIT_HOLD_REJECTED',
+        checkoutStatusChange: 'HOLD_REQUESTED → GUEST_COMPLETED',
+        holdRemainingMs: contract.holdRemainingMs,
+        newCheckoutRequestedAt
+      })
+    }, { transaction });
+
+    await transaction.commit();
+
+    // 채팅방 시스템 메시지 발송
+    try {
+      const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
+      if (chatRoom && chatRoom.firebaseChatRoomId) {
+        const messageText = getSystemMessageTemplate(SystemMessageTypes.DEPOSIT_HOLD_REJECTED);
+        await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, SystemMessageTypes.DEPOSIT_HOLD_REJECTED);
+      }
+    } catch (chatErr) {
+      console.error('보류 거절 시스템 메시지 전송 실패 (무시됨):', chatErr);
+    }
+
+    // 양측 알림 발송
+    try {
+      const notifyTargets = [contract.hostId, contract.guestId];
+      for (const userId of notifyTargets) {
+        await NotificationService.sendNotification({
+          userId,
+          type: 'CONTRACT',
+          title: '보증금 보류 거절',
+          message: '관리자가 보증금 보류 신청을 거절했습니다. 호스트 퇴실확인 카운트다운이 재개됩니다.',
+          data: { contractId: contract.id }
+        });
+      }
+    } catch (notifyErr) {
+      console.error('보류 거절 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    return updated(res, {
+      contractId: contract.id,
+      checkoutStatus: 'GUEST_COMPLETED',
+      holdRemainingMs: contract.holdRemainingMs,
+      rejectReason: reason || null
+    }, '보증금 보류 신청이 거절되었습니다. 퇴실 확인 카운트다운이 재개됩니다.');
+
+  } catch (err) {
+    await transaction.rollback();
+    console.error('보증금 보류 거절 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 관리자 강제 보증금 반환보류
+ * POST /api/admin/deposits/:contractId/force-hold
+ * 정책 7.12: 명백한 분쟁 접수 또는 심각한 손해 위험 시 강제 보류
+ */
+const forceDepositHold = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { contractId } = req.params;
+    const adminId = req.user.id;
+    const { reason } = req.body;
+
+    if (!reason || !reason.trim()) {
+      await transaction.rollback();
+      return error(res, {
+        code: 4675,
+        message: '강제 반환보류 사유를 입력해주세요. (필수)'
+      }, 400);
+    }
+
+    const contract = await Contract.findByPk(contractId, { transaction });
+
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.status !== 'COMPLETED') {
+      await transaction.rollback();
+      return error(res, {
+        code: 4676,
+        message: '계약 완료 상태에서만 강제 반환보류가 가능합니다.'
+      }, 400);
+    }
+
+    // 이미 반환보류/차감확정/반환완료 등이면 불가
+    if (['RETURN_HOLD', 'DEDUCTION_CONFIRMED', 'RETURNED'].includes(contract.depositStatus)) {
+      await transaction.rollback();
+      return error(res, {
+        code: 4677,
+        message: `현재 보증금 상태(${contract.depositStatus})에서는 강제 보류가 불가합니다.`
+      }, 400);
+    }
+
+    const now = new Date();
+
+    // 정책 7.12: 강제 반환보류 후 일반 반환보류와 동일 절차 (합의 10일)
+    await contract.update({
+      checkoutStatus: 'HOST_PENDING',
+      depositStatus: 'RETURN_HOLD',
+      holdApprovedAt: now,
+      holdApprovedByAdminId: adminId,
+      deductionReason: `[관리자 강제 보류] ${reason.trim()}`
+    }, { transaction });
+
+    // 계약 상태 변경 로그
+    await ContractStatusLog.create({
+      contractId: contract.id,
+      fromStatus: 'COMPLETED',
+      toStatus: 'COMPLETED',
+      changedBy: adminId,
+      changedByRole: 'admin',
+      reason: `관리자 강제 반환보류: ${reason.trim()}`,
+      metadata: JSON.stringify({
+        type: 'DEPOSIT_FORCE_HELD',
+        depositStatusChange: `${contract.depositStatus} → RETURN_HOLD`,
+        holdApprovedAt: now,
+        forceHoldReason: reason.trim()
+      })
+    }, { transaction });
+
+    await transaction.commit();
+
+    // 채팅방 시스템 메시지 발송
+    try {
+      const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
+      if (chatRoom && chatRoom.firebaseChatRoomId) {
+        const messageText = getSystemMessageTemplate(SystemMessageTypes.DEPOSIT_FORCE_HELD);
+        await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, SystemMessageTypes.DEPOSIT_FORCE_HELD);
+      }
+    } catch (chatErr) {
+      console.error('강제 보류 시스템 메시지 전송 실패 (무시됨):', chatErr);
+    }
+
+    // 양측 알림 발송
+    try {
+      const notifyTargets = [contract.hostId, contract.guestId];
+      for (const userId of notifyTargets) {
+        await NotificationService.sendNotification({
+          userId,
+          type: 'CONTRACT',
+          title: '보증금 반환보류 (관리자)',
+          message: '관리자에 의해 보증금이 반환보류 처리되었습니다. 합의 절차가 시작됩니다.',
+          data: { contractId: contract.id }
+        });
+      }
+    } catch (notifyErr) {
+      console.error('강제 보류 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    return updated(res, {
+      contractId: contract.id,
+      checkoutStatus: 'HOST_PENDING',
+      depositStatus: 'RETURN_HOLD',
+      holdApprovedAt: now,
+      agreementDeadline: new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000),
+      forceHoldReason: reason.trim()
+    }, '보증금이 강제 반환보류 처리되었습니다. 합의 기한: 10일');
+
+  } catch (err) {
+    await transaction.rollback();
+    console.error('강제 반환보류 처리 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   // 대시보드
   getDashboardStats,
@@ -2301,6 +3195,9 @@ module.exports = {
   // 예약 관리
   getReservations,
   getReservationDetail,
+  adminForceCancel,
+  approveHostCancelRequest,
+  rejectHostCancelRequest,
 
   // 환불 관리
   getRefunds,
@@ -2312,6 +3209,12 @@ module.exports = {
   getRentalOrders,
   getRentalOrderDetail,
   getContractRentalHistory,
-  adminCancelRentalItem,
-  updateRentalOrderDeliveryStatus
+  adminCancelRentalOrder,
+  updateRentalOrderDeliveryStatus,
+
+  // 보증금 보류 관리
+  getPendingDepositHolds,
+  approveDepositHold,
+  rejectDepositHold,
+  forceDepositHold
 };

@@ -9,7 +9,8 @@
 const CANCEL_TYPES = {
   PAYMENT_EXPIRED: 'payment_expired',   // 결제 기간 만료
   HOST_CANCEL: 'host_cancel',           // 호스트 사유로 취소
-  GUEST_CANCEL: 'guest_cancel'          // 게스트 사유로 취소
+  GUEST_CANCEL: 'guest_cancel',         // 게스트 사유로 취소
+  ADMIN_CANCEL: 'admin_cancel'          // 관리자 강제 취소
 };
 
 /**
@@ -18,7 +19,8 @@ const CANCEL_TYPES = {
 const CANCEL_COMMENTS = {
   [CANCEL_TYPES.PAYMENT_EXPIRED]: '결제 기간이 만료되어',
   [CANCEL_TYPES.HOST_CANCEL]: '호스트의 사유로',
-  [CANCEL_TYPES.GUEST_CANCEL]: '게스트의 사유로'
+  [CANCEL_TYPES.GUEST_CANCEL]: '게스트의 사유로',
+  [CANCEL_TYPES.ADMIN_CANCEL]: '관리자에 의해'
 };
 
 /**
@@ -273,7 +275,43 @@ const NotificationMessages = {
       title: '매물 심사 반려',
       message: `${roomName}이(가) 심사에서 반려되었습니다.${reason}`
     };
-  }
+  },
+
+  // =====================================================
+  // F. 관리자 계약 관리 알림
+  // =====================================================
+
+  /**
+   * 관리자 강제 취소 - 호스트/게스트에게
+   */
+  adminForceCancel: (metadata = {}) => ({
+    title: '계약 강제 취소',
+    message: `관리자에 의해 계약이 취소되었습니다.${metadata.reason ? ` 사유: ${metadata.reason}` : ''}`
+  }),
+
+  /**
+   * 호스트 취소 요청 승인 - 호스트에게
+   */
+  hostCancelApproved: (metadata = {}) => ({
+    title: '취소 요청 승인',
+    message: '호스트님의 취소 요청이 관리자에 의해 승인되었습니다.'
+  }),
+
+  /**
+   * 호스트 취소 요청 거절 - 호스트에게
+   */
+  hostCancelRejected: (metadata = {}) => ({
+    title: '취소 요청 거절',
+    message: '호스트님의 취소 요청이 관리자에 의해 거절되었습니다.'
+  }),
+
+  /**
+   * 호스트 취소 요청 승인 - 게스트에게
+   */
+  cancelRequestApprovedGuest: (metadata = {}) => ({
+    title: '계약 취소 안내',
+    message: '관리자 승인으로 계약이 취소되었습니다. 환불 절차가 진행됩니다.'
+  })
 };
 
 module.exports = {

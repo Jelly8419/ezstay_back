@@ -132,6 +132,27 @@ router.get('/reservations', adminController.getReservations);
 // 예약 상세
 router.get('/reservations/:contractId', adminController.getReservationDetail);
 
+// 관리자 강제 취소
+router.post(
+  '/reservations/:contractId/force-cancel',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.adminForceCancel
+);
+
+// 호스트 취소 요청 승인
+router.post(
+  '/reservations/:contractId/approve-cancel-request',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.approveHostCancelRequest
+);
+
+// 호스트 취소 요청 거절
+router.post(
+  '/reservations/:contractId/reject-cancel-request',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.rejectHostCancelRequest
+);
+
 /**
  * 액션 로그 관리 (슈퍼 관리자만 접근 가능)
  */
@@ -255,11 +276,11 @@ router.get('/rental-orders/:rentalOrderId', adminController.getRentalOrderDetail
 // 계약별 렌탈 이력 조회
 router.get('/contracts/:contractId/rental-history', adminController.getContractRentalHistory);
 
-// 관리자 렌탈 아이템 취소 (super_admin, admin만 가능)
+// 관리자 렌탈 주문 전체 취소 (super_admin, admin만 가능)
 router.post(
-  '/rental-orders/:rentalOrderId/items/:itemId/cancel',
+  '/rental-orders/:rentalOrderId/cancel',
   requireAdminRole(['super_admin', 'admin']),
-  adminController.adminCancelRentalItem
+  adminController.adminCancelRentalOrder
 );
 
 // 렌탈 주문 배송 상태 변경 (super_admin, admin만 가능)
@@ -267,6 +288,34 @@ router.patch(
   '/rental-orders/:rentalOrderId/delivery-status',
   requireAdminRole(['super_admin', 'admin']),
   adminController.updateRentalOrderDeliveryStatus
+);
+
+// ============================================
+// 보증금 보류 관리
+// ============================================
+
+// 보류 신청 목록 조회
+router.get('/deposits/pending-holds', adminController.getPendingDepositHolds);
+
+// 보류 신청 승인 (super_admin, admin만 가능)
+router.post(
+  '/deposits/:contractId/approve-hold',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.approveDepositHold
+);
+
+// 보류 신청 거절 (super_admin, admin만 가능)
+router.post(
+  '/deposits/:contractId/reject-hold',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.rejectDepositHold
+);
+
+// 강제 반환보류 (super_admin, admin만 가능)
+router.post(
+  '/deposits/:contractId/force-hold',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.forceDepositHold
 );
 
 // ============================================

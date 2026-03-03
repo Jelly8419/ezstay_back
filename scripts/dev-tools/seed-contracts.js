@@ -44,6 +44,8 @@ const {
   RefundPolicyType,
   RefundPolicyRule,
   ChatRoom,
+  Settlement,
+  DepositAgreement,
 } = require('../../models');
 
 const { Op } = require('sequelize');
@@ -106,9 +108,9 @@ function getBaseDateForScenario(scenarioKey) {
 
     // 완료/취소: checkOut < 오늘
     case 'completed':
-      return daysAfter(now, -randomInt(45, 90));      // 체크아웃: 8~53일 전
+      return daysAfter(now, -38);                     // 체크아웃(baseDate+37): 어제
     case 'completed_with_full_rental':
-      return daysAfter(now, -randomInt(45, 90));      // 동일
+      return daysAfter(now, -38);                     // 동일
     case 'cancelled_with_refund':
       return daysAfter(now, -randomInt(10, 40));      // 취소는 결제 후 발생
 
@@ -1335,6 +1337,12 @@ async function cleanCommand() {
 
     const delLogs = await ContractStatusLog.destroy({ where: { contractId: { [Op.in]: contractIds } }, transaction });
     console.log(`  🗑️ ContractStatusLog ${delLogs}건 삭제`);
+
+    const delSettlements = await Settlement.destroy({ where: { contractId: { [Op.in]: contractIds } }, transaction });
+    console.log(`  🗑️ Settlement ${delSettlements}건 삭제`);
+
+    const delAgreements = await DepositAgreement.destroy({ where: { contractId: { [Op.in]: contractIds } }, transaction });
+    console.log(`  🗑️ DepositAgreement ${delAgreements}건 삭제`);
 
     const delContracts = await Contract.destroy({ where: { id: { [Op.in]: contractIds } }, transaction });
     console.log(`  🗑️ Contract ${delContracts}건 삭제`);

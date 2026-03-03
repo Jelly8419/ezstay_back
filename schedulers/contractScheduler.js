@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { Contract, ChatRoom, Room, ContractStatusLog, Settlement, sequelize } = require('../models');
+const { Contract, ChatRoom, Room, ContractStatusLog, Settlement, DepositAgreement, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
@@ -110,8 +110,11 @@ async function updateApprovalExpired() {
 /**
  * 2. 미결제 만료 처리
  * - APPROVED 상태인 계약 중
- * - 승인일로부터 24시간 경과 또는 입실날짜 당일이 끝난 경우 (익일 0시 이후)
+ * - 승인일로부터 24시간 경과 또는 입주일 입실시간(Room.checkInTime)이 도래한 경우
  * -> PAYMENT_EXPIRED 상태로 변경
+ *
+ * 정책 3.14.2: "결제 만료 시간 = 호스트 승인 시점 + 24h
+ *   단, 승인 시점이 입주일 또는 다음날 입주일인 경우, 입주일 입실 시간에 자동 마감 처리"
  */
 async function updatePaymentExpired() {
   const transaction = await sequelize.transaction();
@@ -120,22 +123,18 @@ async function updatePaymentExpired() {
     const now = new Date();
     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000); // 24시간 전
 
-    // 입실날짜 당일 23:59:59까지는 만료 안 됨
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // 오늘 0시
-
-    // 먼저 만료될 계약들을 조회 (시스템 메시지 발송용 + 로그 기록용)
-    const expiredContracts = await Contract.findAll({
+    // Room JOIN으로 checkInTime 포함하여 APPROVED 계약 조회
+    const approvedContracts = await Contract.findAll({
       where: {
-        status: 'APPROVED',
-        [Op.or]: [
-          // 승인일로부터 24시간 경과
-          { approvedAt: { [Op.lte]: oneDayAgo } },
-          // 입실날짜가 오늘보다 이전 (어제 이전)
-          { checkInDate: { [Op.lt]: todayStart } }
-        ]
+        status: 'APPROVED'
       },
       attributes: ['id', 'approvedAt', 'checkInDate', 'hostId', 'guestId', 'roomId'],
       include: [
+        {
+          model: Room,
+          as: 'room',
+          attributes: ['id', 'checkInTime']
+        },
         {
           model: ChatRoom,
           as: 'chatRoom',
@@ -145,23 +144,40 @@ async function updatePaymentExpired() {
       transaction
     });
 
-    // 계약 상태 업데이트
-    const result = await Contract.update(
-      {
-        status: 'PAYMENT_EXPIRED',
-        updatedAt: now
-      },
-      {
-        where: {
-          status: 'APPROVED',
-          [Op.or]: [
-            { approvedAt: { [Op.lte]: oneDayAgo } },
-            { checkInDate: { [Op.lt]: todayStart } }
-          ]
-        },
-        transaction
+    // 각 계약별로 만료 여부 판단 (Room별 checkInTime이 다르므로 JS 필터)
+    const expiredContracts = approvedContracts.filter(contract => {
+      // 1) 승인일로부터 24시간 경과
+      if (contract.approvedAt && contract.approvedAt <= oneDayAgo) return true;
+
+      // 2) 입주일 입실시간 도래
+      if (contract.checkInDate && contract.room) {
+        const checkInTime = contract.room.checkInTime || 15; // 기본값 15시
+        const checkInDate = new Date(contract.checkInDate);
+        const checkInDateTime = new Date(
+          checkInDate.getFullYear(),
+          checkInDate.getMonth(),
+          checkInDate.getDate(),
+          checkInTime, 0, 0
+        );
+        if (now >= checkInDateTime) return true;
       }
-    );
+      return false;
+    });
+
+    // 필터된 계약들만 상태 업데이트
+    if (expiredContracts.length > 0) {
+      const expiredIds = expiredContracts.map(c => c.id);
+      await Contract.update(
+        {
+          status: 'PAYMENT_EXPIRED',
+          updatedAt: now
+        },
+        {
+          where: { id: { [Op.in]: expiredIds } },
+          transaction
+        }
+      );
+    }
 
     // 각 계약별 로그 기록
     for (const contract of expiredContracts) {
@@ -177,11 +193,12 @@ async function updatePaymentExpired() {
         changedByUserId: null,
         reason: isPaymentTimeExpired
           ? '결제 기한 만료 (24시간 경과)'
-          : '입실일 당일 종료로 인한 자동 만료',
+          : '입주일 입실시간 도래로 인한 자동 만료',
         metadata: {
-          expirationRule: isPaymentTimeExpired ? '24H_TIMEOUT' : 'CHECKIN_DATE_PASSED',
+          expirationRule: isPaymentTimeExpired ? '24H_TIMEOUT' : 'CHECKIN_TIME_REACHED',
           approvedAt: contract.approvedAt,
           checkInDate: contract.checkInDate,
+          roomCheckInTime: contract.room ? contract.room.checkInTime : null,
           hoursSinceApproval,
           expiredAt: now
         },
@@ -215,11 +232,11 @@ async function updatePaymentExpired() {
       }
     }
 
-    if (result[0] > 0) {
-      console.log(`[스케줄러] ${result[0]}건의 계약을 미결제 만료 처리했습니다.`);
+    if (expiredContracts.length > 0) {
+      console.log(`[스케줄러] ${expiredContracts.length}건의 계약을 미결제 만료 처리했습니다.`);
     }
 
-    return result[0];
+    return expiredContracts.length;
   } catch (error) {
     await transaction.rollback();
     console.error('[스케줄러] 미결제 만료 처리 오류:', error);
@@ -367,14 +384,13 @@ async function updateInProgress() {
  * 4. 계약종료 처리 (퇴실시간 경과 시 자동 완료)
  * - IN_PROGRESS 상태인 계약 중
  * - 퇴실날짜 + 방의 퇴실시간(checkOutTime)이 지난 경우
- * - 게스트가 퇴실 요청을 하지 않았더라도 자동 완료 (안전장치)
- * -> COMPLETED 상태로 변경
+ * -> COMPLETED 상태로 변경 (상태만 전환, 퇴실/보증금 처리는 별도 진행)
  *
  * 정책: 퇴실 시간은 방별로 8~11시 중 호스트가 설정
  * 예: checkOutDate=2025-11-06, checkOutTime=11 → 2025-11-06 11:00:00 이후 COMPLETED
  *
- * 참고: 정상 퇴실 프로세스는 게스트 퇴실요청 → 호스트 확인 (또는 48시간 자동확정)
- *       이 스케줄러는 퇴실시간이 지났는데 아직 완료 안 된 계약에 대한 자동 처리
+ * 참고: COMPLETED 전환 후 퇴실 프로세스가 시작됨
+ *       게스트 퇴실요청(48h 자동) → 호스트 퇴실확인(48h 자동) → 보증금 반환
  */
 async function updateCompleted() {
   const transaction = await sequelize.transaction();
@@ -387,7 +403,7 @@ async function updateCompleted() {
       where: {
         status: 'IN_PROGRESS'
       },
-      attributes: ['id', 'checkInDate', 'checkOutDate', 'totalDays', 'roomId', 'checkoutRequested', 'deposit'],
+      attributes: ['id', 'checkInDate', 'checkOutDate', 'totalDays', 'roomId'],
       include: [
         {
           model: Room,
@@ -411,7 +427,7 @@ async function updateCompleted() {
       return now >= exactCheckOutDatetime;
     });
 
-    // 각 계약별 상태 업데이트 및 로그 기록
+    // 각 계약별 상태 업데이트 및 로그 기록 (상태만 COMPLETED로 전환)
     for (const contract of eligibleContracts) {
       const checkOutTime = contract.room ? contract.room.checkOutTime : 11;
 
@@ -419,16 +435,6 @@ async function updateCompleted() {
         {
           status: 'COMPLETED',
           checkedOutAt: now,
-          // 게스트가 퇴실 요청하지 않았으면 자동으로 요청 처리
-          checkoutRequested: true,
-          checkoutRequestedAt: contract.checkoutRequested ? undefined : now,
-          // 호스트 확인도 자동 처리
-          hostCheckedOut: true,
-          hostCheckedOutAt: now,
-          // 보증금 전액 반환 (차감 없음 - 자동 퇴실이므로)
-          depositDeduction: 0,
-          refundableDeposit: contract.deposit || 0,
-          depositStatus: 'RETURN_PENDING',
           updatedAt: now
         },
         {
@@ -443,15 +449,13 @@ async function updateCompleted() {
         toStatus: 'COMPLETED',
         changedBy: 'SYSTEM',
         changedByUserId: null,
-        reason: '퇴실 시간이 도래하여 자동으로 계약 완료 처리',
+        reason: '퇴실 시간 도래로 계약 완료 (퇴실/보증금 처리는 별도 진행)',
         metadata: {
           checkInDate: contract.checkInDate,
           scheduledCheckOutDate: contract.checkOutDate,
           roomCheckOutTime: checkOutTime,
           actualCheckOutAt: now,
-          totalDays: contract.totalDays,
-          autoCompleted: true,
-          hadCheckoutRequest: contract.checkoutRequested
+          totalDays: contract.totalDays
         },
         transaction
       });
@@ -472,11 +476,11 @@ async function updateCompleted() {
 }
 
 /**
- * 5. 퇴실 요청 48시간 자동확정
- * - IN_PROGRESS 상태인 계약 중
- * - 게스트가 퇴실 요청(checkoutRequested=true)한 후
- * - 48시간 경과 && 호스트가 아직 확인하지 않은 경우(hostCheckedOut=false)
- * -> 자동으로 퇴실 확정 (COMPLETED 상태로 변경, 보증금 전액 반환)
+ * 6. 퇴실 요청 48시간 자동확정
+ * - COMPLETED 상태인 계약 중
+ * - checkoutStatus=GUEST_COMPLETED (게스트 퇴실 요청 완료)
+ * - checkoutRequestedAt + 48시간 경과 && 호스트 미확인
+ * -> 자동으로 퇴실 확정 (보증금 전액 반환)
  *
  * 정책: 호스트가 48시간 내 퇴실 확인 안 하면 자동 확정
  */
@@ -487,12 +491,11 @@ async function autoConfirmCheckout() {
     const now = new Date();
     const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
 
-    // 48시간 경과한 퇴실 요청 조회
+    // COMPLETED + GUEST_COMPLETED + 48시간 경과 계약 조회
     const pendingCheckouts = await Contract.findAll({
       where: {
-        status: 'IN_PROGRESS',
-        checkoutRequested: true,
-        hostCheckedOut: false,
+        status: 'COMPLETED',
+        checkoutStatus: 'GUEST_COMPLETED',
         checkoutRequestedAt: { [Op.lte]: fortyEightHoursAgo }
       },
       attributes: ['id', 'checkInDate', 'checkOutDate', 'checkoutRequestedAt', 'deposit', 'hostId', 'guestId', 'roomId'],
@@ -514,13 +517,12 @@ async function autoConfirmCheckout() {
 
       await Contract.update(
         {
-          status: 'COMPLETED',
-          checkedOutAt: now,
           hostCheckedOut: true,
           hostCheckedOutAt: now,
           depositDeduction: 0,
           refundableDeposit: contract.deposit || 0,
           depositStatus: 'RETURN_PENDING',
+          checkoutStatus: 'HOST_CONFIRMED',
           updatedAt: now
         },
         {
@@ -531,7 +533,7 @@ async function autoConfirmCheckout() {
 
       await ContractStatusLog.createLog({
         contractId: contract.id,
-        fromStatus: 'IN_PROGRESS',
+        fromStatus: 'COMPLETED',
         toStatus: 'COMPLETED',
         changedBy: 'SYSTEM',
         changedByUserId: null,
@@ -583,7 +585,7 @@ async function autoConfirmCheckout() {
 }
 
 /**
- * 6. 정산 상태 자동 업데이트
+ * 8. 정산 상태 자동 업데이트
  * - PENDING 상태인 Settlement 중
  * - expectedDate가 오늘이거나 지난 경우
  * -> READY 상태로 변경 (토스 서브몰 정산 가능)
@@ -626,7 +628,110 @@ async function updateSettlementReady() {
 }
 
 /**
- * 7. 보증금 자동 반환 처리
+ * 5. COMPLETED+48h 자동 퇴실요청 전환
+ * - COMPLETED 상태인 계약 중
+ * - 게스트가 퇴실 요청하지 않았고 (checkoutStatus=NOT_STARTED)
+ * - checkedOutAt + 48시간이 경과한 경우
+ * -> checkoutRequested=true, checkoutStatus='GUEST_COMPLETED'로 자동 전환
+ *
+ * 정책: COMPLETED 전환 후 48시간 동안 게스트 퇴실 요청이 없으면 자동 퇴실요청 처리
+ *       이후 호스트 퇴실 확인 대기 (48시간 미확인 시 autoConfirmCheckout에서 자동 확정)
+ */
+async function autoRequestCheckout() {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const now = new Date();
+    const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+
+    // COMPLETED + 퇴실 미요청 + checkedOutAt+48h 경과 계약 조회
+    const contracts = await Contract.findAll({
+      where: {
+        status: 'COMPLETED',
+        checkoutRequested: false,
+        checkoutStatus: 'NOT_STARTED',
+        checkedOutAt: { [Op.lte]: fortyEightHoursAgo }
+      },
+      attributes: ['id', 'checkOutDate', 'checkedOutAt', 'hostId', 'guestId'],
+      include: [
+        {
+          model: ChatRoom,
+          as: 'chatRoom',
+          attributes: ['firebaseChatRoomId']
+        }
+      ],
+      transaction
+    });
+
+    // 각 계약별 자동 퇴실요청 처리
+    for (const contract of contracts) {
+      await Contract.update(
+        {
+          checkoutRequested: true,
+          checkoutRequestedAt: now,
+          checkoutStatus: 'GUEST_COMPLETED',
+          updatedAt: now
+        },
+        {
+          where: { id: contract.id },
+          transaction
+        }
+      );
+
+      await ContractStatusLog.createLog({
+        contractId: contract.id,
+        fromStatus: 'COMPLETED',
+        toStatus: 'COMPLETED',
+        changedBy: 'SYSTEM',
+        changedByUserId: null,
+        reason: '계약 완료 후 48시간 동안 게스트 퇴실 요청이 없어 자동 퇴실요청 처리',
+        metadata: {
+          checkedOutAt: contract.checkedOutAt,
+          autoRequestedAt: now,
+          checkoutStatus: 'GUEST_COMPLETED'
+        },
+        transaction
+      });
+    }
+
+    await transaction.commit();
+
+    // 알림 발송 (트랜잭션 외부에서 비동기 실행)
+    if (contracts.length > 0) {
+      for (const contract of contracts) {
+        // 채팅 시스템 메시지
+        if (contract.chatRoom) {
+          sendSystemMessage(
+            contract.chatRoom.firebaseChatRoomId,
+            getSystemMessageTemplate(SystemMessageTypes.CHECKOUT_AUTO_REQUESTED),
+            SystemMessageTypes.CHECKOUT_AUTO_REQUESTED,
+            { contractId: contract.id }
+          ).catch(err => {
+            console.error(`자동 퇴실요청 시스템 메시지 발송 실패 (계약 ID: ${contract.id}):`, err);
+          });
+        }
+
+        // 호스트에게 알림 발송
+        try {
+          await NotificationService.notifyCheckoutRequest(contract);
+        } catch (notifyErr) {
+          console.error(`자동 퇴실요청 알림 발송 실패 (계약 ID: ${contract.id}):`, notifyErr);
+        }
+      }
+
+      console.log(`[스케줄러] ${contracts.length}건의 계약을 COMPLETED+48h 자동 퇴실요청 처리했습니다.`);
+    }
+
+    return contracts.length;
+  } catch (error) {
+    await transaction.rollback();
+    console.error('[스케줄러] COMPLETED+48h 자동 퇴실요청 오류:', error);
+    return 0;
+  }
+}
+
+/**
+ * 9. 보증금 자동 반환 처리
  * - COMPLETED 상태인 계약 중
  * - depositStatus가 RETURN_PENDING인 경우
  * - 해당 계약의 Settlement가 READY 이상인 경우 (정산 예정일 도래)
@@ -641,11 +746,13 @@ async function autoReturnDeposit() {
   try {
     const now = new Date();
 
-    // RETURN_PENDING 상태인 계약 중 Settlement가 READY 이상인 건 조회
+    // RETURN_PENDING 또는 RETURN_CONFIRMED 상태인 계약 중 Settlement가 READY 이상인 건 조회
+    // RETURN_HOLD(합의 진행중), DEDUCTION_CONFIRMED(차감확정) 상태는 제외
     const pendingDeposits = await Contract.findAll({
       where: {
         status: 'COMPLETED',
-        depositStatus: 'RETURN_PENDING'
+        depositStatus: { [Op.in]: ['RETURN_PENDING', 'RETURN_CONFIRMED'] },
+        checkoutStatus: { [Op.notIn]: ['HOST_PENDING', 'HOLD_REQUESTED'] }
       },
       attributes: ['id', 'deposit', 'refundableDeposit'],
       include: [
@@ -690,6 +797,125 @@ async function autoReturnDeposit() {
 }
 
 /**
+ * 7. 퇴실 보류 10일 데드라인 초과 시 보증금 전액 자동반환
+ * - COMPLETED 상태인 계약 중
+ * - checkoutStatus가 HOST_PENDING인 경우
+ * - checkoutRequestedAt + 10일이 경과한 경우
+ * -> 보증금 전액 게스트 반환
+ *
+ * 정책: 퇴실 보류 후 10일 내 합의가 완료되지 않으면 보증금 전액 자동반환
+ */
+async function autoReturnDepositOnDeadline() {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const now = new Date();
+    const tenDaysAgo = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000);
+
+    // 정책 7.9.1: 합의 데드라인 = 관리자 보류 승인 시점(holdApprovedAt) + 10일
+    // RETURN_HOLD 상태 + holdApprovedAt 기준 10일 경과 계약 조회
+    const overdueContracts = await Contract.findAll({
+      where: {
+        status: 'COMPLETED',
+        checkoutStatus: 'HOST_PENDING',
+        depositStatus: 'RETURN_HOLD',
+        holdApprovedAt: { [Op.lte]: tenDaysAgo }
+      },
+      attributes: ['id', 'deposit', 'holdApprovedAt', 'checkoutStatus', 'hostId', 'guestId', 'roomId'],
+      include: [
+        {
+          model: ChatRoom,
+          as: 'chatRoom',
+          attributes: ['firebaseChatRoomId']
+        }
+      ],
+      transaction
+    });
+
+    for (const contract of overdueContracts) {
+      // 정책 7.9.3 조건 B: 데드라인 종료 → 게스트에게 전액 반환확정
+      await Contract.update(
+        {
+          hostCheckedOut: true,
+          hostCheckedOutAt: now,
+          checkoutStatus: 'HOST_CONFIRMED',
+          depositDeduction: 0,
+          refundableDeposit: contract.deposit || 0,
+          depositStatus: 'RETURN_CONFIRMED',
+          updatedAt: now
+        },
+        {
+          where: { id: contract.id },
+          transaction
+        }
+      );
+
+      // DepositAgreement가 있으면 AUTO_RETURNED로 변경
+      await DepositAgreement.update(
+        {
+          status: 'AUTO_RETURNED',
+          updatedAt: now
+        },
+        {
+          where: { contractId: contract.id },
+          transaction
+        }
+      );
+
+      await ContractStatusLog.createLog({
+        contractId: contract.id,
+        fromStatus: 'COMPLETED',
+        toStatus: 'COMPLETED',
+        changedBy: 'SYSTEM',
+        changedByUserId: null,
+        reason: '합의 데드라인(보류 승인 후 10일) 경과로 보증금 전액 게스트 반환확정',
+        metadata: {
+          holdApprovedAt: contract.holdApprovedAt,
+          previousCheckoutStatus: contract.checkoutStatus,
+          deadlineExceededAt: now,
+          depositFullRefund: contract.deposit || 0
+        },
+        transaction
+      });
+    }
+
+    await transaction.commit();
+
+    // 알림 발송 (트랜잭션 외부에서 비동기 실행)
+    if (overdueContracts.length > 0) {
+      for (const contract of overdueContracts) {
+        // 채팅 시스템 메시지
+        if (contract.chatRoom) {
+          sendSystemMessage(
+            contract.chatRoom.firebaseChatRoomId,
+            getSystemMessageTemplate(SystemMessageTypes.DEPOSIT_AUTO_RETURNED),
+            SystemMessageTypes.DEPOSIT_AUTO_RETURNED,
+            { contractId: contract.id }
+          ).catch(err => {
+            console.error(`합의 데드라인 자동반환확정 시스템 메시지 발송 실패 (계약 ID: ${contract.id}):`, err);
+          });
+        }
+
+        // 양측 알림 발송
+        try {
+          await NotificationService.notifyCheckoutConfirmed(contract);
+        } catch (notifyErr) {
+          console.error(`합의 데드라인 자동반환확정 알림 발송 실패 (계약 ID: ${contract.id}):`, notifyErr);
+        }
+      }
+
+      console.log(`[스케줄러] ${overdueContracts.length}건의 계약을 합의 데드라인 초과로 보증금 전액 반환확정 처리했습니다.`);
+    }
+
+    return overdueContracts.length;
+  } catch (error) {
+    await transaction.rollback();
+    console.error('[스케줄러] 합의 데드라인 보증금 자동반환확정 오류:', error);
+    return 0;
+  }
+}
+
+/**
  * 모든 계약 상태 업데이트 실행
  */
 async function runContractStatusUpdate() {
@@ -697,13 +923,15 @@ async function runContractStatusUpdate() {
 
   try {
     // 순차적으로 실행 (상태 변경이 순서대로 이루어져야 함)
-    await updateApprovalExpired();  // 1. 미승인 만료
-    await updatePaymentExpired();   // 2. 미결제 만료
-    await updateInProgress();       // 3. 임대중 (+ Settlement 자동 생성)
-    await autoConfirmCheckout();    // 4. 48시간 자동 퇴실확정
-    await updateCompleted();        // 5. 퇴실시간 경과 시 자동 완료
-    await updateSettlementReady();  // 6. 정산 예정일 도래 시 READY 상태 변경
-    await autoReturnDeposit();      // 7. 정산 READY 후 보증금 자동 반환
+    await updateApprovalExpired();        // 1. 미승인 만료
+    await updatePaymentExpired();         // 2. 미결제 만료
+    await updateInProgress();             // 3. 임대중 (+ Settlement 자동 생성)
+    await updateCompleted();              // 4. 퇴실시간 경과 → COMPLETED (상태만 전환)
+    await autoRequestCheckout();          // 5. COMPLETED+48h 자동 퇴실요청
+    await autoConfirmCheckout();          // 6. 퇴실요청 후 48시간 자동 퇴실확정
+    await autoReturnDepositOnDeadline();  // 7. 퇴실 보류 10일 데드라인 자동반환
+    await updateSettlementReady();        // 8. 정산 예정일 도래 시 READY 상태 변경
+    await autoReturnDeposit();            // 9. 정산 READY 후 보증금 자동 반환
 
     console.log('[스케줄러] 계약 상태 자동 업데이트 완료:', new Date().toISOString());
   } catch (error) {
@@ -714,14 +942,16 @@ async function runContractStatusUpdate() {
 /**
  * 스케줄러 시작
  *
- * 모든 상태 업데이트를 매 10분마다 실행
- * - 미승인 만료: 72시간 경과 OR 입실날짜 다음날
- * - 미결제 만료: 24시간 경과 OR 입실날짜 다음날
- * - 임대중: 입실날짜 + 방 입실시간 경과 (+ Settlement 자동 생성)
- * - 48시간 자동 퇴실확정: 게스트 퇴실요청 후 48시간 경과
- * - 계약종료: 퇴실날짜 + 방 퇴실시간 경과
- * - 정산 READY: 정산 예정일(입주일+3영업일) 도래 시 PENDING→READY
- * - 보증금 반환: 정산 READY 후 RETURN_PENDING→RETURNED
+ * 모든 상태 업데이트를 매 10분마다 실행 (9단계)
+ * 1. 미승인 만료: 72시간 경과 OR 입실날짜 다음날
+ * 2. 미결제 만료: 24시간 경과 OR 입실날짜 다음날
+ * 3. 임대중: 입실날짜 + 방 입실시간 경과 (+ Settlement 자동 생성)
+ * 4. 계약완료: 퇴실날짜 + 방 퇴실시간 경과 → COMPLETED (상태만 전환)
+ * 5. 자동 퇴실요청: COMPLETED + checkedOutAt+48h 경과 시 자동 퇴실요청
+ * 6. 자동 퇴실확정: 퇴실요청 후 호스트 48시간 미확인 시 자동 확정 + 보증금 전액 반환
+ * 7. 10일 데드라인: 퇴실 보류 후 10일 경과 시 보증금 전액 자동반환
+ * 8. 정산 READY: 정산 예정일(입주일+3영업일) 도래 시 PENDING→READY
+ * 9. 보증금 반환: 정산 READY 후 RETURN_PENDING→RETURNED (HOST_PENDING 제외)
  */
 function startContractScheduler() {
   // 모든 상태 업데이트를 매 10분마다 실행
@@ -739,8 +969,10 @@ module.exports = {
   updateApprovalExpired,
   updatePaymentExpired,
   updateInProgress,
+  autoRequestCheckout,
   autoConfirmCheckout,
   updateCompleted,
+  autoReturnDepositOnDeadline,
   updateSettlementReady,
   autoReturnDeposit
 };

@@ -37,6 +37,8 @@ const RentalOrderLog = require('./RentalOrderLog');
 const RentalPaymentModel = require('./RentalPayment');
 const RentalPaymentFailureLogModel = require('./RentalPaymentFailureLog');
 const Settlement = require('./Settlement');
+const DepositAgreement = require('./DepositAgreement');
+const GuestRefundAccount = require('./GuestRefundAccount');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -484,6 +486,16 @@ Admin.hasMany(Contract, {
   as: 'cancelledContracts'
 });
 
+// 보증금 보류 승인 관리자
+Contract.belongsTo(Admin, {
+  foreignKey: 'holdApprovedByAdminId',
+  as: 'holdApprovedByAdmin'
+});
+Admin.hasMany(Contract, {
+  foreignKey: 'holdApprovedByAdminId',
+  as: 'holdApprovedContracts'
+});
+
 // Refund와 RefundPolicyType 관계 설정
 Refund.belongsTo(RefundPolicyType, {
   foreignKey: 'policyTypeUsed',
@@ -695,6 +707,38 @@ Settlement.belongsTo(User, {
 });
 
 // =====================================================
+// DepositAgreement 관계 설정 (보증금 합의)
+// =====================================================
+Contract.hasOne(DepositAgreement, {
+  foreignKey: 'contractId',
+  as: 'depositAgreement',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+DepositAgreement.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// =====================================================
+// GuestRefundAccount 관계 설정 (게스트 환급 계좌)
+// =====================================================
+User.hasOne(GuestRefundAccount, {
+  foreignKey: 'userId',
+  as: 'refundAccount',
+  onDelete: 'NO ACTION', // 금융 정보 보존
+  onUpdate: 'CASCADE'
+});
+GuestRefundAccount.belongsTo(User, {
+  foreignKey: 'userId',
+  as: 'user',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// =====================================================
 // Notification 관계 설정 (사용자 알림)
 // =====================================================
 
@@ -753,5 +797,7 @@ module.exports = {
   RentalOrderLog,
   RentalPayment,
   RentalPaymentFailureLog,
-  Settlement
+  Settlement,
+  DepositAgreement,
+  GuestRefundAccount
 };

@@ -7,7 +7,7 @@ const {
   getRentalOrderPaymentInfo,
   confirmRentalPayment,
   cancelRentalOrder,
-  cancelRentalItem,
+  cancelPaidRentalOrderByGuest,
   getAvailableRentalItems
 } = require('../controllers/rentalOrderController');
 
@@ -108,17 +108,17 @@ router.delete(
 );
 
 /**
- * 렌탈 아이템 취소 (환불)
- * POST /api/rental-orders/:rentalOrderId/items/:itemId/cancel
+ * 결제 완료된 렌탈 주문 취소 (환불)
+ * POST /api/rental-orders/:rentalOrderId/cancel
  *
- * @description 결제 완료된 렌탈 아이템 개별 취소 및 환불
+ * @description 결제 완료된 렌탈 주문 전체 취소 및 환불 (주문 단위)
  * @access 게스트
  * @body { reason?: string }
  */
 router.post(
-  '/rental-orders/:rentalOrderId/items/:itemId/cancel',
+  '/rental-orders/:rentalOrderId/cancel',
   authenticateToken,
-  cancelRentalItem
+  cancelPaidRentalOrderByGuest
 );
 
 module.exports = router;

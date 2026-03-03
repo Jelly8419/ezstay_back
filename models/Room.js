@@ -173,7 +173,15 @@ const Room = sequelize.define('Room', {
   cleaningFee: {
     type: DataTypes.INTEGER,
     allowNull: true,
-    comment: '청소비 (1회)'
+    comment: '청소비 (1회)',
+    validate: {
+      min: 0,
+      isMultipleOf1000(value) {
+        if (value && value % 1000 !== 0) {
+          throw new Error('청소비는 1,000원 단위로만 입력 가능합니다.');
+        }
+      }
+    }
   },
   minContractDays: {
     type: DataTypes.INTEGER,

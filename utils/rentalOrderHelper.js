@@ -17,6 +17,8 @@ const {
 
 // 상수 정의
 const RENTAL_MODIFIABLE_DAYS_BEFORE = 5; // 입주 5일 전까지 수정 가능
+const RENTAL_ROUND_TRIP_SHIPPING_COST = 7000; // 왕복배송비 (원)
+const RENTAL_CANCEL_REQUEST_DAYS = 7; // 입주 중 취소 요청 가능 기간 (일, 7*24h)
 
 // 렌탈 추가/수정이 가능한 계약 상태
 // 주의: 결제 전(PENDING_APPROVAL, APPROVED)에는 contracts.rentalItems JSON을 직접 수정하는 별도 API 사용
@@ -603,16 +605,56 @@ async function confirmRentalOrderPayment(rentalOrder, paymentKey, paymentMethod,
  * @param {Transaction} transaction - Sequelize 트랜잭션
  * @returns {Promise<Object>} 환불 정보
  */
-async function cancelRentalOrderItem(orderItem, rentalOrder, reason, actorId, actor, req, transaction) {
-  if (orderItem.status !== 'ACTIVE') {
-    throw new Error('이미 취소된 아이템입니다');
-  }
-
+/**
+ * 결제된 렌탈 주문 전체 취소 (주문번호 단위)
+ * - 정책: 취소는 주문번호별로만 가능 (아이템 개별 취소 불가)
+ * - 배송 상태에 따라 왕복배송비 차감
+ *
+ * @param {RentalOrder} rentalOrder - 렌탈 주문 객체 (items include 필요)
+ * @param {string} reason - 취소 사유
+ * @param {number} actorId - 행위자 ID
+ * @param {string} actor - 행위자 유형 (GUEST, ADMIN)
+ * @param {Object} req - Request 객체
+ * @param {Transaction} transaction - Sequelize 트랜잭션
+ * @returns {Promise<Object>} 환불 정보
+ */
+async function cancelPaidRentalOrder(rentalOrder, reason, actorId, actor, req, transaction) {
   if (!['PAID', 'PARTIAL_REFUND'].includes(rentalOrder.status)) {
     throw new Error('결제된 주문만 환불할 수 있습니다');
   }
 
-  const refundAmount = parseFloat(orderItem.totalPrice);
+  // 활성 아이템 조회
+  const activeItems = await RentalOrderItem.findAll({
+    where: {
+      rentalOrderId: rentalOrder.id,
+      status: 'ACTIVE'
+    },
+    include: [{ model: RentalItem, as: 'rentalItem' }],
+    transaction
+  });
+
+  if (activeItems.length === 0) {
+    throw new Error('취소할 활성 아이템이 없습니다');
+  }
+
+  // 주문 총액 계산
+  const orderTotalPrice = activeItems.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
+
+  // 배송 상태별 환불 금액 결정
+  let refundAmount = orderTotalPrice;
+  let shippingDeduction = 0;
+
+  if (rentalOrder.deliveryStatus === 'DELIVERED') {
+    throw new Error('배송 완료된 주문은 환불할 수 없습니다');
+  }
+
+  if (rentalOrder.deliveryStatus === 'IN_TRANSIT') {
+    shippingDeduction = RENTAL_ROUND_TRIP_SHIPPING_COST;
+    refundAmount = orderTotalPrice - shippingDeduction;
+    if (refundAmount <= 0) {
+      throw new Error(`환불 금액(${orderTotalPrice}원)이 왕복배송비(${RENTAL_ROUND_TRIP_SHIPPING_COST}원) 이하이므로 환불할 수 없습니다`);
+    }
+  }
 
   // 토스페이먼츠 환불 API 호출
   const rentalPayment = await RentalPayment.findOne({
@@ -636,7 +678,7 @@ async function cancelRentalOrderItem(orderItem, rentalOrder, reason, actorId, ac
     const tossResponse = await axios.post(
       `https://api.tosspayments.com/v1/payments/${rentalPayment.paymentKey}/cancel`,
       {
-        cancelReason: reason || '렌탈 아이템 취소',
+        cancelReason: reason || '렌탈 주문 취소',
         cancelAmount: refundAmount
       },
       {
@@ -664,36 +706,30 @@ async function cancelRentalOrderItem(orderItem, rentalOrder, reason, actorId, ac
     throw new Error(`환불 처리 실패: ${tossError.response?.data?.message || tossError.message}`);
   }
 
-  // RentalOrderItem 취소
-  await orderItem.update({
-    status: 'CANCELLED',
-    cancelledAt: new Date(),
-    cancelReason: reason,
-    refundAmount
-  }, { transaction });
+  // 모든 활성 RentalOrderItem 취소
+  const cancelledAt = new Date();
+  for (const item of activeItems) {
+    await item.update({
+      status: 'CANCELLED',
+      cancelledAt,
+      cancelReason: reason,
+      refundAmount: parseFloat(item.totalPrice)
+    }, { transaction });
+  }
 
-  // RentalOrder 환불 금액 업데이트
-  const newRefundedAmount = rentalOrder.refundedAmount + refundAmount;
-  const allItemsCancelled = await RentalOrderItem.count({
-    where: {
-      rentalOrderId: rentalOrder.id,
-      status: 'ACTIVE'
-    },
-    transaction
-  }) === 0;
-
+  // RentalOrder 상태 업데이트
   await rentalOrder.update({
-    refundedAmount: newRefundedAmount,
-    status: allItemsCancelled ? 'FULLY_REFUNDED' : 'PARTIAL_REFUND'
+    refundedAmount: parseFloat(rentalOrder.refundedAmount || 0) + refundAmount,
+    status: 'FULLY_REFUNDED'
   }, { transaction });
 
-  // RentalItemReservation 취소
+  // 해당 주문의 모든 RentalItemReservation 취소
   await RentalItemReservation.update(
     { status: 'CANCELLED' },
     {
       where: {
         rentalOrderId: rentalOrder.id,
-        rentalItemId: orderItem.rentalItemId
+        status: { [Op.ne]: 'CANCELLED' }
       },
       transaction
     }
@@ -706,28 +742,40 @@ async function cancelRentalOrderItem(orderItem, rentalOrder, reason, actorId, ac
   await logRentalAction({
     contractId: rentalOrder.contractId,
     rentalOrderId: rentalOrder.id,
-    rentalOrderItemId: orderItem.id,
-    action: 'ITEM_CANCELLED',
+    rentalOrderItemId: null,
+    action: 'ORDER_CANCELLED',
     actor,
     actorId,
     amountChange: -refundAmount,
     balanceAfter: summary.netAmount,
     metadata: {
-      itemId: orderItem.rentalItemId,
-      itemName: orderItem.rentalItem?.name || '알 수 없음',
-      quantity: orderItem.quantity,
+      orderId: rentalOrder.orderId,
+      itemCount: activeItems.length,
+      items: activeItems.map(item => ({
+        itemId: item.rentalItemId,
+        itemName: item.rentalItem?.name || '알 수 없음',
+        quantity: item.quantity,
+        price: parseFloat(item.totalPrice)
+      })),
+      orderTotalPrice,
       refundAmount,
+      shippingDeduction,
+      deliveryStatus: rentalOrder.deliveryStatus,
       reason,
       paymentKey: rentalPayment.paymentKey
     },
-    description: `아이템 취소 및 환불: ${reason || '사유 없음'}`,
+    description: shippingDeduction > 0
+      ? `주문 전체 취소 및 환불 (배송비 ${shippingDeduction}원 차감): ${reason || '사유 없음'}`
+      : `주문 전체 취소 및 환불: ${reason || '사유 없음'}`,
     req
   }, transaction);
 
   return {
-    itemId: orderItem.id,
+    orderId: rentalOrder.orderId,
     refundAmount,
-    orderStatus: allItemsCancelled ? 'FULLY_REFUNDED' : 'PARTIAL_REFUND'
+    shippingDeduction,
+    cancelledItemCount: activeItems.length,
+    orderStatus: 'FULLY_REFUNDED'
   };
 }
 
@@ -788,6 +836,8 @@ async function cancelPendingRentalOrder(rentalOrder, actorId, req, transaction) 
 module.exports = {
   // 상수
   RENTAL_MODIFIABLE_DAYS_BEFORE,
+  RENTAL_ROUND_TRIP_SHIPPING_COST,
+  RENTAL_CANCEL_REQUEST_DAYS,
   RENTAL_MODIFIABLE_STATUSES,
   RENTAL_REFUNDABLE_STATUSES,
 
@@ -807,7 +857,7 @@ module.exports = {
   createInitialRentalOrder,
   createAdditionalRentalOrder,
   confirmRentalOrderPayment,
-  cancelRentalOrderItem,
+  cancelPaidRentalOrder,
   cancelPendingRentalOrder,
 
   // 로깅 함수
