@@ -1,6 +1,6 @@
 const axios = require('axios');
-const { UserBankAccount } = require('../models');
-const { ErrorCodes, success, error, deleted } = require('../utils/responseHelper');
+const { UserBankAccount, GuestRefundAccount } = require('../models');
+const { ErrorCodes, success, error, created, deleted } = require('../utils/responseHelper');
 
 // 아임포트 API 은행 코드 매핑
 const BANK_CODES = {
@@ -289,9 +289,171 @@ const deleteAccount = async (req, res) => {
   }
 };
 
+// =====================================================
+// 게스트 환급 계좌 관련 (호스트 정산계좌와 별도)
+// =====================================================
+
+// 환급 계좌 예금주 확인 (아임포트)
+const verifyRefundAccount = async (req, res) => {
+  try {
+    const { bank_code, account_num, account_holder_name } = req.body;
+
+    if (!bank_code || !account_num || !account_holder_name) {
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    }
+
+    const cleanAccountNum = account_num.replace(/-/g, '');
+
+    // 은행 코드 변환 (은행명 → 코드, 이미 코드면 그대로)
+    const bankCode = BANK_CODES[bank_code] || bank_code;
+    if (!bankCode || bankCode.length !== 3) {
+      return error(res, ErrorCodes.UNSUPPORTED_BANK, 400);
+    }
+
+    const verificationResult = await verifyAccountWithIamport(bankCode, cleanAccountNum);
+
+    if (!verificationResult.success) {
+      return error(res, ErrorCodes.REFUND_ACCOUNT_VERIFY_FAILED, 400);
+    }
+
+    const verified = verificationResult.accountHolderName === account_holder_name;
+
+    return success(res, {
+      verified,
+      accountHolderName: verificationResult.accountHolderName,
+      bankName: getBankNameByCode(bankCode),
+      inputName: account_holder_name
+    }, verified ? '예금주 확인이 완료되었습니다.' : '예금주 정보가 일치하지 않습니다.');
+
+  } catch (err) {
+    console.error('환급 계좌 예금주 확인 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, process.env.NODE_ENV === 'development' ? err.message : undefined);
+  }
+};
+
+// 환급 계좌 조회
+const getRefundAccount = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const account = await GuestRefundAccount.findOne({
+      where: { userId },
+      attributes: ['id', 'bankCode', 'bankName', 'accountNumber', 'accountHolder', 'isVerified', 'verifiedAt', 'createdAt', 'updatedAt']
+    });
+
+    if (!account) {
+      return error(res, ErrorCodes.REFUND_ACCOUNT_NOT_FOUND, 404);
+    }
+
+    return success(res, {
+      account: {
+        ...account.toJSON(),
+        // 계좌번호 마스킹 (보안)
+        accountNumber: account.accountNumber.replace(/(\d{3})\d+(\d{4})/, '$1****$2')
+      }
+    });
+
+  } catch (err) {
+    console.error('환급 계좌 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, process.env.NODE_ENV === 'development' ? err.message : undefined);
+  }
+};
+
+// 환급 계좌 저장/수정
+const saveRefundAccount = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { bank_code, account_num, account_holder_name } = req.body;
+
+    if (!bank_code || !account_num || !account_holder_name) {
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    }
+
+    const cleanAccountNum = account_num.replace(/-/g, '');
+
+    // 은행 코드 변환
+    const bankCode = BANK_CODES[bank_code] || bank_code;
+    if (!bankCode || bankCode.length !== 3) {
+      return error(res, ErrorCodes.UNSUPPORTED_BANK, 400);
+    }
+
+    const bankName = getBankNameByCode(bankCode);
+
+    const existingAccount = await GuestRefundAccount.findOne({
+      where: { userId }
+    });
+
+    const accountData = {
+      userId,
+      bankCode,
+      bankName,
+      accountNumber: cleanAccountNum,
+      accountHolder: account_holder_name,
+      isVerified: false,
+      verifiedAt: null
+    };
+
+    let account;
+    let message;
+    let statusCode;
+
+    if (existingAccount) {
+      await existingAccount.update(accountData);
+      account = existingAccount;
+      message = '환급 계좌가 수정되었습니다.';
+      statusCode = 200;
+    } else {
+      account = await GuestRefundAccount.create(accountData);
+      message = '환급 계좌가 등록되었습니다.';
+      statusCode = 201;
+    }
+
+    return success(res, {
+      account: {
+        id: account.id,
+        bankCode: account.bankCode,
+        bankName: account.bankName,
+        accountNumber: account.accountNumber.replace(/(\d{3})\d+(\d{4})/, '$1****$2'),
+        accountHolder: account.accountHolder,
+        isVerified: account.isVerified
+      }
+    }, message, statusCode);
+
+  } catch (err) {
+    console.error('환급 계좌 저장 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, process.env.NODE_ENV === 'development' ? err.message : undefined);
+  }
+};
+
+// 환급 계좌 삭제
+const deleteRefundAccount = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const deletedCount = await GuestRefundAccount.destroy({
+      where: { userId }
+    });
+
+    if (deletedCount === 0) {
+      return error(res, ErrorCodes.REFUND_ACCOUNT_NOT_FOUND, 404);
+    }
+
+    return deleted(res, '환급 계좌가 삭제되었습니다.');
+
+  } catch (err) {
+    console.error('환급 계좌 삭제 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, process.env.NODE_ENV === 'development' ? err.message : undefined);
+  }
+};
+
 module.exports = {
   verifyAccount,
   getUserAccount,
   saveAccount,
-  deleteAccount
+  deleteAccount,
+  // 게스트 환급 계좌
+  verifyRefundAccount,
+  getRefundAccount,
+  saveRefundAccount,
+  deleteRefundAccount
 };

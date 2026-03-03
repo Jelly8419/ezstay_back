@@ -67,13 +67,50 @@ const Refund = sequelize.define('Refund', {
     type: DataTypes.INTEGER,
     allowNull: false,
     field: 'days_before_checkin',
-    comment: '입주일까지 남은 일수',
+    comment: '입주일까지 남은 일수 (음수: 입주일 이후 취소)'
+  },
+  isSameDayCancellation: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    field: 'is_same_day_cancellation',
+    comment: '계약 당일 취소 여부'
+  },
+  cancellationFaultType: {
+    type: DataTypes.ENUM('GUEST', 'HOST'),
+    allowNull: true,
+    field: 'cancellation_fault_type',
+    comment: '취소 귀책 구분'
+  },
+  hasEzCleaningService: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    field: 'has_ez_cleaning_service',
+    comment: 'EZ클리닝 서비스 사용 여부 (계약 시점 스냅샷)'
+  },
+
+  // 원본 금액
+  originalDeposit: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'original_deposit',
+    comment: '원본 보증금',
     validate: {
       min: 0
     }
   },
-
-  // 원본 금액
+  originalPlatformFee: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'original_platform_fee',
+    comment: '원본 게스트 서비스 수수료',
+    validate: {
+      min: 0
+    }
+  },
   originalRentalFee: {
     type: DataTypes.INTEGER,
     allowNull: false,
@@ -113,7 +150,39 @@ const Refund = sequelize.define('Refund', {
     }
   },
 
-  // 환불 금액 (계산 결과)
+  // 이용료 및 환불 계산
+  usageFee: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'usage_fee',
+    comment: '이용료 (환불율 적용 기준 = 임대료, 관리비·청소비는 항상 100% 환불)',
+    validate: {
+      min: 0
+    }
+  },
+  usageFeeRefundAmount: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'usage_fee_refund_amount',
+    comment: '이용료 환불액 (floor(usage_fee * refund_rate%))',
+    validate: {
+      min: 0
+    }
+  },
+  depositRefundAmount: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'deposit_refund_amount',
+    comment: '보증금 환불액 (항상 100%)',
+    validate: {
+      min: 0
+    }
+  },
+
+  // 환불 금액 (계산 결과) - 하위 호환 유지
   rentalFeeRefundRate: {
     type: DataTypes.DECIMAL(5, 2),
     allowNull: false,
@@ -163,7 +232,72 @@ const Refund = sequelize.define('Refund', {
     }
   },
 
-  // 수수료 및 공제액
+  // 위약금 분배
+  hostPenaltyAmount: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'host_penalty_amount',
+    comment: '호스트 위약금 수령액 (위약금 - 호스트 수수료 3.3%)',
+    validate: {
+      min: 0
+    }
+  },
+  hostPenaltyFee: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'host_penalty_fee',
+    comment: '위약금에 대한 호스트 서비스 수수료 (floor(위약금 * 3.3%))',
+    validate: {
+      min: 0
+    }
+  },
+  guestServiceFeeRefunded: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    field: 'guest_service_fee_refunded',
+    comment: '게스트 서비스 수수료 환불 여부 (100% 환불 또는 호스트 귀책 시 true)'
+  },
+
+  // 호스트 부담금 (호스트 귀책 취소 시)
+  hostBurdenAmount: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'host_burden_amount',
+    comment: '호스트 부담금 총액 (위약금 + 게스트 서비스 수수료)',
+    validate: {
+      min: 0
+    }
+  },
+  hostBurdenStatus: {
+    type: DataTypes.ENUM('PENDING', 'PAID', 'OVERDUE'),
+    allowNull: true,
+    field: 'host_burden_status',
+    comment: '호스트 부담금 결제 상태'
+  },
+
+  // 게스트 보전 지급 (호스트 귀책 취소 시)
+  guestCompensationAmount: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'guest_compensation_amount',
+    comment: '게스트 보전 지급액 (위약금)',
+    validate: {
+      min: 0
+    }
+  },
+  guestCompensationStatus: {
+    type: DataTypes.ENUM('PENDING', 'PAID'),
+    allowNull: true,
+    field: 'guest_compensation_status',
+    comment: '게스트 보전 지급 상태'
+  },
+
+  // 수수료 및 공제액 (하위 호환)
   platformFeeDeducted: {
     type: DataTypes.INTEGER,
     allowNull: false,

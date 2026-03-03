@@ -95,7 +95,8 @@ const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
   const subtotal = rentalFee + maintenanceFee + hostCleaningFee;
 
   // 호스트 플랫폼 수수료 (3.3%)
-  // DB에 저장된 값 사용, 없으면 동적 계산 (이전 계약 호환)
+  // DB에 저장된 값 사용 (할인 적용 후 기준으로 계약 시 계산됨)
+  // 없으면 동적 계산 (이전 계약 호환, 할인 미반영)
   const hostPlatformFee = storedHostPlatformFee != null
     ? storedHostPlatformFee
     : Math.floor(subtotal * HOST_PLATFORM_FEE_RATE);

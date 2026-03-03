@@ -1,4 +1,4 @@
-const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalItemReservation, RentalItem, Settlement } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalItemReservation, RentalItem, Settlement, DepositAgreement } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const axios = require('axios');
@@ -266,11 +266,8 @@ const createContractRequest = async (req, res) => {
     serverCalculated.platformFee = Math.floor(feeBase * 0.099);
 
     // 호스트 플랫폼 수수료 (3.3%) - 정산 시 차감
-    // 기준: 임대료 + 관리비 + 청소비(EZ서비스 미사용시) (할인 적용 전 금액 기준)
-    const hostFeeBase = serverCalculated.rentalFee +
-                        serverCalculated.maintenanceFee +
-                        (hasFreeCleaningService ? 0 : serverCalculated.cleaningFee);
-    serverCalculated.hostPlatformFee = Math.floor(hostFeeBase * 0.033);
+    // 기준: 임대료 + 관리비 + 청소비(EZ서비스 미사용시) - 할인 (게스트와 동일 기준)
+    serverCalculated.hostPlatformFee = Math.floor(feeBase * 0.033);
 
     // 실이용 금액 (할인 적용 + 수수료 포함)
     serverCalculated.totalUsageFee = afterDiscount + serverCalculated.platformFee;
@@ -615,6 +612,12 @@ const getGuestContracts = async (req, res) => {
           // 🛒 렌탈 아이템 정보
           rentalItems: rentalItemsData,
 
+          // 퇴실/보증금 상태 (프론트 카드 액션 결정용)
+          checkoutStatus: contract.checkoutStatus,
+          depositStatus: contract.depositStatus,
+          deposit: contract.deposit,
+          checkoutRequested: contract.checkoutRequested,
+
           createdAt: contract.createdAt
         };
       })
@@ -723,12 +726,21 @@ const getHostContracts = async (req, res) => {
             thumbnailUrl: contract.room.photos[0]?.url || null
           },
 
-          // 게스트 정보
+          // 퇴실/보증금 상태 (PRD v2)
+          checkoutStatus: contract.checkoutStatus,
+          checkoutStatusLabel: Contract.CHECKOUT_STATUS_LABELS[contract.checkoutStatus],
+          hostPlatformFee: contract.hostPlatformFee,
+          depositStatus: contract.depositStatus,
+          checkoutRequested: contract.checkoutRequested,
+          hostCheckedOut: contract.hostCheckedOut,
+
+          // 게스트 정보 (연락처는 결제 완료 이후 상태에서만 노출)
           guest: {
             id: contract.guest.id,
             name: contract.guest.name,
             nickname: contract.guest.nickname,
-            phoneNumber: contract.guest.phoneNumber,
+            phoneNumber: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED'].includes(contract.status)
+              ? contract.guest.phoneNumber : null,
             email: contract.guest.email
           },
 
@@ -850,7 +862,10 @@ const getContractDetail = async (req, res) => {
             id: contract.room.id,
             roomName: contract.room.roomName,
             address: contract.room.address,
-            detailAddress: contract.room.detailAddress,
+            detailAddress: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED', 'REFUNDED',
+              'CANCELLED_BY_HOST', 'CANCELLED_BY_ADMIN_WITH_REFUND', 'CANCELLED_BY_ADMIN_NO_REFUND',
+              'CANCEL_REQUESTED'
+            ].includes(contract.status) ? contract.room.detailAddress : null,
             area: contract.room.area,
             buildingType: contract.room.buildingType,
             photos: contract.room.photos.map(photo => ({
@@ -860,23 +875,36 @@ const getContractDetail = async (req, res) => {
             }))
           },
 
-          // 호스트 정보
+          // 호스트 정보 (게스트 조회 시: 결제 완료 이후만 연락처 노출)
           host: {
             id: contract.host.id,
             name: contract.host.name,
             nickname: contract.host.nickname,
-            phoneNumber: contract.host.phoneNumber,
+            phoneNumber: (userId === contract.hostId || ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED'].includes(contract.status))
+              ? contract.host.phoneNumber : null,
             email: contract.host.email
           },
 
-          // 게스트 정보
+          // 게스트 정보 (호스트 조회 시: 결제 완료 이후만 연락처 노출)
           guest: {
             id: contract.guest.id,
             name: contract.guest.name,
             nickname: contract.guest.nickname,
-            phoneNumber: contract.guest.phoneNumber,
+            phoneNumber: (userId === contract.guestId || ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED'].includes(contract.status))
+              ? contract.guest.phoneNumber : null,
             email: contract.guest.email
           },
+
+          // 퇴실/보증금 상태 (PRD v2)
+          checkoutStatus: contract.checkoutStatus,
+          checkoutStatusLabel: Contract.CHECKOUT_STATUS_LABELS[contract.checkoutStatus],
+          hostPlatformFee: contract.hostPlatformFee,
+          depositStatus: contract.depositStatus,
+          depositDeduction: contract.depositDeduction,
+          deductionReason: contract.deductionReason,
+          refundableDeposit: contract.refundableDeposit,
+          checkoutRequested: contract.checkoutRequested,
+          hostCheckedOut: contract.hostCheckedOut,
 
           // 시점 정보
           createdAt: contract.createdAt,
@@ -885,7 +913,8 @@ const getContractDetail = async (req, res) => {
           paidAt: contract.paidAt,
           checkedInAt: contract.checkedInAt,
           checkedOutAt: contract.checkedOutAt,
-          cancelledAt: contract.cancelledAt
+          cancelledAt: contract.cancelledAt,
+          checkoutRequestedAt: contract.checkoutRequestedAt
         }
       },
       '계약 상세 조회 성공'
@@ -1002,7 +1031,7 @@ const approveContract = async (req, res) => {
 
     // 방 정보 조회 (알림 전송용)
     const room = await Room.findByPk(contract.roomId, {
-      attributes: ['id', 'roomName', 'title', 'address'],
+      attributes: ['id', 'roomName', 'address'],
       transaction
     });
 
@@ -1389,7 +1418,7 @@ const calculateRefundPreview = async (req, res) => {
     }
 
     // 환불 가능한 상태인지 확인
-    const refundableStatuses = ['APPROVED', 'PAYMENT_COMPLETED', 'IN_PROGRESS'];
+    const refundableStatuses = ['PAYMENT_COMPLETED', 'IN_PROGRESS'];
     if (!refundableStatuses.includes(contract.status)) {
       return error(
         res,
@@ -1448,7 +1477,7 @@ const requestRefund = async (req, res) => {
     }
 
     // 환불 가능한 상태인지 확인
-    const refundableStatuses = ['APPROVED', 'PAYMENT_COMPLETED', 'IN_PROGRESS'];
+    const refundableStatuses = ['PAYMENT_COMPLETED', 'IN_PROGRESS'];
     if (!refundableStatuses.includes(contract.status)) {
       await transaction.rollback();
       return error(
@@ -1548,7 +1577,7 @@ const requestRefund = async (req, res) => {
     // 입주 전이면 자동 승인, 입주 후면 관리자 승인 필요
     const autoApprove = isBeforeCheckIn;
     const refundStatus = autoApprove ? 'APPROVED' : 'REQUESTED';
-    const contractStatus = autoApprove ? 'REFUND_APPROVED' : 'REFUND_REQUESTED';
+    const contractStatus = autoApprove ? 'REFUNDED' : 'CANCEL_REQUESTED';
 
     // 환불 요청 레코드 생성
     const refund = await Refund.create({
@@ -1561,23 +1590,37 @@ const requestRefund = async (req, res) => {
       checkInDate: contract.checkInDate,
       daysBeforeCheckin: refundData.daysBeforeCheckin,
       isSameDayCancellation: refundData.isSameDayCancellation,
+      cancellationFaultType: refundData.cancellationFaultType,
+      hasEzCleaningService: refundData.hasEzCleaningService,
 
       // 원본 금액
+      originalDeposit: refundData.originalDeposit,
+      originalPlatformFee: refundData.originalPlatformFee,
       originalRentalFee: contract.rentalFee,
       originalCleaningFee: contract.cleaningFee,
       originalMaintenanceFee: contract.maintenanceFee,
       originalTotalAmount: contract.finalTotalAmount,
 
-      // 환불 금액
+      // 이용료 기반 환불 (신규)
+      usageFee: refundData.usageFee,
+      usageFeeRefundAmount: refundData.usageFeeRefundAmount,
+      depositRefundAmount: refundData.depositRefundAmount,
+
+      // 환불 금액 (하위 호환)
       rentalFeeRefundRate: refundData.rentalFeeRefundRate,
       rentalFeeRefundAmount: refundData.rentalFeeRefundAmount,
       cleaningFeeRefundAmount: refundData.cleaningFeeRefundAmount,
       maintenanceFeeRefundAmount: refundData.maintenanceFeeRefundAmount,
       totalRefundAmount: refundData.totalRefundAmount,
 
-      // 수수료 및 공제액
-      platformFeeDeducted: refundData.platformFeeDeducted,
+      // 위약금 분배
       penaltyAmount: refundData.penaltyAmount,
+      hostPenaltyAmount: refundData.hostPenaltyAmount,
+      hostPenaltyFee: refundData.hostPenaltyFee,
+
+      // 수수료
+      guestServiceFeeRefunded: refundData.guestServiceFeeRefunded,
+      platformFeeDeducted: refundData.platformFeeDeducted,
       finalRefundAmount: refundData.finalRefundAmount,
 
       // 환불 방법
@@ -1724,20 +1767,38 @@ const getContractRefunds = async (req, res) => {
           policyTypeUsed: refund.policyTypeUsed,
           daysBeforeCheckin: refund.daysBeforeCheckin,
           isSameDayCancellation: refund.isSameDayCancellation,
+          cancellationFaultType: refund.cancellationFaultType,
+          hasEzCleaningService: refund.hasEzCleaningService,
 
           // 원본 금액
+          originalDeposit: refund.originalDeposit,
+          originalPlatformFee: refund.originalPlatformFee,
           originalRentalFee: refund.originalRentalFee,
           originalCleaningFee: refund.originalCleaningFee,
           originalMaintenanceFee: refund.originalMaintenanceFee,
           originalTotalAmount: refund.originalTotalAmount,
 
-          // 환불 금액
+          // 이용료 기반 환불
+          usageFee: refund.usageFee,
+          usageFeeRefundAmount: refund.usageFeeRefundAmount,
+          depositRefundAmount: refund.depositRefundAmount,
+
+          // 환불 금액 (하위 호환)
           rentalFeeRefundRate: refund.rentalFeeRefundRate,
           rentalFeeRefundAmount: refund.rentalFeeRefundAmount,
           cleaningFeeRefundAmount: refund.cleaningFeeRefundAmount,
           maintenanceFeeRefundAmount: refund.maintenanceFeeRefundAmount,
           totalRefundAmount: refund.totalRefundAmount,
           finalRefundAmount: refund.finalRefundAmount,
+
+          // 위약금 분배
+          penaltyAmount: refund.penaltyAmount,
+          hostPenaltyAmount: refund.hostPenaltyAmount,
+          hostPenaltyFee: refund.hostPenaltyFee,
+
+          // 수수료
+          guestServiceFeeRefunded: refund.guestServiceFeeRefunded,
+          platformFeeDeducted: refund.platformFeeDeducted,
 
           // 환불 방법
           refundMethod: refund.refundMethod,
@@ -2309,7 +2370,9 @@ const updatePendingRentalItems = async (req, res) => {
  * POST /api/contracts/:contractId/request-checkout
  *
  * 게스트가 퇴실 완료 후 보증금 반환을 요청
- * - CHECKED_IN 또는 IN_PROGRESS 상태에서만 가능
+ * - COMPLETED 상태에서만 가능 (퇴실 시간 도래 후 자동 COMPLETED 전환)
+ * - COMPLETED 전환 후 ~ 48시간 사이에만 요청 가능
+ * - 48시간 초과 시 스케줄러가 자동 처리
  * - 호스트에게 퇴실 확인 요청 알림 발송
  */
 const requestCheckout = async (req, res) => {
@@ -2320,7 +2383,7 @@ const requestCheckout = async (req, res) => {
     const contract = await Contract.findByPk(contractId, {
       include: [
         { model: User, as: 'guest', attributes: ['id', 'name', 'nickname'] },
-        { model: Room, as: 'room', attributes: ['id', 'title'] }
+        { model: Room, as: 'room', attributes: ['id', 'roomName'] }
       ]
     });
 
@@ -2333,26 +2396,39 @@ const requestCheckout = async (req, res) => {
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
-    // 상태 검증 (IN_PROGRESS 상태에서만 퇴실 요청 가능)
-    if (contract.status !== 'IN_PROGRESS') {
+    // 상태 검증 (COMPLETED 상태에서만 퇴실 요청 가능)
+    if (contract.status !== 'COMPLETED') {
       return error(res, {
         code: 4612,
-        message: '퇴실 요청이 가능한 상태가 아닙니다. (임대 진행 중 상태에서만 가능)'
+        message: '퇴실 요청이 가능한 상태가 아닙니다. (계약 완료 상태에서만 가능)'
       }, 400);
     }
 
-    // 이미 퇴실 요청된 경우
-    if (contract.checkoutRequested) {
+    // 이미 퇴실 처리가 진행 중인 경우
+    if (contract.checkoutStatus !== 'NOT_STARTED') {
       return error(res, {
         code: 4613,
-        message: '이미 퇴실 요청이 접수되었습니다.'
+        message: '이미 퇴실 처리가 진행 중입니다.'
+      }, 400);
+    }
+
+    // 시간 검증: COMPLETED 전환 후 ~ 48시간 사이에만 가능
+    const now = new Date();
+    const checkedOutAt = new Date(contract.checkedOutAt);
+    const checkOutDeadline = new Date(checkedOutAt.getTime() + 48 * 60 * 60 * 1000);
+
+    if (now > checkOutDeadline) {
+      return error(res, {
+        code: 4671,
+        message: '퇴실 요청 가능 기간(계약 완료로부터 48시간)이 지났습니다. 자동 처리됩니다.'
       }, 400);
     }
 
     // 퇴실 요청 처리
     await contract.update({
       checkoutRequested: true,
-      checkoutRequestedAt: new Date()
+      checkoutRequestedAt: new Date(),
+      checkoutStatus: 'GUEST_COMPLETED'
     });
 
     // 호스트에게 퇴실 확인 요청 알림 발송
@@ -2368,7 +2444,8 @@ const requestCheckout = async (req, res) => {
     return updated(res, {
       contractId: contract.id,
       checkoutRequested: true,
-      checkoutRequestedAt: contract.checkoutRequestedAt
+      checkoutRequestedAt: contract.checkoutRequestedAt,
+      checkoutStatus: 'GUEST_COMPLETED'
     }, '퇴실 요청이 접수되었습니다. 호스트가 48시간 내 확인하지 않으면 자동 확정됩니다.');
 
   } catch (err) {
@@ -2382,15 +2459,14 @@ const requestCheckout = async (req, res) => {
  * POST /api/contracts/:contractId/confirm-checkout
  *
  * 호스트가 방 점검 후 퇴실을 확인
- * - CHECKED_IN 또는 IN_PROGRESS 상태에서만 가능
- * - checkoutRequested가 true인 경우에만 가능
+ * - COMPLETED 상태에서만 가능
+ * - checkoutStatus=GUEST_COMPLETED인 경우에만 가능
  * - 호스트/게스트 모두에게 퇴실 완료 알림 발송
  */
 const confirmCheckout = async (req, res) => {
   try {
     const { contractId } = req.params;
     const hostId = req.user.id;
-    const { depositDeduction = 0, deductionReason = '' } = req.body;
 
     const contract = await Contract.findByPk(contractId);
 
@@ -2403,16 +2479,16 @@ const confirmCheckout = async (req, res) => {
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
-    // 상태 검증 (IN_PROGRESS 상태에서만 퇴실 확인 가능)
-    if (contract.status !== 'IN_PROGRESS') {
+    // 상태 검증 (COMPLETED 상태에서만 퇴실 확인 가능)
+    if (contract.status !== 'COMPLETED') {
       return error(res, {
         code: 4614,
-        message: '퇴실 확인이 가능한 상태가 아닙니다. (임대 진행 중 상태에서만 가능)'
+        message: '퇴실 확인이 가능한 상태가 아닙니다. (계약 완료 상태에서만 가능)'
       }, 400);
     }
 
-    // 퇴실 요청이 없는 경우
-    if (!contract.checkoutRequested) {
+    // 게스트 퇴실 요청이 없는 경우 (checkoutStatus로 검증)
+    if (contract.checkoutStatus !== 'GUEST_COMPLETED') {
       return error(res, {
         code: 4615,
         message: '게스트의 퇴실 요청이 먼저 필요합니다.'
@@ -2420,28 +2496,29 @@ const confirmCheckout = async (req, res) => {
     }
 
     // 이미 호스트가 확인한 경우
-    if (contract.hostCheckedOut) {
+    if (contract.checkoutStatus === 'HOST_CONFIRMED') {
       return error(res, {
         code: 4616,
         message: '이미 퇴실 확인 처리되었습니다.'
       }, 400);
     }
 
-    // 퇴실 확인 처리
-    const refundableDeposit = Math.max(0, (contract.deposit || 0) - depositDeduction);
-    const depositStatus = depositDeduction > 0
-      ? (refundableDeposit > 0 ? 'PARTIALLY_RETURNED' : 'FORFEITED')
-      : 'RETURN_PENDING';
+    // 퇴실 보류 신청 중인 경우 차단
+    if (contract.checkoutStatus === 'HOLD_REQUESTED' || contract.checkoutStatus === 'HOST_PENDING') {
+      return error(res, {
+        code: 4617,
+        message: '퇴실 보류 중에는 퇴실 확인이 불가합니다. 합의 절차를 통해 진행해주세요.'
+      }, 400);
+    }
 
+    // 퇴실 확인 처리 - 정책 7.6.3: 퇴실확인 완료 시 보증금 반환 프로세스 트리거
+    // 호스트 직접 차감 불가, 항상 RETURN_PENDING으로 설정
     await contract.update({
-      status: 'COMPLETED',
-      checkedOutAt: new Date(),
       hostCheckedOut: true,
       hostCheckedOutAt: new Date(),
-      depositDeduction,
-      deductionReason,
-      refundableDeposit,
-      depositStatus
+      refundableDeposit: contract.deposit || 0,
+      depositStatus: 'RETURN_PENDING',
+      checkoutStatus: 'HOST_CONFIRMED'
     });
 
     // 호스트/게스트 모두에게 퇴실 완료 알림 발송
@@ -2453,17 +2530,738 @@ const confirmCheckout = async (req, res) => {
 
     return updated(res, {
       contractId: contract.id,
-      status: 'COMPLETED',
-      checkedOutAt: contract.checkedOutAt,
       deposit: contract.deposit,
-      depositDeduction,
-      refundableDeposit,
-      depositStatus,
-      deductionReason: deductionReason || null
-    }, '퇴실이 확인되었습니다. 보증금 반환 처리가 진행됩니다.');
+      refundableDeposit: contract.deposit || 0,
+      depositStatus: 'RETURN_PENDING',
+      checkoutStatus: 'HOST_CONFIRMED'
+    }, '퇴실이 확인되었습니다. 보증금 전액 반환 처리가 진행됩니다.');
 
   } catch (err) {
     console.error('퇴실 확인 처리 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 호스트가 계약 취소 (PAYMENT_COMPLETED 상태에서)
+ * PATCH /api/contracts/:contractId/cancel-by-host
+ *
+ * 위약금 결제 플로우는 PG사 확정 후 구현 예정 (TODO)
+ */
+const cancelContractByHost = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { contractId } = req.params;
+    const hostId = req.user.id;
+    const { cancellationReason } = req.body;
+
+    if (!cancellationReason || !cancellationReason.trim()) {
+      return error(res, {
+        code: 4620,
+        message: '취소 사유를 입력해주세요.'
+      }, 400);
+    }
+
+    const contract = await Contract.findByPk(contractId, { transaction });
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.hostId !== hostId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    if (contract.status !== 'PAYMENT_COMPLETED') {
+      return error(res, {
+        code: 4621,
+        message: '결제 완료 상태에서만 호스트 취소가 가능합니다.'
+      }, 400);
+    }
+
+    // 호스트 귀책 환불 계산
+    const cancellationDate = new Date();
+    const refundResult = await calculateRefund(contract, cancellationDate, { faultType: 'HOST' });
+
+    if (!refundResult.success) {
+      await transaction.rollback();
+      return error(res, {
+        code: 4623,
+        message: `환불 계산 실패: ${refundResult.error.message}`
+      }, 500);
+    }
+
+    const refundData = refundResult.data;
+
+    // 호스트 귀책 Refund 레코드 생성 (자동 승인)
+    const refund = await Refund.create({
+      contractId: contract.id,
+      refundStatus: 'APPROVED',
+
+      // 환불 계산 정보
+      policyTypeUsed: refundData.policyTypeUsed,
+      cancellationDate,
+      checkInDate: contract.checkInDate,
+      daysBeforeCheckin: refundData.daysBeforeCheckin,
+      isSameDayCancellation: refundData.isSameDayCancellation,
+      cancellationFaultType: 'HOST',
+      hasEzCleaningService: refundData.hasEzCleaningService,
+
+      // 원본 금액
+      originalDeposit: refundData.originalDeposit,
+      originalPlatformFee: refundData.originalPlatformFee,
+      originalRentalFee: contract.rentalFee,
+      originalCleaningFee: contract.cleaningFee,
+      originalMaintenanceFee: contract.maintenanceFee,
+      originalTotalAmount: contract.finalTotalAmount,
+
+      // 이용료 기반 환불
+      usageFee: refundData.usageFee,
+      usageFeeRefundAmount: refundData.usageFeeRefundAmount,
+      depositRefundAmount: refundData.depositRefundAmount,
+
+      // 환불 금액 (하위 호환)
+      rentalFeeRefundRate: refundData.rentalFeeRefundRate,
+      rentalFeeRefundAmount: refundData.rentalFeeRefundAmount,
+      cleaningFeeRefundAmount: refundData.cleaningFeeRefundAmount,
+      maintenanceFeeRefundAmount: refundData.maintenanceFeeRefundAmount,
+      totalRefundAmount: refundData.totalRefundAmount,
+
+      // 위약금 분배
+      penaltyAmount: refundData.penaltyAmount,
+      hostPenaltyAmount: refundData.hostPenaltyAmount,
+      hostPenaltyFee: refundData.hostPenaltyFee,
+
+      // 수수료
+      guestServiceFeeRefunded: refundData.guestServiceFeeRefunded,
+      platformFeeDeducted: refundData.platformFeeDeducted,
+      finalRefundAmount: refundData.finalRefundAmount,
+
+      // 호스트 부담금 (위약금 + 게스트 서비스 수수료)
+      hostBurdenAmount: refundData.penaltyAmount + refundData.originalPlatformFee,
+      hostBurdenStatus: 'PENDING',
+
+      // 게스트 보전 지급액 (위약금)
+      guestCompensationAmount: refundData.penaltyAmount,
+      guestCompensationStatus: refundData.penaltyAmount > 0 ? 'PENDING' : null,
+
+      // 환불 방법
+      refundMethod: 'ORIGINAL_PAYMENT',
+
+      // 사유
+      cancellationReason,
+
+      // 타임스탬프
+      requestedAt: cancellationDate,
+      approvedAt: cancellationDate
+    }, { transaction });
+
+    // TODO: PG 연동 시 구현 필요
+    // 1. 게스트 PG 전액 환불: refundData.totalRefundAmount
+    // 2. 호스트 부담금 PG 결제: refund.hostBurdenAmount (위약금 + 게스트 서비스 수수료)
+    // 3. 게스트 보전 지급: refund.guestCompensationAmount (위약금)
+    // await processHostBurdenPayment(contract, refund.hostBurdenAmount);
+    // await processGuestCompensation(contract, refund.guestCompensationAmount);
+
+    await contract.update({
+      status: 'CANCELLED_BY_HOST',
+      cancellationReason,
+      cancelledAt: cancellationDate
+    }, { transaction });
+
+    // 계약 상태 변경 로그
+    await ContractStatusLog.create({
+      contractId: contract.id,
+      fromStatus: 'PAYMENT_COMPLETED',
+      toStatus: 'CANCELLED_BY_HOST',
+      changedBy: hostId,
+      changedByRole: 'host',
+      reason: cancellationReason,
+      metadata: JSON.stringify({
+        cancelledByHost: true,
+        refundId: refund.id,
+        totalRefundAmount: refund.totalRefundAmount,
+        penaltyAmount: refund.penaltyAmount,
+        hostPenaltyAmount: refund.hostPenaltyAmount,
+        guestServiceFeeRefunded: refund.guestServiceFeeRefunded,
+        hostBurdenAmount: refund.hostBurdenAmount,
+        guestCompensationAmount: refund.guestCompensationAmount
+      })
+    }, { transaction });
+
+    await transaction.commit();
+
+    // 채팅방 시스템 메시지 발송
+    try {
+      const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
+      if (chatRoom && chatRoom.firebaseChatRoomId) {
+        const messageText = getSystemMessageTemplate(SystemMessageTypes.CONTRACT_CANCELED_BY_HOST);
+        await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, SystemMessageTypes.CONTRACT_CANCELED_BY_HOST);
+      }
+    } catch (chatErr) {
+      console.error('호스트 취소 시스템 메시지 전송 실패 (무시됨):', chatErr);
+    }
+
+    // 게스트에게 알림 발송
+    try {
+      await NotificationService.notifyContractCanceled(contract, 'host');
+    } catch (notifyErr) {
+      console.error('호스트 취소 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    return updated(res, {
+      contractId: contract.id,
+      status: 'CANCELLED_BY_HOST',
+      cancelledAt: contract.cancelledAt,
+      refundId: refund.id,
+      totalRefundAmount: refund.totalRefundAmount,
+      penaltyAmount: refund.penaltyAmount,
+      hostPenaltyAmount: refund.hostPenaltyAmount,
+      hostBurdenAmount: refund.hostBurdenAmount,
+      hostBurdenStatus: refund.hostBurdenStatus,
+      guestCompensationAmount: refund.guestCompensationAmount
+    }, '계약이 취소되었습니다. 게스트에게 전액 환불이 진행됩니다.');
+
+  } catch (err) {
+    await transaction.rollback();
+    console.error('호스트 계약 취소 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 호스트가 계약 취소 요청 (IN_PROGRESS 상태에서, 관리자 승인 필요)
+ * POST /api/contracts/:contractId/cancel-request
+ */
+const requestCancelByHost = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const hostId = req.user.id;
+    const { reason } = req.body;
+
+    if (!reason || !reason.trim()) {
+      return error(res, {
+        code: 4622,
+        message: '취소 요청 사유를 입력해주세요.'
+      }, 400);
+    }
+
+    const contract = await Contract.findByPk(contractId);
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.hostId !== hostId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    if (contract.status !== 'IN_PROGRESS') {
+      return error(res, {
+        code: 4623,
+        message: '임대 진행 중 상태에서만 취소 요청이 가능합니다.'
+      }, 400);
+    }
+
+    // 관리자 확인 큐 등록 (ContractStatusLog에 메타데이터로 기록)
+    await ContractStatusLog.create({
+      contractId: contract.id,
+      fromStatus: 'IN_PROGRESS',
+      toStatus: 'IN_PROGRESS', // 상태 변경 없이 취소 요청 기록
+      changedBy: hostId,
+      changedByRole: 'host',
+      reason,
+      metadata: JSON.stringify({
+        type: 'CANCEL_REQUEST_BY_HOST',
+        requestedAt: new Date(),
+        adminApprovalRequired: true
+      })
+    });
+
+    // 채팅방 시스템 메시지 발송
+    try {
+      const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
+      if (chatRoom && chatRoom.firebaseChatRoomId) {
+        const messageText = getSystemMessageTemplate(SystemMessageTypes.CANCEL_REQUEST_BY_HOST);
+        await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, SystemMessageTypes.CANCEL_REQUEST_BY_HOST);
+      }
+    } catch (chatErr) {
+      console.error('취소 요청 시스템 메시지 전송 실패 (무시됨):', chatErr);
+    }
+
+    // 게스트에게 알림 발송
+    try {
+      await NotificationService.sendNotification({
+        userId: contract.guestId,
+        type: 'CONTRACT',
+        title: '계약 취소 요청',
+        message: '호스트가 계약 취소를 요청했습니다. 관리자 확인 후 처리됩니다.',
+        data: { contractId: contract.id }
+      });
+    } catch (notifyErr) {
+      console.error('취소 요청 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    return success(res, {
+      contractId: contract.id,
+      cancelRequestStatus: 'PENDING_ADMIN_APPROVAL',
+      reason
+    }, '취소 요청이 접수되었습니다. 관리자 승인 후 처리됩니다.');
+
+  } catch (err) {
+    console.error('호스트 취소 요청 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 호스트가 퇴실 확인 보류 (checkoutStatus: GUEST_COMPLETED → HOST_PENDING)
+ * PATCH /api/contracts/:contractId/checkout-hold
+ */
+const holdCheckout = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const hostId = req.user.id;
+    const { reason } = req.body;
+
+    if (!reason || !reason.trim()) {
+      return error(res, {
+        code: 4630,
+        message: '퇴실 보류 사유를 입력해주세요.'
+      }, 400);
+    }
+
+    const contract = await Contract.findByPk(contractId);
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.hostId !== hostId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    if (contract.status !== 'COMPLETED') {
+      return error(res, {
+        code: 4631,
+        message: '계약 완료 상태에서만 퇴실 보류가 가능합니다.'
+      }, 400);
+    }
+
+    if (contract.checkoutStatus !== 'GUEST_COMPLETED') {
+      return error(res, {
+        code: 4632,
+        message: '게스트가 퇴실 완료한 상태에서만 보류가 가능합니다.'
+      }, 400);
+    }
+
+    // 정책 7.6.3: 퇴실확인 완료 이후에는 보류 신청 불가 (정책 불가역성)
+    if (contract.checkoutStatus === 'HOST_CONFIRMED') {
+      return error(res, {
+        code: 4633,
+        message: '퇴실 확인 완료 후에는 보류 신청이 불가합니다.'
+      }, 400);
+    }
+
+    // 정책 7.7.1: 호스트 퇴실확인 데드라인 내(48h)에만 신청 가능
+    // 남은 카운트다운 시간 계산 (게스트 퇴실완료 시점 + 48h - 현재)
+    const now = new Date();
+    const guestCompletedAt = contract.checkoutRequestedAt;
+    let holdRemainingMs = null;
+    if (guestCompletedAt) {
+      const deadline = new Date(guestCompletedAt);
+      deadline.setHours(deadline.getHours() + 48);
+      holdRemainingMs = Math.max(0, deadline.getTime() - now.getTime());
+    }
+
+    // 정책 7.7.2: 신청 즉시 카운트다운 정지, 자동 반환 스케줄 정지
+    // HOLD_REQUESTED 상태로 설정 (관리자 승인 대기)
+    await contract.update({
+      checkoutStatus: 'HOLD_REQUESTED',
+      holdRequestedAt: now,
+      holdRemainingMs,
+      deductionReason: reason.trim()
+    });
+
+    // 계약 상태 변경 로그
+    await ContractStatusLog.create({
+      contractId: contract.id,
+      fromStatus: 'COMPLETED',
+      toStatus: 'COMPLETED',
+      changedBy: hostId,
+      changedByRole: 'host',
+      reason: reason.trim(),
+      metadata: JSON.stringify({
+        type: 'CHECKOUT_HOLD_REQUESTED',
+        checkoutStatusChange: 'GUEST_COMPLETED → HOLD_REQUESTED',
+        holdRemainingMs
+      })
+    });
+
+    // 채팅방 시스템 메시지 발송
+    try {
+      const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
+      if (chatRoom && chatRoom.firebaseChatRoomId) {
+        const messageText = getSystemMessageTemplate(SystemMessageTypes.DEPOSIT_HOLD_REQUESTED);
+        await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, SystemMessageTypes.DEPOSIT_HOLD_REQUESTED);
+      }
+    } catch (chatErr) {
+      console.error('퇴실 보류 신청 시스템 메시지 전송 실패 (무시됨):', chatErr);
+    }
+
+    // 게스트에게 알림 발송
+    try {
+      await NotificationService.sendNotification({
+        userId: contract.guestId,
+        type: 'CONTRACT',
+        title: '퇴실 확인 보류 신청',
+        message: '호스트가 퇴실 확인 보류를 신청했습니다. 관리자 확인 중입니다.',
+        data: { contractId: contract.id }
+      });
+    } catch (notifyErr) {
+      console.error('퇴실 보류 신청 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    return updated(res, {
+      contractId: contract.id,
+      checkoutStatus: 'HOLD_REQUESTED',
+      holdReason: reason.trim(),
+      holdRemainingMs
+    }, '퇴실 확인 보류가 신청되었습니다. 관리자 승인을 기다립니다.');
+
+  } catch (err) {
+    console.error('퇴실 보류 신청 처리 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 호스트가 합의 내용 제출 (checkoutStatus: HOST_PENDING 유지, DepositAgreement 생성)
+ * POST /api/contracts/:contractId/deposit-agreement
+ */
+const submitDepositAgreement = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const hostId = req.user.id;
+    const { deductAmount, agreementText } = req.body;
+
+    if (deductAmount == null || deductAmount < 0) {
+      return error(res, {
+        code: 4640,
+        message: '차감 금액을 올바르게 입력해주세요. (0 이상)'
+      }, 400);
+    }
+
+    if (!agreementText || !agreementText.trim()) {
+      return error(res, {
+        code: 4641,
+        message: '합의 내용을 입력해주세요.'
+      }, 400);
+    }
+
+    const contract = await Contract.findByPk(contractId);
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.hostId !== hostId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    if (contract.status !== 'COMPLETED') {
+      return error(res, {
+        code: 4642,
+        message: '계약 완료 상태에서만 합의 제출이 가능합니다.'
+      }, 400);
+    }
+
+    if (contract.checkoutStatus !== 'HOST_PENDING') {
+      return error(res, {
+        code: 4643,
+        message: '관리자 보류 승인 후 합의 상태에서만 합의 내용을 제출할 수 있습니다.'
+      }, 400);
+    }
+
+    if (deductAmount > (contract.deposit || 0)) {
+      return error(res, {
+        code: 4644,
+        message: `차감 금액은 보증금(${contract.deposit?.toLocaleString()}원)을 초과할 수 없습니다.`
+      }, 400);
+    }
+
+    // 정책 7.9.1: 합의 데드라인 = 관리자 보류 승인 시점 + 10일
+    if (!contract.holdApprovedAt) {
+      return error(res, {
+        code: 4645,
+        message: '관리자 보류 승인 정보가 없습니다. 관리자에게 문의해주세요.'
+      }, 400);
+    }
+
+    const deadline = new Date(contract.holdApprovedAt);
+    deadline.setDate(deadline.getDate() + 10);
+    if (new Date() > deadline) {
+      return error(res, {
+        code: 4646,
+        message: '합의 기한(보류 승인 후 10일)이 경과하여 합의 제출이 불가합니다. 보증금이 게스트에게 전액 반환됩니다.'
+      }, 400);
+    }
+
+    // 기존 합의가 있으면 업데이트, 없으면 생성
+    const [depositAgreement] = await DepositAgreement.upsert({
+      contractId: contract.id,
+      deductAmount,
+      agreementText: agreementText.trim(),
+      holdReason: contract.deductionReason,
+      adminApprovedAt: contract.holdApprovedAt,
+      submittedAt: new Date(),
+      status: 'SUBMITTED',
+      acceptedAt: null
+    });
+
+    // checkoutStatus는 HOST_PENDING 유지 (합의 제출 여부는 DepositAgreement.status로 판단)
+
+    // 계약 상태 변경 로그
+    await ContractStatusLog.create({
+      contractId: contract.id,
+      fromStatus: 'COMPLETED',
+      toStatus: 'COMPLETED',
+      changedBy: hostId,
+      changedByRole: 'host',
+      reason: `합의 내용 제출: 차감 ${deductAmount.toLocaleString()}원`,
+      metadata: JSON.stringify({
+        type: 'DEPOSIT_AGREEMENT_SUBMITTED',
+        deductAmount,
+        agreementText: agreementText.trim()
+      })
+    });
+
+    // 채팅방 시스템 메시지 발송
+    try {
+      const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
+      if (chatRoom && chatRoom.firebaseChatRoomId) {
+        const messageText = getSystemMessageTemplate(SystemMessageTypes.DEPOSIT_AGREEMENT_SUBMITTED, { deductAmount });
+        await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, SystemMessageTypes.DEPOSIT_AGREEMENT_SUBMITTED);
+      }
+    } catch (chatErr) {
+      console.error('합의 제출 시스템 메시지 전송 실패 (무시됨):', chatErr);
+    }
+
+    // 게스트에게 알림 발송
+    try {
+      await NotificationService.sendNotification({
+        userId: contract.guestId,
+        type: 'CONTRACT',
+        title: '합의 내용 확인 요청',
+        message: `호스트가 보증금 합의 내용을 제출했습니다. 확인해주세요. (차감 요청: ${deductAmount.toLocaleString()}원)`,
+        data: { contractId: contract.id }
+      });
+    } catch (notifyErr) {
+      console.error('합의 제출 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    return created(res, {
+      contractId: contract.id,
+      checkoutStatus: 'HOST_PENDING',
+      depositAgreement: {
+        deductAmount,
+        agreementText: agreementText.trim(),
+        submittedAt: depositAgreement.submittedAt,
+        deposit: contract.deposit
+      }
+    }, '합의 내용이 제출되었습니다. 게스트의 동의를 기다립니다.');
+
+  } catch (err) {
+    console.error('합의 내용 제출 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 합의 내용 조회 (호스트/게스트 모두 조회 가능)
+ * GET /api/contracts/:contractId/deposit-agreement
+ */
+const getDepositAgreement = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const userId = req.user.id;
+
+    const contract = await Contract.findByPk(contractId, {
+      include: [
+        {
+          model: DepositAgreement,
+          as: 'depositAgreement'
+        }
+      ]
+    });
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    // 계약 당사자만 조회 가능
+    if (contract.hostId !== userId && contract.guestId !== userId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    if (!contract.depositAgreement) {
+      return error(res, {
+        code: 4650,
+        message: '합의 내용이 없습니다.'
+      }, 404);
+    }
+
+    const agreement = contract.depositAgreement;
+
+    return success(res, {
+      contractId: contract.id,
+      deposit: contract.deposit,
+      checkoutStatus: contract.checkoutStatus,
+      depositAgreement: {
+        id: agreement.id,
+        deductAmount: agreement.deductAmount,
+        agreementText: agreement.agreementText,
+        holdReason: agreement.holdReason,
+        status: agreement.status,
+        statusLabel: DepositAgreement.STATUS_LABELS[agreement.status],
+        submittedAt: agreement.submittedAt,
+        acceptedAt: agreement.acceptedAt,
+        refundableAmount: (contract.deposit || 0) - agreement.deductAmount
+      }
+    }, '합의 내용 조회 성공');
+
+  } catch (err) {
+    console.error('합의 내용 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 게스트가 합의에 동의 (checkoutStatus: HOST_PENDING → HOST_CONFIRMED → COMPLETED)
+ * POST /api/contracts/:contractId/deposit-agreement/accept
+ */
+const acceptDepositAgreement = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { contractId } = req.params;
+    const guestId = req.user.id;
+
+    const contract = await Contract.findByPk(contractId, {
+      include: [
+        { model: DepositAgreement, as: 'depositAgreement' }
+      ],
+      transaction
+    });
+
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.guestId !== guestId) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    if (contract.checkoutStatus !== 'HOST_PENDING') {
+      await transaction.rollback();
+      return error(res, {
+        code: 4660,
+        message: '합의 진행 상태에서만 합의 동의가 가능합니다.'
+      }, 400);
+    }
+
+    if (!contract.depositAgreement || contract.depositAgreement.status !== 'SUBMITTED') {
+      await transaction.rollback();
+      return error(res, {
+        code: 4661,
+        message: '호스트가 제출한 합의 내용이 없습니다.'
+      }, 404);
+    }
+
+    const depositDeduction = contract.depositAgreement.deductAmount;
+    const refundableDeposit = Math.max(0, (contract.deposit || 0) - depositDeduction);
+
+    // 정책 7.9.3 조건 A: 게스트 동의 완료
+    // 차감 금액에 따라 차감확정/반환확정 전이
+    const depositStatus = depositDeduction > 0 ? 'DEDUCTION_CONFIRMED' : 'RETURN_CONFIRMED';
+
+    // 합의 동의 처리
+    await contract.depositAgreement.update({
+      status: 'ACCEPTED',
+      acceptedAt: new Date()
+    }, { transaction });
+
+    // 퇴실 확인 + 보증금 상태 확정 처리
+    await contract.update({
+      checkoutStatus: 'HOST_CONFIRMED',
+      hostCheckedOut: true,
+      hostCheckedOutAt: new Date(),
+      depositDeduction,
+      deductionReason: contract.depositAgreement.agreementText,
+      refundableDeposit,
+      depositStatus
+    }, { transaction });
+
+    // 계약 상태 변경 로그
+    await ContractStatusLog.create({
+      contractId: contract.id,
+      fromStatus: 'COMPLETED',
+      toStatus: 'COMPLETED',
+      changedBy: guestId,
+      changedByRole: 'guest',
+      reason: '보증금 합의 동의',
+      metadata: JSON.stringify({
+        type: 'DEPOSIT_AGREEMENT_ACCEPTED',
+        depositDeduction,
+        refundableDeposit,
+        depositStatus
+      })
+    }, { transaction });
+
+    // TODO: 차감확정 시 Settlement 도메인에 차감분 정산 대상 전달
+    // if (depositStatus === 'DEDUCTION_CONFIRMED' && depositDeduction > 0) {
+    //   await settlementService.createDepositDeductionSettlement(contract.id, depositDeduction, transaction);
+    // }
+
+    await transaction.commit();
+
+    // 채팅방 시스템 메시지 발송
+    try {
+      const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
+      if (chatRoom && chatRoom.firebaseChatRoomId) {
+        const messageType = depositDeduction > 0
+          ? SystemMessageTypes.DEPOSIT_DEDUCTION_CONFIRMED
+          : SystemMessageTypes.DEPOSIT_RETURN_CONFIRMED;
+        const messageText = getSystemMessageTemplate(messageType);
+        await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, messageType);
+      }
+    } catch (chatErr) {
+      console.error('합의 동의 시스템 메시지 전송 실패 (무시됨):', chatErr);
+    }
+
+    // 양측 알림 발송
+    try {
+      await NotificationService.notifyCheckoutConfirmed(contract);
+    } catch (notifyErr) {
+      console.error('합의 동의 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    return updated(res, {
+      contractId: contract.id,
+      status: 'COMPLETED',
+      checkoutStatus: 'HOST_CONFIRMED',
+      deposit: contract.deposit,
+      depositDeduction,
+      refundableDeposit,
+      depositStatus
+    }, '합의가 완료되었습니다. 보증금 정산이 진행됩니다.');
+
+  } catch (err) {
+    await transaction.rollback();
+    console.error('합의 동의 처리 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
 };
@@ -2483,5 +3281,11 @@ module.exports = {
   confirmPayment,
   updatePendingRentalItems,
   requestCheckout,
-  confirmCheckout
+  confirmCheckout,
+  cancelContractByHost,
+  requestCancelByHost,
+  holdCheckout,
+  submitDepositAgreement,
+  getDepositAgreement,
+  acceptDepositAgreement
 };

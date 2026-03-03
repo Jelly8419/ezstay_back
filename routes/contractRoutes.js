@@ -17,7 +17,13 @@ const {
   confirmPayment,
   updatePendingRentalItems,
   requestCheckout,
-  confirmCheckout
+  confirmCheckout,
+  cancelContractByHost,
+  requestCancelByHost,
+  holdCheckout,
+  submitDepositAgreement,
+  getDepositAgreement,
+  acceptDepositAgreement
 } = require('../controllers/contractController');
 const { confirmPaymentMock } = require('../controllers/mockPaymentController');
 
@@ -217,7 +223,8 @@ router.post('/:contractId/confirm-payment', authenticateToken, confirmPayment);
  * POST /api/contracts/:contractId/request-checkout
  *
  * 게스트가 퇴실 완료 후 보증금 반환을 요청
- * - CHECKED_IN 또는 IN_PROGRESS 상태에서만 가능
+ * - COMPLETED 상태에서만 가능 (퇴실 시간 도래 시 자동 COMPLETED 전환)
+ * - COMPLETED 전환 후 48시간 이내에만 수동 요청 가능 (초과 시 자동 처리)
  * - 호스트에게 퇴실 확인 요청 알림 발송
  */
 router.post('/:contractId/request-checkout', authenticateToken, requestCheckout);
@@ -227,7 +234,7 @@ router.post('/:contractId/request-checkout', authenticateToken, requestCheckout)
  * POST /api/contracts/:contractId/confirm-checkout
  *
  * 호스트가 방 점검 후 퇴실을 확인
- * - CHECKED_IN 또는 IN_PROGRESS 상태에서만 가능
+ * - COMPLETED 상태 + checkoutStatus=GUEST_COMPLETED에서만 가능
  * - 보증금 차감이 있는 경우 depositDeduction, deductionReason 전달
  *
  * Request Body:
@@ -237,6 +244,65 @@ router.post('/:contractId/request-checkout', authenticateToken, requestCheckout)
  * }
  */
 router.post('/:contractId/confirm-checkout', authenticateToken, confirmCheckout);
+
+/**
+ * 호스트가 계약 취소 (PAYMENT_COMPLETED 상태)
+ * PATCH /api/contracts/:contractId/cancel-by-host
+ *
+ * Request Body:
+ * {
+ *   "cancellationReason": "호스트 사정으로 계약을 취소합니다." (필수)
+ * }
+ *
+ * TODO: 위약금 결제 플로우 (PG사 확정 후 구현)
+ */
+router.patch('/:contractId/cancel-by-host', authenticateToken, cancelContractByHost);
+
+/**
+ * 호스트가 계약 취소 요청 (IN_PROGRESS 상태, 관리자 승인 필요)
+ * POST /api/contracts/:contractId/cancel-request
+ *
+ * Request Body:
+ * {
+ *   "reason": "취소 요청 사유" (필수)
+ * }
+ */
+router.post('/:contractId/cancel-request', authenticateToken, requestCancelByHost);
+
+/**
+ * 호스트가 퇴실 확인 보류 (checkoutStatus: GUEST_COMPLETED → HOST_PENDING)
+ * PATCH /api/contracts/:contractId/checkout-hold
+ *
+ * Request Body:
+ * {
+ *   "reason": "보류 사유" (필수)
+ * }
+ */
+router.patch('/:contractId/checkout-hold', authenticateToken, holdCheckout);
+
+/**
+ * 호스트가 합의 내용 제출 (checkoutStatus: HOST_PENDING 유지, DepositAgreement 생성)
+ * POST /api/contracts/:contractId/deposit-agreement
+ *
+ * Request Body:
+ * {
+ *   "deductAmount": 100000,      (필수, 보증금 차감 금액)
+ *   "agreementText": "합의 내용" (필수)
+ * }
+ */
+router.post('/:contractId/deposit-agreement', authenticateToken, submitDepositAgreement);
+
+/**
+ * 합의 내용 조회 (호스트/게스트 모두 가능)
+ * GET /api/contracts/:contractId/deposit-agreement
+ */
+router.get('/:contractId/deposit-agreement', authenticateToken, getDepositAgreement);
+
+/**
+ * 게스트가 합의에 동의 (checkoutStatus: HOST_PENDING → HOST_CONFIRMED → COMPLETED)
+ * POST /api/contracts/:contractId/deposit-agreement/accept
+ */
+router.post('/:contractId/deposit-agreement/accept', authenticateToken, acceptDepositAgreement);
 
 /**
  * Mock 결제 승인 (개발/테스트 환경 전용)

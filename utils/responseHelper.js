@@ -82,6 +82,12 @@ const ErrorCodes = {
   PAST_DATE_NOT_ALLOWED: { code: 4303, message: '과거 날짜는 선택할 수 없습니다.' },
   BLOCKED_PERIOD_NOT_FOUND: { code: 4304, message: '계약 불가 기간을 찾을 수 없습니다.' },
 
+  // 환급 계좌 관련 (45xx)
+  REFUND_ACCOUNT_NOT_FOUND: { code: 4501, message: '등록된 환급 계좌가 없습니다.' },
+  REFUND_ACCOUNT_VERIFY_FAILED: { code: 4502, message: '예금주 확인에 실패했습니다.' },
+  REFUND_ACCOUNT_HOLDER_MISMATCH: { code: 4503, message: '예금주 정보가 일치하지 않습니다.' },
+  UNSUPPORTED_BANK: { code: 4504, message: '지원하지 않는 은행입니다.' },
+
   // 결제 관련 (46xx)
   CONTRACT_NOT_FOUND: { code: 3005, message: '계약을 찾을 수 없습니다.' },
   CONTRACT_NOT_APPROVED: { code: 4601, message: '승인된 계약이 아닙니다.' },
@@ -94,6 +100,12 @@ const ErrorCodes = {
   PAYMENT_NOT_FOUND: { code: 4608, message: '결제 정보를 찾을 수 없습니다.' },
   PAYMENT_NOT_REFUNDABLE: { code: 4609, message: '환불 가능한 상태가 아닙니다.' },
   REFUND_EXCEEDS_BALANCE: { code: 4610, message: '환불 금액이 잔액을 초과합니다.' },
+
+  // 보증금 보류 관련 (467x)
+  DEPOSIT_HOLD_NOT_FOUND: { code: 4670, message: '보류 신청 대기 상태가 아닙니다.' },
+  DEPOSIT_HOLD_ALREADY_PROCESSED: { code: 4671, message: '이미 처리된 보류 신청입니다.' },
+  DEPOSIT_AGREEMENT_EXPIRED: { code: 4672, message: '합의 기한이 만료되었습니다.' },
+  FORCE_HOLD_REASON_REQUIRED: { code: 4675, message: '강제 반환보류 사유를 입력해주세요.' },
 
   // 렌탈 주문 관련 (47xx)
   RENTAL_NOT_AVAILABLE_WITHIN_6_DAYS: { code: 4700, message: '입주일 6일 이내에는 렌탈 아이템을 신청할 수 없습니다.' },
@@ -109,6 +121,7 @@ const ErrorCodes = {
   RENTAL_ORDER_NOT_CANCELLABLE: { code: 4710, message: '미결제 주문만 취소할 수 있습니다.' },
   RENTAL_ORDER_ITEM_NOT_FOUND: { code: 4711, message: '렌탈 주문 아이템을 찾을 수 없습니다.' },
   RENTAL_NOT_GUEST: { code: 4712, message: '계약의 게스트만 렌탈 주문을 관리할 수 있습니다.' },
+  RENTAL_ORDER_ALREADY_CANCELLED: { code: 4713, message: '이미 취소된 주문입니다.' },
 
   // 알림 관련 (48xx)
   NOTIFICATION_NOT_FOUND: { code: 4801, message: '알림을 찾을 수 없습니다.' },
