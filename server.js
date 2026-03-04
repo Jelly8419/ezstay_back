@@ -181,6 +181,10 @@ startRentalOrderScheduler();
 const { startNotificationScheduler } = require('./schedulers/notificationScheduler');
 startNotificationScheduler();
 
+// 카카오 알림톡 스케줄러 시작 (퇴실전일, 실패재시도)
+const { startAlimtalkScheduler } = require('./schedulers/alimtalkScheduler');
+startAlimtalkScheduler();
+
 // Firebase Admin SDK 초기화
 const { initializeFirebase } = require('./config/firebaseAdmin');
 initializeFirebase();

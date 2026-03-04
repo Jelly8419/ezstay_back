@@ -1373,7 +1373,17 @@ const cancelContractByGuest = async (req, res) => {
 
     // 호스트/게스트 모두에게 취소 알림 전송
     try {
-      await NotificationService.notifyContractCanceled(contract, CANCEL_TYPES.GUEST_CANCEL);
+      const [cancelGuest, cancelHost, cancelRoom] = await Promise.all([
+        User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
+      ]);
+      await NotificationService.notifyContractCanceled(contract, CANCEL_TYPES.GUEST_CANCEL, {
+        guest: cancelGuest,
+        host: cancelHost,
+        room: cancelRoom,
+        refundData: { guestPenalty: 0, refundAmount: 0, hostPenalty: 0, settlementAmount: 0 }
+      });
     } catch (notifyErr) {
       console.error('계약 취소 알림 전송 실패 (무시됨):', notifyErr);
     }
@@ -1695,6 +1705,28 @@ const requestRefund = async (req, res) => {
     }
 
     await transaction.commit();
+
+    // 알림톡 발송 (4-5 게스트 취소) - 트랜잭션 커밋 후
+    try {
+      const [refundGuest, refundHost, refundRoom] = await Promise.all([
+        User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
+      ]);
+      NotificationService.notifyContractCanceled(contract, CANCEL_TYPES.GUEST_CANCEL, {
+        guest: refundGuest,
+        host: refundHost,
+        room: refundRoom,
+        refundData: {
+          guestPenalty: refund.penaltyAmount || 0,
+          refundAmount: refund.finalRefundAmount || 0,
+          hostPenalty: refund.hostPenaltyAmount || 0,
+          settlementAmount: refund.hostPenaltyAmount || 0
+        }
+      }).catch(err => console.error('환불 취소 알림 전송 실패 (무시됨):', err));
+    } catch (notifyErr) {
+      console.error('환불 취소 알림 전송 실패 (무시됨):', notifyErr);
+    }
 
     // 예상 완료일 계산 (요청일로부터 영업일 기준 5일 후)
     const estimatedCompletionDate = new Date(refund.requestedAt);
@@ -2144,8 +2176,13 @@ const confirmPayment = async (req, res) => {
       console.error(`[자동메시지] 계약 확정 메시지 발송 실패 (무시됨):`, err);
     });
 
-    // 결제 완료 알림 (호스트 + 게스트)
-    NotificationService.notifyPaymentCompleted(contract).catch(err => {
+    // 결제 완료 알림 (호스트 + 게스트) + 알림톡
+    NotificationService.notifyPaymentCompleted(contract, {
+      guest: await User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+      host: await User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+      room: contract.room,
+      paymentData: { guestAmount: payment.totalAmount, hostAmount: contract.totalUsageFee }
+    }).catch(err => {
       console.error('결제 완료 알림 전송 실패 (무시됨):', err);
     });
 
@@ -2703,9 +2740,22 @@ const cancelContractByHost = async (req, res) => {
       console.error('호스트 취소 시스템 메시지 전송 실패 (무시됨):', chatErr);
     }
 
-    // 게스트에게 알림 발송
+    // 게스트에게 알림 발송 + 알림톡
     try {
-      await NotificationService.notifyContractCanceled(contract, 'host');
+      const [cancelGuest, cancelHost, cancelRoom] = await Promise.all([
+        User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
+      ]);
+      await NotificationService.notifyContractCanceled(contract, 'host', {
+        guest: cancelGuest,
+        host: cancelHost,
+        room: cancelRoom,
+        refundData: {
+          penaltyAmount: refund.penaltyAmount,
+          refundAmount: refund.totalRefundAmount
+        }
+      });
     } catch (notifyErr) {
       console.error('호스트 취소 알림 전송 실패 (무시됨):', notifyErr);
     }
@@ -3061,6 +3111,16 @@ const submitDepositAgreement = async (req, res) => {
       console.error('합의 제출 알림 전송 실패 (무시됨):', notifyErr);
     }
 
+    // 알림톡 발송 (4-10 보증금 정산 합의 요청)
+    try {
+      const AlimtalkService = require('../services/alimtalkService');
+      const settlementGuest = await User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] });
+      AlimtalkService.sendDepositSettlementSubmitted(contract, settlementGuest, deductAmount, agreementText)
+        .catch(err => console.error('[Alimtalk] deposit_settlement_submitted 실패:', err.message));
+    } catch (alimtalkErr) {
+      console.error('합의 제출 알림톡 발송 실패 (무시됨):', alimtalkErr);
+    }
+
     return created(res, {
       contractId: contract.id,
       checkoutStatus: 'HOST_PENDING',
@@ -3247,6 +3307,21 @@ const acceptDepositAgreement = async (req, res) => {
       await NotificationService.notifyCheckoutConfirmed(contract);
     } catch (notifyErr) {
       console.error('합의 동의 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    // 알림톡 발송 (4-11 보증금 정산 합의 완료)
+    try {
+      const AlimtalkService = require('../services/alimtalkService');
+      const [agreementGuest, agreementHost] = await Promise.all([
+        User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] })
+      ]);
+      AlimtalkService.sendDepositSettlementAgreed(contract, agreementGuest, agreementHost, {
+        guestAmount: refundableDeposit,
+        hostAmount: depositDeduction
+      }).catch(err => console.error('[Alimtalk] deposit_settlement_agreed 실패:', err.message));
+    } catch (alimtalkErr) {
+      console.error('합의 동의 알림톡 발송 실패 (무시됨):', alimtalkErr);
     }
 
     return updated(res, {

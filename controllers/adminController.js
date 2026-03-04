@@ -491,9 +491,7 @@ const approveProperty = async (req, res) => {
     // 호스트에게 승인 알림 전송
     try {
       await NotificationService.notifyPropertyReviewResult(
-        room.hostId,
-        room.id,
-        room.title,
+        room,
         true // isApproved
       );
     } catch (notifyErr) {
@@ -542,9 +540,7 @@ const rejectProperty = async (req, res) => {
     // 호스트에게 반려 알림 전송
     try {
       await NotificationService.notifyPropertyReviewResult(
-        room.hostId,
-        room.id,
-        room.title,
+        room,
         false, // isApproved
         rejectionReason
       );
@@ -2818,7 +2814,7 @@ const getPendingDepositHolds = async (req, res) => {
         contractId: c.id,
         guest: c.guest,
         host: c.host,
-        room: c.room ? { id: c.room.id, title: c.room.title, address: c.room.address } : null,
+        room: c.room ? { id: c.room.id, roomName: c.room.roomName, address: c.room.address } : null,
         deposit: c.deposit,
         holdRequestedAt: c.holdRequestedAt,
         holdReason: c.deductionReason,
@@ -2926,12 +2922,27 @@ const approveDepositHold = async (req, res) => {
       console.error('보류 승인 알림 전송 실패 (무시됨):', notifyErr);
     }
 
+    // 알림톡 발송 (4-9 보증금 보류 안내)
+    const agreementDeadline = new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000);
+    try {
+      const AlimtalkService = require('../services/alimtalkService');
+      const [holdGuest, holdHost] = await Promise.all([
+        User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] })
+      ]);
+      const deadlineStr = `${agreementDeadline.getFullYear()}-${String(agreementDeadline.getMonth() + 1).padStart(2, '0')}-${String(agreementDeadline.getDate()).padStart(2, '0')}`;
+      AlimtalkService.sendDepositHold(contract, holdGuest, holdHost, deadlineStr)
+        .catch(err => console.error('[Alimtalk] deposit_hold 실패:', err.message));
+    } catch (alimtalkErr) {
+      console.error('보류 승인 알림톡 발송 실패 (무시됨):', alimtalkErr);
+    }
+
     return updated(res, {
       contractId: contract.id,
       checkoutStatus: 'HOST_PENDING',
       depositStatus: 'RETURN_HOLD',
       holdApprovedAt: now,
-      agreementDeadline: new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000)
+      agreementDeadline
     }, '보증금 보류가 승인되었습니다. 합의 기한: 10일');
 
   } catch (err) {

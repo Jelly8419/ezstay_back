@@ -6,7 +6,9 @@ const {
   getMyChatRooms,
   getChatRoomDetail,
   getChatRoomByContractId,
-  sendTestSystemMessage
+  sendTestSystemMessage,
+  notifyChatMessage,
+  markChatAsRead
 } = require('../controllers/chatController');
 const { authenticateToken } = require('../middleware/auth');
 
@@ -32,5 +34,11 @@ router.get('/contracts/:contractId/room', authenticateToken, getChatRoomByContra
 
 // 시스템 메시지 테스트 발송 (개발/테스트용)
 router.post('/rooms/:chatRoomId/system-message', authenticateToken, sendTestSystemMessage);
+
+// 채팅 메시지 알림 요청 (프론트에서 메시지 전송 시 호출)
+router.post('/rooms/:chatRoomId/notify', authenticateToken, notifyChatMessage);
+
+// 채팅방 읽음 처리 (프론트에서 채팅방 진입/포커스 시 호출)
+router.post('/rooms/:chatRoomId/read', authenticateToken, markChatAsRead);
 
 module.exports = router;

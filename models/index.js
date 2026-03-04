@@ -39,6 +39,7 @@ const RentalPaymentFailureLogModel = require('./RentalPaymentFailureLog');
 const Settlement = require('./Settlement');
 const DepositAgreement = require('./DepositAgreement');
 const GuestRefundAccount = require('./GuestRefundAccount');
+const AlimtalkLog = require('./AlimtalkLog');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -739,6 +740,22 @@ GuestRefundAccount.belongsTo(User, {
 });
 
 // =====================================================
+// AlimtalkLog 관계 설정 (카카오 알림톡 발송 이력)
+// =====================================================
+User.hasMany(AlimtalkLog, {
+  foreignKey: 'receiverId',
+  as: 'alimtalkLogs',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+AlimtalkLog.belongsTo(User, {
+  foreignKey: 'receiverId',
+  as: 'receiver',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// =====================================================
 // Notification 관계 설정 (사용자 알림)
 // =====================================================
 
@@ -799,5 +816,6 @@ module.exports = {
   RentalPaymentFailureLog,
   Settlement,
   DepositAgreement,
-  GuestRefundAccount
+  GuestRefundAccount,
+  AlimtalkLog
 };
