@@ -1,4 +1,5 @@
 const { User, UserBankAccount, LocalUser, sequelize } = require('../models');
+const { Op } = require('sequelize');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 const bcrypt = require('bcryptjs');
 const { validatePassword, validatePhoneNumber } = require('../utils/validator');
@@ -8,7 +9,7 @@ const saveGuestVerification = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const { name, phone_number, terms } = req.body;
+    const { name, phone_number, birth, gender, di, terms } = req.body;
     const userId = req.user.id;
 
     // 이미 본인인증 완료된 사용자 체크
@@ -30,6 +31,17 @@ const saveGuestVerification = async (req, res) => {
       return error(res, { code: 4501, message: '필수 약관에 동의해야 합니다.' }, 400);
     }
 
+    // DI 중복 체크 (같은 사람이 다른 계정으로 가입 방지)
+    if (di) {
+      const existingDi = await User.findOne({
+        where: { di, isActive: true, id: { [Op.ne]: userId } }
+      });
+      if (existingDi) {
+        await transaction.rollback();
+        return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
+      }
+    }
+
     // Users 테이블 업데이트 (본인인증정보 + 약관정보)
     const updatedUser = await User.update({
       name: name,
@@ -37,6 +49,9 @@ const saveGuestVerification = async (req, res) => {
       phoneNumber: phone_number,
       phoneVerified: true,
       phoneVerifiedAt: new Date(),
+      ...(birth !== undefined && birth !== null && birth !== '' && { birth }),
+      ...(gender !== undefined && gender !== null && { gender }),
+      ...(di !== undefined && di !== null && di !== '' && { di }),
       serviceTermsAgreed: terms.service_terms,
       privacyPolicyAgreed: terms.privacy_policy,
       marketingConsent: terms.marketing_consent || false,
@@ -86,6 +101,9 @@ const saveHostVerification = async (req, res) => {
     const {
       name,
       phone_number,
+      birth,
+      gender,
+      di,
       bank_code,
       account_num,
       account_holder_name,
@@ -113,6 +131,17 @@ const saveHostVerification = async (req, res) => {
       return error(res, { code: 4501, message: '필수 약관에 동의해야 합니다.' }, 400);
     }
 
+    // DI 중복 체크 (같은 사람이 다른 계정으로 가입 방지)
+    if (di) {
+      const existingDi = await User.findOne({
+        where: { di, isActive: true, id: { [Op.ne]: userId } }
+      });
+      if (existingDi) {
+        await transaction.rollback();
+        return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
+      }
+    }
+
     // Users 테이블 업데이트 (본인인증정보 + 약관정보)
     const updatedUser = await User.update({
       name: name,
@@ -120,6 +149,9 @@ const saveHostVerification = async (req, res) => {
       phoneNumber: phone_number,
       phoneVerified: true,
       phoneVerifiedAt: new Date(),
+      ...(birth !== undefined && birth !== null && birth !== '' && { birth }),
+      ...(gender !== undefined && gender !== null && { gender }),
+      ...(di !== undefined && di !== null && di !== '' && { di }),
       serviceTermsAgreed: terms.service_terms,
       privacyPolicyAgreed: terms.privacy_policy,
       marketingConsent: terms.marketing_consent || false,
