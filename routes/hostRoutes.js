@@ -16,7 +16,9 @@ const {
   updateRoomStatus,
   deleteRoom,
   duplicateRoom,
-  getHostAccount
+  getHostAccount,
+  getReceipt,
+  upsertReceipt
 } = require('../controllers/hostController');
 const {
   getAutoMessageTemplates,
@@ -112,6 +114,16 @@ router.patch('/auto-messages/:id/toggle', toggleAutoMessageTemplate);
 
 // 22. 특정 방의 자동메시지 템플릿 목록 조회
 router.get('/rooms/:roomId/auto-messages', getRoomAutoMessageTemplates);
+
+// ========================================
+// 영수증 설정 API
+// ========================================
+
+// 26. 영수증 설정 조회
+router.get('/receipt', getReceipt);
+
+// 27. 영수증 설정 저장/수정
+router.put('/receipt', upsertReceipt);
 
 // ========================================
 // 정산 관리 API

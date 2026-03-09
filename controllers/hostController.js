@@ -1,4 +1,4 @@
-const { Room, RoomPhoto, RoomAmenity, EzService, Contract, UserBankAccount, sequelize } = require('../models');
+const { Room, RoomPhoto, RoomAmenity, EzService, Contract, UserBankAccount, HostReceiptSetting, sequelize } = require('../models');
 const { ErrorCodes, success, error, created, updated, deleted } = require('../utils/responseHelper');
 const { convertRoadAddressToCoordinates } = require('../utils/geocoding');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -1062,6 +1062,122 @@ const getHostAccount = async (req, res) => {
   }
 };
 
+// ========================================
+// 영수증 설정 API
+// ========================================
+
+// 영수증 설정 조회
+const getReceipt = async (req, res) => {
+  try {
+    const hostId = req.user.id;
+
+    const setting = await HostReceiptSetting.findOne({
+      where: { hostId },
+      attributes: {
+        exclude: ['hostId']
+      }
+    });
+
+    return success(res, setting || null);
+  } catch (err) {
+    console.error('Get receipt setting error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+// 영수증 설정 저장/수정 (upsert)
+const upsertReceipt = async (req, res) => {
+  try {
+    const hostId = req.user.id;
+    const { required: receiptRequired, type, number, businessName, repName, email } = req.body;
+
+    // 1. required 필드 검증
+    if (!receiptRequired || !['yes', 'no'].includes(receiptRequired)) {
+      return error(res, ErrorCodes.INVALID_RECEIPT_REQUIRED, 400);
+    }
+
+    let updateData = {
+      hostId,
+      receiptRequired
+    };
+
+    if (receiptRequired === 'yes') {
+      // 2. type 검증
+      const validTypes = ['personal', 'business', 'tax_invoice'];
+      if (!type || !validTypes.includes(type)) {
+        return error(res, ErrorCodes.INVALID_RECEIPT_TYPE, 400);
+      }
+
+      // 3. number 검증
+      const { validateReceiptNumber } = require('../utils/validator');
+      const numberValidation = validateReceiptNumber(number, type);
+      if (!numberValidation.valid) {
+        return error(res, ErrorCodes.INVALID_RECEIPT_NUMBER, 400, { message: numberValidation.message });
+      }
+
+      // 4. tax_invoice 추가 필드 검증
+      if (type === 'tax_invoice') {
+        if (!businessName || !businessName.trim()) {
+          return error(res, ErrorCodes.RECEIPT_BUSINESS_NAME_REQUIRED, 400);
+        }
+        if (!repName || !repName.trim()) {
+          return error(res, ErrorCodes.RECEIPT_REP_NAME_REQUIRED, 400);
+        }
+        // email은 선택이지만, 입력 시 형식 검증
+        if (email && email.trim()) {
+          const { validateEmail } = require('../utils/validator');
+          const emailValidation = validateEmail(email);
+          if (!emailValidation.valid) {
+            return error(res, ErrorCodes.INVALID_EMAIL, 400);
+          }
+        }
+      }
+
+      // 숫자만 추출하여 저장
+      const cleanedNumber = number.replace(/[^0-9]/g, '');
+
+      updateData.receiptType = type;
+      updateData.receiptNumber = cleanedNumber;
+      updateData.businessName = type === 'tax_invoice' ? businessName.trim() : null;
+      updateData.repName = type === 'tax_invoice' ? repName.trim() : null;
+      updateData.email = type === 'tax_invoice' && email ? email.trim() : null;
+      updateData.issueStatus = 'requested';
+    } else {
+      // required="no" → 관련 필드 초기화
+      updateData.receiptType = null;
+      updateData.receiptNumber = null;
+      updateData.businessName = null;
+      updateData.repName = null;
+      updateData.email = null;
+      updateData.issueStatus = 'none';
+    }
+
+    // 기존 설정 확인
+    const existing = await HostReceiptSetting.findOne({ where: { hostId } });
+
+    let setting;
+    if (existing) {
+      // 이미 발급 완료된 상태에서 정보 변경 시 재발급 요청
+      if (receiptRequired === 'yes' && existing.issueStatus === 'issued') {
+        updateData.issueStatus = 'requested';
+      }
+      await existing.update(updateData);
+      setting = existing;
+    } else {
+      setting = await HostReceiptSetting.create(updateData);
+    }
+
+    // 응답에서 hostId 제외
+    const responseData = setting.toJSON();
+    delete responseData.hostId;
+
+    return updated(res, responseData, '영수증 정보가 저장되었습니다.');
+  } catch (err) {
+    console.error('Upsert receipt setting error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
 module.exports = {
   createRoom,
   updateBasicInfo,
@@ -1078,5 +1194,7 @@ module.exports = {
   updateRoomStatus,
   deleteRoom,
   duplicateRoom,
-  getHostAccount
+  getHostAccount,
+  getReceipt,
+  upsertReceipt
 };

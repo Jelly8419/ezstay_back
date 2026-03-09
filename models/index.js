@@ -40,6 +40,7 @@ const Settlement = require('./Settlement');
 const DepositAgreement = require('./DepositAgreement');
 const GuestRefundAccount = require('./GuestRefundAccount');
 const AlimtalkLog = require('./AlimtalkLog');
+const { HostReceiptSetting } = require('./HostReceiptSetting');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -773,6 +774,35 @@ Notification.belongsTo(User, {
   onUpdate: 'CASCADE'
 });
 
+// =====================================================
+// HostReceiptSetting 관계 설정 (호스트 영수증 설정)
+// =====================================================
+User.hasOne(HostReceiptSetting, {
+  foreignKey: 'hostId',
+  as: 'receiptSetting',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+HostReceiptSetting.belongsTo(User, {
+  foreignKey: 'hostId',
+  as: 'host',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+HostReceiptSetting.belongsTo(Admin, {
+  foreignKey: 'issuedBy',
+  as: 'issuedByAdmin',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Admin.hasMany(HostReceiptSetting, {
+  foreignKey: 'issuedBy',
+  as: 'issuedReceipts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -817,5 +847,6 @@ module.exports = {
   Settlement,
   DepositAgreement,
   GuestRefundAccount,
-  AlimtalkLog
+  AlimtalkLog,
+  HostReceiptSetting
 };

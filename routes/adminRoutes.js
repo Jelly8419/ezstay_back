@@ -8,6 +8,7 @@ const adminSettlementController = require('../controllers/adminSettlementControl
 const noticeController = require('../controllers/noticeController');
 const faqController = require('../controllers/faqController');
 const inquiryController = require('../controllers/inquiryController');
+const adminReceiptController = require('../controllers/adminReceiptController');
 const { authenticateAdmin, requireAdminRole } = require('../middleware/auth');
 const actionLogger = require('../middleware/actionLogger');
 const { adminAuthLimiter, adminApiLimiter } = require('../middleware/rateLimiter');
@@ -360,6 +361,27 @@ router.patch(
   '/settlements/:contractId/hold',
   requireAdminRole(['super_admin', 'admin']),
   adminSettlementController.holdSettlement
+);
+
+// ============================================
+// 영수증 관리
+// ============================================
+
+// 영수증 신청 목록 조회
+router.get('/receipts', adminReceiptController.getReceiptList);
+
+// 영수증 발급 완료 처리 (super_admin, admin만 가능)
+router.patch(
+  '/receipts/:id/issue',
+  requireAdminRole(['super_admin', 'admin']),
+  adminReceiptController.issueReceipt
+);
+
+// 영수증 반려 처리 (super_admin, admin만 가능)
+router.patch(
+  '/receipts/:id/reject',
+  requireAdminRole(['super_admin', 'admin']),
+  adminReceiptController.rejectReceipt
 );
 
 module.exports = router;

@@ -149,6 +149,45 @@ const validateStringLength = (value, min, max, fieldName = '값') => {
   return { valid: true };
 };
 
+/**
+ * 영수증 번호 유효성 검증
+ * type별로 다른 검증 규칙 적용
+ * - personal: 휴대폰 번호(10-11자리) 또는 현금영수증 카드번호(최대 16자리)
+ * - business: 휴대폰 번호(10-11자리) 또는 사업자등록번호(10자리)
+ * - tax_invoice: 사업자등록번호(10자리)
+ */
+const validateReceiptNumber = (number, type) => {
+  if (!number || !number.trim()) {
+    return { valid: false, message: '영수증 번호를 입력해주세요.' };
+  }
+
+  // 숫자만 추출
+  const digitsOnly = number.replace(/[^0-9]/g, '');
+
+  if (digitsOnly.length === 0) {
+    return { valid: false, message: '영수증 번호는 숫자만 입력 가능합니다.' };
+  }
+
+  if (type === 'tax_invoice') {
+    // 사업자등록번호만 허용 (10자리)
+    if (digitsOnly.length !== 10) {
+      return { valid: false, message: '사업자등록번호는 10자리 숫자여야 합니다.' };
+    }
+  } else if (type === 'personal') {
+    // 휴대폰(10-11자리) 또는 현금영수증 카드번호(최대 16자리)
+    if (digitsOnly.length < 10 || digitsOnly.length > 16) {
+      return { valid: false, message: '휴대폰 번호(10-11자리) 또는 현금영수증 카드번호(최대 16자리)를 입력해주세요.' };
+    }
+  } else if (type === 'business') {
+    // 휴대폰(10-11자리) 또는 사업자등록번호(10자리)
+    if (digitsOnly.length < 10 || digitsOnly.length > 11) {
+      return { valid: false, message: '휴대폰 번호(10-11자리) 또는 사업자등록번호(10자리)를 입력해주세요.' };
+    }
+  }
+
+  return { valid: true };
+};
+
 module.exports = {
   validateEmail,
   validatePassword,
@@ -156,5 +195,6 @@ module.exports = {
   validateName,
   validateURL,
   validateNumberRange,
-  validateStringLength
+  validateStringLength,
+  validateReceiptNumber
 };
