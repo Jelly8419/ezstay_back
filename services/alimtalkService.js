@@ -10,11 +10,14 @@
  * 원칙:
  * - 알림톡 실패가 메인 비즈니스 로직에 영향을 주면 안 됨 (fire-and-forget)
  * - tplCode가 null인 미등록 템플릿은 자동 skip
+ * - 메시지 빌드: alimtalkTemplateCache에서 캐시된 templtContent 기반 #{변수} 치환
+ * - 캐시 미스 시 fallbackContent 사용 (config/alimtalkTemplates.js)
  */
 
 const { Op } = require('sequelize');
 const { sendAlimtalk } = require('../utils/aligoClient');
 const { getTemplate, isTemplateActive } = require('../config/alimtalkTemplates');
+const { buildMessage, getCachedButtons } = require('../utils/alimtalkTemplateCache');
 
 class AlimtalkService {
   /**
@@ -65,12 +68,16 @@ class AlimtalkService {
         }
       }
 
-      // 4. 템플릿 메시지 빌드
+      // 4. 템플릿 메시지 빌드 (캐시 → fallback 순)
       const template = getTemplate(eventName);
-      const message = template.buildMessage(templateData);
-      const fallbackSMS = template.buildFallbackSMS(templateData);
+      const message = buildMessage(eventName, templateData);
+      if (!message) {
+        console.warn(`[Alimtalk] ${eventName}: 메시지 빌드 실패 (캐시/fallback 없음), skip`);
+        return { sent: false, skipped: true, logId: null, error: '메시지 빌드 실패' };
+      }
+      const fallbackSMS = template.buildFallbackSMS ? template.buildFallbackSMS(templateData) : null;
 
-      // 5. 로그 PENDING 기록
+      // 5. 로그 PENDING 기록 (재시도용 메시지 저장)
       const { AlimtalkLog } = this.getModels();
       const log = await AlimtalkLog.create({
         eventName,
@@ -79,15 +86,18 @@ class AlimtalkService {
         receiverId: receiver.id,
         receiverPhone: receiver.phoneNumber,
         tplCode: template.tplCode,
-        status: 'PENDING'
+        status: 'PENDING',
+        requestPayload: { message, fallbackSMS }
       });
 
-      // 6. 발송
+      // 6. 발송 (캐시된 버튼 정보 포함)
+      const cachedButtons = getCachedButtons(template.tplCode);
       const result = await sendAlimtalk({
         receiver: receiver.phoneNumber,
         tplCode: template.tplCode,
         subject: template.eventLabel || eventName,
         message,
+        button: cachedButtons || undefined,
         failover: 'Y',
         fsubject: `[EZstay] ${template.eventLabel || eventName}`,
         fmessage: fallbackSMS
@@ -165,15 +175,20 @@ class AlimtalkService {
     const template = getTemplate(log.eventName);
     if (!template) return { retried: false, error: '템플릿 미발견' };
 
-    // 재시도
+    // 재시도 (저장된 메시지 우선 사용 → 없으면 캐시에서 빌드)
+    const retryMessage = log.requestPayload?.message || buildMessage(log.eventName, {});
+    if (!retryMessage) return { retried: false, error: '메시지 빌드 실패' };
+
+    const cachedButtons = getCachedButtons(log.tplCode);
     const result = await sendAlimtalk({
       receiver: log.receiverPhone,
       tplCode: log.tplCode,
       subject: template.eventLabel || log.eventName,
-      message: log.requestPayload?.message || template.buildMessage({}),
+      message: retryMessage,
+      button: cachedButtons || undefined,
       failover: 'Y',
       fsubject: `[EZstay] ${template.eventLabel || log.eventName}`,
-      fmessage: template.buildFallbackSMS({})
+      fmessage: log.requestPayload?.fallbackSMS || null
     });
 
     if (result.success) {
@@ -476,6 +491,26 @@ class AlimtalkService {
   /** 4-14. 계좌 등록 요청 */
   static async sendBankAccountRequired(receiver) {
     await this.send('bank_account_required', receiver, {});
+  }
+
+  /** 계약 승인 요청 알림톡 (호스트에게) */
+  static async sendContractRequest(contract, host, room) {
+    await this.send('contract_request_host', host, {
+      roomName: room?.roomName || '',
+      startDate: this._formatDate(contract.checkInDate),
+      endDate: this._formatDate(contract.checkOutDate)
+    }, { contractId: contract.id });
+  }
+
+  /** 옵션 추가 결제 완료 알림톡 (게스트에게) */
+  static async sendOptionPayment(contract, guest, room, optionData = {}) {
+    await this.send('option_payment_guest', guest, {
+      roomName: room?.roomName || '',
+      startDate: this._formatDate(contract.checkInDate),
+      endDate: this._formatDate(contract.checkOutDate),
+      optionItems: optionData.optionItems || '',
+      amount: this._formatNumber(optionData.amount || 0)
+    }, { contractId: contract.id });
   }
 
   // =====================================================

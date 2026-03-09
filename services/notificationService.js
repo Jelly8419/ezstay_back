@@ -196,6 +196,14 @@ class NotificationService {
         roomName: room?.roomName
       }
     });
+
+    // 알림톡 발송 (계약 승인 요청 → 호스트)
+    const { User } = this.getModels();
+    const host = await User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] });
+    if (host) {
+      AlimtalkService.sendContractRequest(contract, host, room)
+        .catch(err => console.error('[Alimtalk] contract_request_host 실패:', err.message));
+    }
   }
 
   /**
@@ -348,7 +356,7 @@ class NotificationService {
    * 옵션 추가 결제 완료 알림 (게스트에게)
    * @param {Object} contract - 계약 정보
    */
-  static async notifyAdditionalOptionPayment(contract) {
+  static async notifyAdditionalOptionPayment(contract, optionData = {}) {
     const msg = NotificationMessages.additionalOptionPayment();
     await this.create({
       userId: contract.guestId,
@@ -359,6 +367,17 @@ class NotificationService {
       relatedContractId: contract.id,
       relatedRoomId: contract.roomId
     });
+
+    // 알림톡 발송 (옵션 추가 결제 → 게스트)
+    const { User, Room } = this.getModels();
+    const [guest, room] = await Promise.all([
+      User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+      Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
+    ]);
+    if (guest) {
+      AlimtalkService.sendOptionPayment(contract, guest, room, optionData)
+        .catch(err => console.error('[Alimtalk] option_payment_guest 실패:', err.message));
+    }
   }
 
   // =====================================================

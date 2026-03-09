@@ -2,12 +2,14 @@
  * Aligo 카카오 알림톡 API 클라이언트
  * API 문서: https://smartsms.aligo.in/admin/api/kakao.html
  *
- * POST https://kakaoapi.aligo.in/akv10/alimtalk/send/
+ * 발송: POST https://kakaoapi.aligo.in/akv10/alimtalk/send/
+ * 템플릿 조회: POST https://kakaoapi.aligo.in/akv10/template/list/
  */
 
 const axios = require('axios');
 
 const ALIGO_API_URL = 'https://kakaoapi.aligo.in/akv10/alimtalk/send/';
+const ALIGO_TEMPLATE_LIST_URL = 'https://kakaoapi.aligo.in/akv10/template/list/';
 
 /**
  * Aligo 알림톡 발송
@@ -93,4 +95,44 @@ const sendAlimtalk = async (params) => {
   }
 };
 
-module.exports = { sendAlimtalk };
+/**
+ * Aligo 등록 템플릿 목록 조회
+ * @returns {Promise<{success: boolean, data: Array|null, error: string|null}>}
+ */
+const fetchTemplates = async () => {
+  const apiKey = process.env.ALIGO_API_KEY;
+  const userId = process.env.ALIGO_USER_ID;
+  const senderKey = process.env.ALIGO_SENDER_KEY;
+
+  if (!apiKey || !userId || !senderKey) {
+    console.warn('[AligoClient] 환경변수 미설정 (ALIGO_API_KEY, ALIGO_USER_ID, ALIGO_SENDER_KEY)');
+    return { success: false, data: null, error: 'Aligo 환경변수 미설정' };
+  }
+
+  try {
+    const formData = new URLSearchParams();
+    formData.append('apikey', apiKey);
+    formData.append('userid', userId);
+    formData.append('senderkey', senderKey);
+
+    const response = await axios.post(ALIGO_TEMPLATE_LIST_URL, formData.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      timeout: 15000
+    });
+
+    const result = response.data;
+
+    if (result.code === 0 || result.code === '0') {
+      console.log(`[AligoClient] 템플릿 조회 성공: ${(result.list || []).length}개`);
+      return { success: true, data: result.list || [], error: null };
+    }
+
+    console.error(`[AligoClient] 템플릿 조회 실패: code=${result.code}, message=${result.message}`);
+    return { success: false, data: null, error: result.message || '템플릿 조회 실패' };
+  } catch (err) {
+    console.error(`[AligoClient] 템플릿 조회 에러: ${err.message}`);
+    return { success: false, data: null, error: err.message };
+  }
+};
+
+module.exports = { sendAlimtalk, fetchTemplates };

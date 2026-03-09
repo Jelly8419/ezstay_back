@@ -441,7 +441,17 @@ const confirmRentalPayment = async (req, res) => {
 
     // 옵션 결제 완료 알림 발송 (트랜잭션 완료 후)
     try {
-      await NotificationService.notifyAdditionalOptionPayment(rentalOrder.contract);
+      // 주문 아이템 조회 (알림톡 변수용)
+      const orderItems = await RentalOrderItem.findAll({
+        where: { rentalOrderId: rentalOrder.id },
+        include: [{ model: RentalItem, as: 'rentalItem', attributes: ['name'] }]
+      });
+      const optionItems = orderItems.map(i => `${i.rentalItem?.name || '옵션'} ${i.quantity}개`).join(', ');
+
+      await NotificationService.notifyAdditionalOptionPayment(rentalOrder.contract, {
+        optionItems,
+        amount: paymentData.totalAmount
+      });
     } catch (notifyErr) {
       console.error('옵션 결제 완료 알림 발송 실패:', notifyErr);
       // 알림 실패해도 결제는 성공 처리

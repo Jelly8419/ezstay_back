@@ -1,15 +1,17 @@
 const cron = require('node-cron');
 const { Op } = require('sequelize');
 const AlimtalkService = require('../services/alimtalkService');
+const { syncTemplates } = require('../utils/alimtalkTemplateCache');
 
 /**
  * 카카오 알림톡 스케줄러
  *
- * 1. 매일 17:55 → 퇴실 전일 알림 (4-6) - 18:00 발송
- * 2. 매 10분   → 실패 건 재시도
+ * 1. 서버 시작 시 → 템플릿 동기화 (Aligo API → 캐시)
+ * 2. 매 6시간    → 템플릿 자동 갱신
+ * 3. 매일 17:55  → 퇴실 전일 알림 (4-6) - 18:00 발송
+ * 4. 매 10분     → 실패 건 재시도
  *
  * NOTE: 즉시 이벤트(결제완료, 취소 등)는 컨트롤러/notificationService에서 직접 호출
- * NOTE: 입주당일(4-4), 퇴실당일(4-7) 등 미등록 템플릿은 tplCode 추가 후 여기에 스케줄 추가
  */
 
 /**
@@ -76,18 +78,29 @@ function startAlimtalkScheduler() {
     return;
   }
 
-  // 1. 매일 17:55 → 퇴실 전일 알림 (18:00 발송 목표)
+  // 0. 서버 시작 시 템플릿 동기화 (비차단)
+  syncTemplates().catch(err => {
+    console.error('[AlimtalkScheduler] 초기 템플릿 동기화 실패:', err.message);
+  });
+
+  // 1. 매 6시간 → 템플릿 자동 갱신 (0시, 6시, 12시, 18시)
+  cron.schedule('0 0,6,12,18 * * *', async () => {
+    console.log('[AlimtalkScheduler] 템플릿 동기화 실행');
+    await syncTemplates();
+  }, { timezone: 'Asia/Seoul' });
+
+  // 2. 매일 17:55 → 퇴실 전일 알림 (18:00 발송 목표)
   cron.schedule('55 17 * * *', async () => {
     console.log('[AlimtalkScheduler] 퇴실 전일 알림 실행');
     await sendCheckoutEveNotifications();
   }, { timezone: 'Asia/Seoul' });
 
-  // 2. 매 10분 → 실패 건 재시도
+  // 3. 매 10분 → 실패 건 재시도
   cron.schedule('*/10 * * * *', async () => {
     await retryFailedAlimtalk();
   }, { timezone: 'Asia/Seoul' });
 
-  console.log('✅ 알림톡 스케줄러 시작 (퇴실전일: 매일 17:55, 재시도: 매 10분)');
+  console.log('✅ 알림톡 스케줄러 시작 (템플릿동기화: 6시간, 퇴실전일: 매일 17:55, 재시도: 매 10분)');
 }
 
 module.exports = { startAlimtalkScheduler };
