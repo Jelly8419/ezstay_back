@@ -1,8 +1,8 @@
 # 관리자 API 문서
 
 > **작성일**: 2025-10-27
-> **최종 갱신일**: 2026-02-09
-> **버전**: 4.0.0 (결제 관리, 정산 관리 API 추가)
+> **최종 갱신일**: 2026-03-10
+> **버전**: 5.0.0 (예약 취소 관리, 보증금 보류 관리, 영수증 관리 API 추가)
 > **베이스 URL**: `http://localhost:3000/api/admin`
 
 ---
@@ -22,9 +22,11 @@
 11. [고객센터 - 문의 관리 API](#고객센터---문의-관리-api) 🆕
 12. [환불 관리 API](#환불-관리-api)
 13. [렌탈 주문 관리 API](#렌탈-주문-관리-api)
-14. [결제 관리 API](#결제-관리-api) 🆕
-15. [정산 관리 API](#정산-관리-api) 🆕
-16. [에러 코드](#에러-코드)
+14. [결제 관리 API](#결제-관리-api)
+15. [정산 관리 API](#정산-관리-api)
+16. [보증금 보류 관리 API](#보증금-보류-관리-api) 🆕
+17. [영수증 관리 API](#영수증-관리-api) 🆕
+18. [에러 코드](#에러-코드)
 
 ---
 
@@ -733,6 +735,158 @@ GET /api/admin/reservations/:contractId
   "message": "예약 상세 조회 성공"
 }
 ```
+
+---
+
+### 3. 관리자 강제 취소
+
+```
+POST /api/admin/reservations/:contractId/force-cancel
+```
+
+> 🔒 super_admin, admin만 가능
+
+**Request Body:**
+```json
+{
+  "reason": "호스트 연락두절로 인한 관리자 강제 취소",
+  "withRefund": true
+}
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `reason` | string | ✅ | 강제 취소 사유 |
+| `withRefund` | boolean | ✅ | 환불 포함 여부 |
+
+**강제 취소 가능 상태**: `PENDING_APPROVAL`, `APPROVED`, `PAYMENT_COMPLETED`, `IN_PROGRESS`, `CANCEL_REQUESTED`
+
+**취소 유형 자동 결정**:
+| 현재 상태 | 취소 유형 |
+|-----------|-----------|
+| `PENDING_APPROVAL`, `APPROVED` | `BEFORE_PAYMENT` |
+| `PAYMENT_COMPLETED` | `AFTER_PAYMENT` |
+| `IN_PROGRESS`, `CANCEL_REQUESTED` | `DURING_STAY` |
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "contractId": 1,
+    "previousStatus": "IN_PROGRESS",
+    "newStatus": "CANCELLED_BY_ADMIN_WITH_REFUND",
+    "withRefund": true,
+    "cancellationType": "DURING_STAY",
+    "reason": "호스트 연락두절로 인한 관리자 강제 취소",
+    "refundId": 15,
+    "totalRefundAmount": 350000
+  },
+  "message": "계약이 강제 취소되었습니다."
+}
+```
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 400 | 4000 | 필수 입력값 누락 (reason) |
+| 404 | 3005 | 계약을 찾을 수 없습니다 |
+| 400 | 4630 | 강제 취소 가능한 상태가 아닙니다 |
+
+**참고**: `withRefund=true`이고 `BEFORE_PAYMENT`이 아닌 경우 환불(Refund) 레코드가 자동 생성되며, `APPROVED` 상태로 즉시 승인 처리됩니다.
+
+---
+
+### 4. 호스트 취소 요청 승인
+
+```
+POST /api/admin/reservations/:contractId/approve-cancel-request
+```
+
+> 🔒 super_admin, admin만 가능
+
+**Request Body:**
+```json
+{
+  "withRefund": true,
+  "adminNote": "호스트 사정으로 인한 취소 승인"
+}
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `withRefund` | boolean | ✅ | 환불 포함 여부 |
+| `adminNote` | string | ❌ | 관리자 메모 |
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "contractId": 1,
+    "previousStatus": "IN_PROGRESS",
+    "newStatus": "CANCELLED_BY_HOST",
+    "withRefund": true,
+    "adminNote": "호스트 사정으로 인한 취소 승인",
+    "refundId": 16,
+    "totalRefundAmount": 450000,
+    "hostBurdenAmount": 529200
+  },
+  "message": "호스트 취소 요청이 승인되었습니다."
+}
+```
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 404 | 3005 | 계약을 찾을 수 없습니다 |
+| 400 | 4631 | 임대 진행 중 상태에서만 취소 요청 승인이 가능합니다 |
+| 404 | 4632 | 해당 계약에 대한 호스트 취소 요청을 찾을 수 없습니다 |
+
+**참고**: 호스트 귀책(`cancellationFaultType: 'HOST'`)으로 처리되며, `hostBurdenAmount`(위약금 + 플랫폼 수수료)가 산정됩니다.
+
+---
+
+### 5. 호스트 취소 요청 거절
+
+```
+POST /api/admin/reservations/:contractId/reject-cancel-request
+```
+
+> 🔒 super_admin, admin만 가능
+
+**Request Body:**
+```json
+{
+  "adminNote": "취소 사유 불충분"
+}
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `adminNote` | string | ❌ | 거절 사유 |
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "contractId": 1,
+    "status": "IN_PROGRESS",
+    "adminNote": "취소 사유 불충분"
+  },
+  "message": "호스트 취소 요청이 거절되었습니다."
+}
+```
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 404 | 3005 | 계약을 찾을 수 없습니다 |
+| 400 | 4633 | 임대 진행 중 상태에서만 취소 요청 거절이 가능합니다 |
+| 404 | 4634 | 해당 계약에 대한 호스트 취소 요청을 찾을 수 없습니다 |
+
+**참고**: 계약 상태는 변경되지 않고 `IN_PROGRESS`를 유지하며, 거절 기록만 `ContractStatusLog`에 남습니다.
 
 ---
 
@@ -2206,28 +2360,28 @@ GET /api/admin/contracts/:contractId/rental-history
 
 ---
 
-### 4. 렌탈 아이템 취소 (관리자 강제 취소)
+### 4. 렌탈 주문 전체 취소 (관리자 강제 취소)
 
 ```
-POST /api/admin/rental-orders/:rentalOrderId/items/:itemId/cancel
+POST /api/admin/rental-orders/:rentalOrderId/cancel
 ```
 
 > 🔒 super_admin, admin만 가능
 
-> **URL 파라미터**: `rentalOrderId`는 주문번호 문자열, `itemId`는 아이템 ID (숫자)
+> **URL 파라미터**: `rentalOrderId`는 주문번호 문자열 (예: `RO-20260208-001`)
 
 **Request Body:**
 ```json
 {
-  "reason": "재고 소진으로 인한 취소",
-  "refundAmount": 30000
+  "reason": "재고 소진으로 인한 전체 취소",
+  "refundAmount": 150000
 }
 ```
 
 | 필드 | 타입 | 필수 | 설명 |
 |------|------|------|------|
 | `reason` | string | ✅ | 취소 사유 |
-| `refundAmount` | number | - | 환불 금액 (미지정 시 아이템 전액) |
+| `refundAmount` | number | ❌ | 환불 금액 (미지정 시 활성 아이템 전체 금액) |
 
 **Response (200):**
 ```json
@@ -2235,16 +2389,14 @@ POST /api/admin/rental-orders/:rentalOrderId/items/:itemId/cancel
   "success": true,
   "data": {
     "rentalOrderId": "RO-20260208-001",
-    "item": {
-      "id": 2,
-      "name": "타월 세트",
-      "status": "CANCELLED",
-      "refundAmount": 30000
-    },
-    "orderStatus": "PARTIAL_REFUND",
-    "totalRefunded": 30000
+    "cancelledItems": [
+      { "id": 1, "name": "침구 세트", "quantity": 1, "status": "CANCELLED" },
+      { "id": 2, "name": "타월 세트", "quantity": 2, "status": "CANCELLED" }
+    ],
+    "orderStatus": "FULLY_REFUNDED",
+    "totalRefunded": 150000
   },
-  "message": "렌탈 아이템이 취소되었습니다."
+  "message": "렌탈 주문이 전체 취소되었습니다."
 }
 ```
 
@@ -2253,8 +2405,7 @@ POST /api/admin/rental-orders/:rentalOrderId/items/:itemId/cancel
 |--------|------|---------|
 | 400 | 4000 | 필수 입력값이 누락되었습니다 (reason) |
 | 404 | - | 렌탈 주문을 찾을 수 없습니다 |
-| 404 | - | 렌탈 아이템을 찾을 수 없습니다 |
-| 400 | - | 이미 취소된 아이템입니다 |
+| 400 | - | 이미 취소된 주문입니다 |
 
 ---
 
@@ -2846,6 +2997,339 @@ PATCH /api/admin/settlements/:contractId/hold
 
 ---
 
+## 🔒 보증금 보류 관리 API
+
+호스트의 보증금 반환보류 신청을 관리자가 승인/거절하거나, 강제로 반환보류 처리하는 API입니다.
+
+### 보증금 보류 프로세스
+```
+호스트 보류 신청 → checkoutStatus: HOLD_REQUESTED
+  ├─ 관리자 승인 → HOLD_REQUESTED → HOST_PENDING (합의 10일)
+  ├─ 관리자 거절 → HOLD_REQUESTED → GUEST_COMPLETED (카운트다운 재개)
+  └─ 강제 반환보류 → any → HOST_PENDING (합의 10일)
+```
+
+### 1. 보류 신청 목록 조회
+
+```
+GET /api/admin/deposits/pending-holds
+```
+
+> 🔒 관리자 인증 필요
+
+**Query Parameters:**
+| 파라미터 | 타입 | 기본값 | 설명 |
+|----------|------|--------|------|
+| `page` | number | 1 | 페이지 번호 |
+| `limit` | number | 20 | 페이지당 항목 수 |
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "holds": [
+      {
+        "contractId": 1,
+        "guest": { "id": 10, "name": "홍길동", "email": "hong@test.com", "phoneNumber": "010-1234-5678" },
+        "host": { "id": 15, "name": "김호스트", "email": "host@test.com", "phoneNumber": "010-9876-5432" },
+        "room": { "id": 5, "roomName": "강남 원룸", "address": "서울시 강남구..." },
+        "deposit": 500000,
+        "holdRequestedAt": "2026-03-08T10:00:00.000Z",
+        "holdReason": "퇴실 시 벽면 파손 확인",
+        "holdRemainingMs": 172800000
+      }
+    ],
+    "pagination": {
+      "total": 3,
+      "page": 1,
+      "limit": 20,
+      "totalPages": 1
+    }
+  },
+  "message": "보증금 보류 신청 목록을 조회했습니다."
+}
+```
+
+**필드 설명:**
+| 필드 | 설명 |
+|------|------|
+| `deposit` | 보증금 금액 |
+| `holdRequestedAt` | 보류 신청 시각 |
+| `holdReason` | 보류 신청 사유 |
+| `holdRemainingMs` | 보류 신청 전 남은 카운트다운 시간 (ms) |
+
+---
+
+### 2. 보류 신청 승인
+
+```
+POST /api/admin/deposits/:contractId/approve-hold
+```
+
+> 🔒 super_admin, admin만 가능
+
+**Request Body:** 없음
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "contractId": 1,
+    "checkoutStatus": "HOST_PENDING",
+    "depositStatus": "RETURN_HOLD",
+    "holdApprovedAt": "2026-03-09T14:00:00.000Z",
+    "agreementDeadline": "2026-03-19T14:00:00.000Z"
+  },
+  "message": "보증금 보류가 승인되었습니다. 합의 기한: 10일"
+}
+```
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 404 | 3005 | 계약을 찾을 수 없습니다 |
+| 400 | 4670 | 보류 신청 대기 상태가 아닙니다 |
+
+**참고**: 승인 시 양측(호스트/게스트)에게 알림 및 알림톡(카카오)이 발송되며, 합의 기한 10일이 시작됩니다.
+
+---
+
+### 3. 보류 신청 거절
+
+```
+POST /api/admin/deposits/:contractId/reject-hold
+```
+
+> 🔒 super_admin, admin만 가능
+
+**Request Body:**
+```json
+{
+  "reason": "파손 증거 불충분"
+}
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `reason` | string | ❌ | 거절 사유 |
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "contractId": 1,
+    "checkoutStatus": "GUEST_COMPLETED",
+    "holdRemainingMs": 172800000,
+    "rejectReason": "파손 증거 불충분"
+  },
+  "message": "보증금 보류 신청이 거절되었습니다. 퇴실 확인 카운트다운이 재개됩니다."
+}
+```
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 404 | 3005 | 계약을 찾을 수 없습니다 |
+| 400 | 4671 | 보류 신청 대기 상태가 아닙니다 |
+
+**참고**: 거절 시 보류 신청 전 남은 카운트다운 시간(`holdRemainingMs`)을 기반으로 호스트 퇴실확인 카운트다운이 재개됩니다.
+
+---
+
+### 4. 강제 반환보류
+
+```
+POST /api/admin/deposits/:contractId/force-hold
+```
+
+> 🔒 super_admin, admin만 가능
+
+**Request Body:**
+```json
+{
+  "reason": "게스트 신고 접수 - 시설물 파손 조사 필요"
+}
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `reason` | string | ✅ | 강제 보류 사유 |
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "contractId": 1,
+    "checkoutStatus": "HOST_PENDING",
+    "depositStatus": "RETURN_HOLD",
+    "holdApprovedAt": "2026-03-09T14:00:00.000Z",
+    "agreementDeadline": "2026-03-19T14:00:00.000Z",
+    "forceHoldReason": "게스트 신고 접수 - 시설물 파손 조사 필요"
+  },
+  "message": "보증금이 강제 반환보류 처리되었습니다. 합의 기한: 10일"
+}
+```
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 400 | 4675 | 강제 반환보류 사유를 입력해주세요 (필수) |
+| 404 | 3005 | 계약을 찾을 수 없습니다 |
+| 400 | 4676 | 계약 완료 상태에서만 강제 반환보류가 가능합니다 |
+| 400 | 4677 | 현재 보증금 상태에서는 강제 보류가 불가합니다 |
+
+**참고**: 호스트의 보류 신청 없이도 관리자가 직접 보증금을 반환보류 처리할 수 있습니다. `COMPLETED` 상태이며 `depositStatus`가 `RETURN_HOLD`, `DEDUCTION_CONFIRMED`, `RETURNED`가 아닌 경우에만 가능합니다.
+
+---
+
+## 🧾 영수증 관리 API
+
+호스트의 영수증(세금계산서 등) 신청을 관리자가 발급/반려 처리하는 API입니다.
+
+### 1. 영수증 신청 목록 조회
+
+```
+GET /api/admin/receipts
+```
+
+> 🔒 관리자 인증 필요
+
+**Query Parameters:**
+| 파라미터 | 타입 | 기본값 | 설명 |
+|----------|------|--------|------|
+| `status` | string | - | 발급 상태 필터: `none`, `requested`, `issued`, `rejected` |
+| `type` | string | - | 영수증 유형 필터: `personal`, `business`, `tax_invoice` |
+| `search` | string | - | 호스트 이름/전화번호 검색 |
+| `page` | number | 1 | 페이지 번호 |
+| `limit` | number | 20 | 페이지당 항목 수 |
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "receipts": [
+      {
+        "id": 1,
+        "hostId": 15,
+        "hostName": "김호스트",
+        "hostPhone": "010-9876-5432",
+        "hostEmail": "host@test.com",
+        "receiptRequired": "yes",
+        "receiptType": "tax_invoice",
+        "receiptNumber": "123-45-67890",
+        "businessName": "(주)이지스테이호스팅",
+        "repName": "김호스트",
+        "email": "tax@host.com",
+        "issueStatus": "requested",
+        "issuedAt": null,
+        "issuedByAdmin": null,
+        "issueNote": null,
+        "createdAt": "2026-03-01T10:00:00.000Z",
+        "updatedAt": "2026-03-01T10:00:00.000Z"
+      }
+    ],
+    "pagination": {
+      "currentPage": 1,
+      "totalPages": 1,
+      "totalCount": 5,
+      "limit": 20
+    }
+  }
+}
+```
+
+**정렬 기준**: `requested` → `rejected` → `none` → `issued` 순 (최신순)
+
+---
+
+### 2. 영수증 발급 완료 처리
+
+```
+PATCH /api/admin/receipts/:id/issue
+```
+
+> 🔒 super_admin, admin만 가능
+
+**Request Body:**
+```json
+{
+  "note": "세금계산서 발행 완료 (2026-03-10)"
+}
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `note` | string | ❌ | 발급 메모 |
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "issueStatus": "issued",
+    "issuedAt": "2026-03-10T14:00:00.000Z",
+    "issuedBy": 1,
+    "issueNote": "세금계산서 발행 완료 (2026-03-10)"
+  },
+  "message": "영수증이 발급 처리되었습니다."
+}
+```
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 404 | 4410 | 영수증 설정을 찾을 수 없습니다 |
+| 400 | 4416 | 이미 발급 완료된 영수증입니다 |
+
+---
+
+### 3. 영수증 반려 처리
+
+```
+PATCH /api/admin/receipts/:id/reject
+```
+
+> 🔒 super_admin, admin만 가능
+
+**Request Body:**
+```json
+{
+  "note": "사업자등록번호 불일치 - 재확인 필요"
+}
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `note` | string | ❌ | 반려 사유 |
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "issueStatus": "rejected",
+    "issuedBy": 1,
+    "issueNote": "사업자등록번호 불일치 - 재확인 필요"
+  },
+  "message": "영수증 신청이 반려되었습니다."
+}
+```
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 404 | 4410 | 영수증 설정을 찾을 수 없습니다 |
+| 400 | 4416 | 이미 발급 완료된 영수증입니다 |
+
+---
+
 ## ⚠️ 에러 코드
 
 ### 공통 에러 코드
@@ -2894,10 +3378,34 @@ PATCH /api/admin/settlements/:contractId/hold
 | 4609 | 400 | 환불 가능한 상태가 아닙니다 (PAYMENT_NOT_REFUNDABLE) |
 | 4610 | 400 | 환불 금액이 잔액을 초과합니다 (REFUND_EXCEEDS_BALANCE) |
 
+### 예약 취소 관리 에러 코드
+| 코드 | HTTP | 설명 |
+|------|------|------|
+| 4630 | 400 | 강제 취소 가능한 상태가 아닙니다 |
+| 4631 | 400 | 임대 진행 중 상태에서만 취소 요청 승인 가능 |
+| 4632 | 404 | 호스트 취소 요청을 찾을 수 없습니다 |
+| 4633 | 400 | 임대 진행 중 상태에서만 취소 요청 거절 가능 |
+| 4634 | 404 | 호스트 취소 요청을 찾을 수 없습니다 |
+
 ### 정산 관리 에러 코드
 | 코드 | HTTP | 설명 |
 |------|------|------|
 | 4901 | 404 | 정산 정보를 찾을 수 없습니다 (SETTLEMENT_NOT_FOUND) |
+
+### 보증금 보류 관리 에러 코드
+| 코드 | HTTP | 설명 |
+|------|------|------|
+| 4670 | 400 | 보류 신청 대기 상태가 아닙니다 (승인 시) |
+| 4671 | 400 | 보류 신청 대기 상태가 아닙니다 (거절 시) |
+| 4675 | 400 | 강제 반환보류 사유 미입력 |
+| 4676 | 400 | 계약 완료 상태에서만 강제 반환보류 가능 |
+| 4677 | 400 | 현재 보증금 상태에서는 강제 보류 불가 |
+
+### 영수증 관리 에러 코드
+| 코드 | HTTP | 설명 |
+|------|------|------|
+| 4410 | 404 | 영수증 설정을 찾을 수 없습니다 (RECEIPT_NOT_FOUND) |
+| 4416 | 400 | 이미 발급 완료된 영수증입니다 (RECEIPT_ALREADY_ISSUED) |
 
 ### Rate Limiting 에러 코드
 | 코드 | HTTP | 설명 |
@@ -2959,6 +3467,9 @@ PATCH /api/admin/settlements/:contractId/hold
 |--------|----------|------|------|
 | GET | `/reservations` | 모든 관리자 | 예약 목록 |
 | GET | `/reservations/:contractId` | 모든 관리자 | 예약 상세 |
+| POST | `/reservations/:contractId/force-cancel` | super_admin, admin | 관리자 강제 취소 |
+| POST | `/reservations/:contractId/approve-cancel-request` | super_admin, admin | 호스트 취소 요청 승인 |
+| POST | `/reservations/:contractId/reject-cancel-request` | super_admin, admin | 호스트 취소 요청 거절 |
 
 ### 액션 로그
 | Method | Endpoint | 권한 | 설명 |
@@ -3013,9 +3524,40 @@ PATCH /api/admin/settlements/:contractId/hold
 | GET | `/rental-orders` | 모든 관리자 | 주문 목록 |
 | GET | `/rental-orders/:rentalOrderId` | 모든 관리자 | 주문 상세 |
 | GET | `/contracts/:contractId/rental-history` | 모든 관리자 | 계약별 렌탈 이력 |
-| POST | `/rental-orders/:rentalOrderId/items/:itemId/cancel` | super_admin, admin | 아이템 취소 |
+| POST | `/rental-orders/:rentalOrderId/cancel` | super_admin, admin | 주문 전체 취소 |
 | PATCH | `/rental-orders/:rentalOrderId/delivery-status` | super_admin, admin | 배송 상태 변경 |
+
+### 결제 관리
+| Method | Endpoint | 권한 | 설명 |
+|--------|----------|------|------|
+| GET | `/payments` | 모든 관리자 | 결제 목록 |
+| GET | `/payments/:paymentId` | 모든 관리자 | 결제 상세 |
+| POST | `/payments/:paymentId/refund` | super_admin, admin | 환불 처리 (토스페이먼츠) |
+
+### 정산 관리
+| Method | Endpoint | 권한 | 설명 |
+|--------|----------|------|------|
+| GET | `/settlements` | 모든 관리자 | 정산 목록 |
+| GET | `/settlements/export` | 모든 관리자 | 엑셀 내보내기 |
+| GET | `/settlements/:contractId` | 모든 관리자 | 정산 상세 |
+| PATCH | `/settlements/:contractId/complete` | super_admin, admin | 정산 완료 |
+| PATCH | `/settlements/:contractId/hold` | super_admin, admin | 정산 보류 |
+
+### 보증금 보류 관리
+| Method | Endpoint | 권한 | 설명 |
+|--------|----------|------|------|
+| GET | `/deposits/pending-holds` | 모든 관리자 | 보류 신청 목록 |
+| POST | `/deposits/:contractId/approve-hold` | super_admin, admin | 보류 승인 |
+| POST | `/deposits/:contractId/reject-hold` | super_admin, admin | 보류 거절 |
+| POST | `/deposits/:contractId/force-hold` | super_admin, admin | 강제 반환보류 |
+
+### 영수증 관리
+| Method | Endpoint | 권한 | 설명 |
+|--------|----------|------|------|
+| GET | `/receipts` | 모든 관리자 | 영수증 신청 목록 |
+| PATCH | `/receipts/:id/issue` | super_admin, admin | 영수증 발급 |
+| PATCH | `/receipts/:id/reject` | super_admin, admin | 영수증 반려 |
 
 ---
 
-> 총 **55개** 관리자 API 엔드포인트 (v3.0.0 기준)
+> 총 **65개** 관리자 API 엔드포인트 (v5.0.0 기준)

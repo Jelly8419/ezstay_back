@@ -2802,7 +2802,7 @@ const getPendingDepositHolds = async (req, res) => {
       include: [
         { model: User, as: 'guest', attributes: ['id', 'name', 'email', 'phoneNumber'] },
         { model: User, as: 'host', attributes: ['id', 'name', 'email', 'phoneNumber'] },
-        { model: Room, as: 'room', attributes: ['id', 'title', 'address'] }
+        { model: Room, as: 'room', attributes: ['id', 'roomName', 'address'] }
       ],
       order: [['holdRequestedAt', 'ASC']],
       limit: parseInt(limit),
