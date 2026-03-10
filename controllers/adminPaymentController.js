@@ -1,17 +1,19 @@
-const { Payment, PaymentFailureLog, Contract, User, Room, Refund, sequelize } = require('../models');
+const { Payment, PaymentFailureLog, RentalPayment, RentalOrder, RentalOrderItem, RentalItem, Contract, User, Room, Refund, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const axios = require('axios');
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
 
 /**
- * 결제 목록 조회
+ * 결제 목록 조회 (계약 결제 + 렌탈 결제 통합)
  * GET /api/admin/payments
+ * Query: type (contract|rental|all, 기본값: all)
  */
 exports.getPayments = async (req, res) => {
   try {
     const {
       page = 1,
       limit = 20,
+      type = 'all',
       status = '',
       method = '',
       search = '',
@@ -21,110 +23,195 @@ exports.getPayments = async (req, res) => {
       sortOrder = 'DESC'
     } = req.query;
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-    const whereClause = {};
-
-    // 상태 필터
-    if (status) {
-      whereClause.status = status;
-    }
-
-    // 결제수단 필터
-    if (method) {
-      whereClause.method = method;
-    }
-
-    // 날짜 범위 필터
-    if (startDate || endDate) {
-      whereClause.requestedAt = {};
-      if (startDate) {
-        whereClause.requestedAt[Op.gte] = new Date(startDate);
-      }
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        whereClause.requestedAt[Op.lte] = end;
-      }
-    }
-
-    // 검색 (결제 ID, 계약 ID, paymentKey)
-    if (search) {
-      if (/^\d+$/.test(search)) {
-        whereClause[Op.or] = [
-          { id: parseInt(search) },
-          { contractId: parseInt(search) }
-        ];
-      } else {
-        whereClause[Op.or] = [
-          { paymentKey: { [Op.like]: `%${search}%` } },
-          { orderId: { [Op.like]: `%${search}%` } }
-        ];
-      }
-    }
-
-    // 허용된 정렬 필드
-    const allowedSortFields = ['createdAt', 'totalAmount', 'approvedAt', 'requestedAt'];
-    const safeSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'createdAt';
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
     const safeSortOrder = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
-    const { count, rows: payments } = await Payment.findAndCountAll({
-      where: whereClause,
-      include: [
-        {
+    // 공통 where 조건 빌더
+    const buildWhereClause = (searchFields) => {
+      const where = {};
+
+      if (status) where.status = status;
+      if (method) where.method = method;
+
+      if (startDate || endDate) {
+        where.requestedAt = {};
+        if (startDate) where.requestedAt[Op.gte] = new Date(startDate);
+        if (endDate) {
+          const end = new Date(endDate);
+          end.setHours(23, 59, 59, 999);
+          where.requestedAt[Op.lte] = end;
+        }
+      }
+
+      if (search && searchFields) {
+        if (/^\d+$/.test(search)) {
+          where[Op.or] = searchFields.numeric(parseInt(search));
+        } else {
+          where[Op.or] = searchFields.text(search);
+        }
+      }
+
+      return where;
+    };
+
+    let contractPayments = [];
+    let rentalPayments = [];
+    let contractCount = 0;
+    let rentalCount = 0;
+
+    // 계약 결제 조회
+    if (type === 'all' || type === 'contract') {
+      const contractWhere = buildWhereClause({
+        numeric: (val) => [{ id: val }, { contractId: val }],
+        text: (val) => [
+          { paymentKey: { [Op.like]: `%${val}%` } },
+          { orderId: { [Op.like]: `%${val}%` } }
+        ]
+      });
+
+      const contractResult = await Payment.findAndCountAll({
+        where: contractWhere,
+        include: [{
           model: Contract,
           as: 'contract',
           attributes: ['id', 'orderId', 'roomId', 'hostId', 'guestId',
             'finalTotalAmount', 'paymentMethod', 'status',
             'checkInDate', 'checkOutDate'],
           include: [
-            {
-              model: User,
-              as: 'guest',
-              attributes: ['id', 'name', 'email']
-            },
-            {
-              model: Room,
-              as: 'room',
-              attributes: ['id', 'roomName']
-            }
+            { model: User, as: 'guest', attributes: ['id', 'name', 'email'] },
+            { model: Room, as: 'room', attributes: ['id', 'roomName'] }
           ]
-        }
-      ],
-      order: [[safeSortBy, safeSortOrder]],
-      limit: parseInt(limit),
-      offset
-    });
+        }],
+        order: [['createdAt', safeSortOrder]],
+        ...(type === 'contract' ? { limit: limitNum, offset: (pageNum - 1) * limitNum } : {})
+      });
+
+      contractCount = contractResult.count;
+      contractPayments = contractResult.rows.map(p => ({
+        id: p.id,
+        type: 'contract',
+        contractId: p.contractId,
+        rentalOrderId: null,
+        contractOrderId: p.contract?.orderId || null,
+        paymentKey: p.paymentKey,
+        orderId: p.orderId,
+        method: p.method,
+        status: p.status,
+        totalAmount: p.totalAmount,
+        balanceAmount: p.balanceAmount,
+        requestedAt: p.requestedAt,
+        approvedAt: p.approvedAt,
+        createdAt: p.createdAt,
+        guest: p.contract?.guest ? {
+          id: p.contract.guest.id,
+          name: p.contract.guest.name,
+          email: p.contract.guest.email
+        } : null,
+        room: p.contract?.room ? {
+          id: p.contract.room.id,
+          roomName: p.contract.room.roomName
+        } : null,
+        contractStatus: p.contract?.status || null
+      }));
+    }
+
+    // 렌탈 결제 조회
+    if (type === 'all' || type === 'rental') {
+      const rentalWhere = buildWhereClause({
+        numeric: (val) => [{ id: val }, { rentalOrderId: val }, { contractId: val }],
+        text: (val) => [
+          { paymentKey: { [Op.like]: `%${val}%` } },
+          { orderId: { [Op.like]: `%${val}%` } }
+        ]
+      });
+
+      const rentalResult = await RentalPayment.findAndCountAll({
+        where: rentalWhere,
+        include: [{
+          model: RentalOrder,
+          as: 'rentalOrder',
+          attributes: ['id', 'orderId', 'contractId', 'orderType', 'status', 'totalAmount'],
+          include: [{
+            model: Contract,
+            as: 'contract',
+            attributes: ['id', 'orderId', 'guestId', 'roomId', 'status'],
+            include: [
+              { model: User, as: 'guest', attributes: ['id', 'name', 'email'] },
+              { model: Room, as: 'room', attributes: ['id', 'roomName'] }
+            ]
+          }]
+        }],
+        order: [['createdAt', safeSortOrder]],
+        ...(type === 'rental' ? { limit: limitNum, offset: (pageNum - 1) * limitNum } : {})
+      });
+
+      rentalCount = rentalResult.count;
+      rentalPayments = rentalResult.rows.map(rp => {
+        const contract = rp.rentalOrder?.contract;
+        return {
+          id: rp.id,
+          type: 'rental',
+          contractId: rp.contractId,
+          rentalOrderId: rp.rentalOrderId,
+          contractOrderId: contract?.orderId || null,
+          paymentKey: rp.paymentKey,
+          orderId: rp.orderId,
+          method: rp.method,
+          status: rp.status,
+          totalAmount: rp.totalAmount,
+          balanceAmount: rp.balanceAmount,
+          requestedAt: rp.requestedAt,
+          approvedAt: rp.approvedAt,
+          createdAt: rp.createdAt,
+          guest: contract?.guest ? {
+            id: contract.guest.id,
+            name: contract.guest.name,
+            email: contract.guest.email
+          } : null,
+          room: contract?.room ? {
+            id: contract.room.id,
+            roomName: contract.room.roomName
+          } : null,
+          contractStatus: contract?.status || null,
+          rentalOrderType: rp.rentalOrder?.orderType || null
+        };
+      });
+    }
+
+    // 결과 합산 및 정렬
+    let allPayments;
+    let totalCount;
+
+    if (type === 'all') {
+      allPayments = [...contractPayments, ...rentalPayments];
+      // 정렬
+      allPayments.sort((a, b) => {
+        const dateA = new Date(a.createdAt);
+        const dateB = new Date(b.createdAt);
+        return safeSortOrder === 'DESC' ? dateB - dateA : dateA - dateB;
+      });
+      totalCount = contractCount + rentalCount;
+      // 페이지네이션 적용
+      const startIdx = (pageNum - 1) * limitNum;
+      allPayments = allPayments.slice(startIdx, startIdx + limitNum);
+    } else {
+      allPayments = type === 'contract' ? contractPayments : rentalPayments;
+      totalCount = type === 'contract' ? contractCount : rentalCount;
+    }
 
     return success(res, {
-      payments: payments.map(payment => ({
-        id: payment.id,
-        contractId: payment.contractId,
-        contractOrderId: payment.contract?.orderId || null,
-        paymentKey: payment.paymentKey,
-        orderId: payment.orderId,
-        method: payment.method,
-        status: payment.status,
-        totalAmount: payment.totalAmount,
-        balanceAmount: payment.balanceAmount,
-        requestedAt: payment.requestedAt,
-        approvedAt: payment.approvedAt,
-        createdAt: payment.createdAt,
-        guest: payment.contract?.guest ? {
-          id: payment.contract.guest.id,
-          name: payment.contract.guest.name,
-          email: payment.contract.guest.email
-        } : null,
-        room: payment.contract?.room ? {
-          id: payment.contract.room.id,
-          roomName: payment.contract.room.roomName
-        } : null,
-        contractStatus: payment.contract?.status || null
-      })),
+      payments: allPayments,
+      summary: {
+        contractCount,
+        rentalCount,
+        totalCount: contractCount + rentalCount
+      },
       pagination: {
-        total: count,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(count / parseInt(limit))
+        total: totalCount,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(totalCount / limitNum)
       }
     }, '결제 목록 조회 성공');
 
@@ -135,13 +222,101 @@ exports.getPayments = async (req, res) => {
 };
 
 /**
- * 결제 상세 조회
- * GET /api/admin/payments/:paymentId
+ * 결제 상세 조회 (계약 결제 + 렌탈 결제)
+ * GET /api/admin/payments/:paymentId?type=contract|rental
  */
 exports.getPaymentDetail = async (req, res) => {
   try {
     const { paymentId } = req.params;
+    const { type = 'contract' } = req.query;
 
+    // 렌탈 결제 상세
+    if (type === 'rental') {
+      const rentalPayment = await RentalPayment.findByPk(paymentId, {
+        include: [{
+          model: RentalOrder,
+          as: 'rentalOrder',
+          include: [
+            {
+              model: RentalOrderItem,
+              as: 'items',
+              include: [{
+                model: RentalItem,
+                as: 'rentalItem',
+                attributes: ['id', 'name', 'price', 'imageUrl']
+              }]
+            },
+            {
+              model: Contract,
+              as: 'contract',
+              include: [
+                { model: User, as: 'guest', attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber'] },
+                { model: User, as: 'host', attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber'] },
+                { model: Room, as: 'room', attributes: ['id', 'roomName', 'address'] }
+              ]
+            }
+          ]
+        }]
+      });
+
+      if (!rentalPayment) {
+        return error(res, ErrorCodes.PAYMENT_NOT_FOUND, 404);
+      }
+
+      const rentalOrder = rentalPayment.rentalOrder;
+      const contract = rentalOrder?.contract;
+
+      return success(res, {
+        type: 'rental',
+        payment: {
+          id: rentalPayment.id,
+          paymentKey: rentalPayment.paymentKey,
+          orderId: rentalPayment.orderId,
+          method: rentalPayment.method,
+          status: rentalPayment.status,
+          totalAmount: rentalPayment.totalAmount,
+          balanceAmount: rentalPayment.balanceAmount,
+          suppliedAmount: rentalPayment.suppliedAmount,
+          vat: rentalPayment.vat,
+          taxFreeAmount: rentalPayment.taxFreeAmount,
+          currency: rentalPayment.currency,
+          receiptUrl: rentalPayment.receiptUrl,
+          requestedAt: rentalPayment.requestedAt,
+          approvedAt: rentalPayment.approvedAt,
+          createdAt: rentalPayment.createdAt,
+          updatedAt: rentalPayment.updatedAt
+        },
+        rentalOrder: rentalOrder ? {
+          id: rentalOrder.id,
+          orderId: rentalOrder.orderId,
+          orderType: rentalOrder.orderType,
+          status: rentalOrder.status,
+          totalAmount: parseFloat(rentalOrder.totalAmount),
+          items: (rentalOrder.items || []).map(item => ({
+            id: item.id,
+            rentalItemId: item.rentalItemId,
+            name: item.rentalItem?.name || null,
+            imageUrl: item.rentalItem?.imageUrl || null,
+            quantity: item.quantity,
+            pricePerItem: parseFloat(item.pricePerItem),
+            totalPrice: parseFloat(item.totalPrice),
+            status: item.status
+          }))
+        } : null,
+        contract: contract ? {
+          id: contract.id,
+          orderId: contract.orderId,
+          status: contract.status,
+          checkInDate: contract.checkInDate,
+          checkOutDate: contract.checkOutDate
+        } : null,
+        guest: contract?.guest || null,
+        host: contract?.host || null,
+        room: contract?.room || null
+      }, '렌탈 결제 상세 조회 성공');
+    }
+
+    // 계약 결제 상세 (기본)
     const payment = await Payment.findByPk(paymentId, {
       include: [
         {
@@ -185,6 +360,7 @@ exports.getPaymentDetail = async (req, res) => {
     const contract = payment.contract;
 
     return success(res, {
+      type: 'contract',
       payment: {
         id: payment.id,
         paymentKey: payment.paymentKey,

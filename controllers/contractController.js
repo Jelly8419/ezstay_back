@@ -2144,8 +2144,10 @@ const confirmPayment = async (req, res) => {
 
     if (initialRentalOrder) {
       await confirmRentalOrderPayment(
-        initialRentalOrder.id,
+        initialRentalOrder,
         paymentData.paymentKey,
+        paymentData.method || 'CARD',
+        guestId,
         req,
         transaction
       );

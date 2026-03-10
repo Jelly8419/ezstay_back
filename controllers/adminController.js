@@ -1,5 +1,5 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, ContractStatusLog, ChatRoom, DepositAgreement, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, ContractStatusLog, ChatRoom, DepositAgreement, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -52,21 +52,41 @@ const getDashboardStats = async (req, res) => {
       }
     });
 
-    // 이번 달 매출 (결제 완료된 계약의 총 금액)
-    const monthlyRevenue = await Contract.sum('finalTotalAmount', {
+    // 이번 달 매출 - 계약 결제
+    const monthlyContractRevenue = await Contract.sum('finalTotalAmount', {
       where: {
         status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED'] },
         paidAt: { [Op.between]: [firstDayThisMonth, now] }
       }
     }) || 0;
 
-    // 지난 달 매출
-    const lastMonthRevenue = await Contract.sum('finalTotalAmount', {
+    // 이번 달 매출 - 렌탈 결제
+    const monthlyRentalRevenue = await RentalPayment.sum('totalAmount', {
+      where: {
+        status: 'DONE',
+        approvedAt: { [Op.between]: [firstDayThisMonth, now] }
+      }
+    }) || 0;
+
+    const monthlyRevenue = monthlyContractRevenue + monthlyRentalRevenue;
+
+    // 지난 달 매출 - 계약 결제
+    const lastMonthContractRevenue = await Contract.sum('finalTotalAmount', {
       where: {
         status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED'] },
         paidAt: { [Op.between]: [firstDayLastMonth, lastDayLastMonth] }
       }
     }) || 0;
+
+    // 지난 달 매출 - 렌탈 결제
+    const lastMonthRentalRevenue = await RentalPayment.sum('totalAmount', {
+      where: {
+        status: 'DONE',
+        approvedAt: { [Op.between]: [firstDayLastMonth, lastDayLastMonth] }
+      }
+    }) || 0;
+
+    const lastMonthRevenue = lastMonthContractRevenue + lastMonthRentalRevenue;
 
     // 매물 심사 대기 수
     const pendingReviews = await Room.count({ where: { status: 'pending_review' } });
@@ -95,7 +115,16 @@ const getDashboardStats = async (req, res) => {
       totalUsers,
       totalProperties,
       activeReservations,
-      monthlyRevenue: Math.round(monthlyRevenue),
+      monthlyRevenue: {
+        total: Math.round(monthlyRevenue),
+        contract: Math.round(monthlyContractRevenue),
+        rental: Math.round(monthlyRentalRevenue)
+      },
+      lastMonthRevenue: {
+        total: Math.round(lastMonthRevenue),
+        contract: Math.round(lastMonthContractRevenue),
+        rental: Math.round(lastMonthRentalRevenue)
+      },
       pendingReviews,
       pendingInquiries,
       trends: {
@@ -275,6 +304,20 @@ const getUserDetail = async (req, res) => {
           ],
           required: false,
           order: [['isPrimary', 'DESC'], ['createdAt', 'DESC']]
+        },
+        {
+          model: require('../models').GuestRefundAccount,
+          as: 'refundAccount',
+          attributes: [
+            'id',
+            'bankCode',
+            'bankName',
+            'accountNumber',
+            'accountHolder',
+            'isVerified',
+            'verifiedAt'
+          ],
+          required: false
         }
       ]
     });
@@ -308,6 +351,7 @@ const getUserDetail = async (req, res) => {
 
     // 계좌 인증 여부 확인
     const hasVerifiedBankAccount = user.bankAccounts?.some(acc => acc.isVerified) || false;
+    const hasRefundAccount = !!user.refundAccount;
 
     // 응답 데이터 구성
     const userData = user.toJSON();
@@ -318,6 +362,7 @@ const getUserDetail = async (req, res) => {
       ...userData,
       accountTypeDetail,
       hasVerifiedBankAccount,
+      hasRefundAccount,
       hostRoomsCount,
       guestReservationsCount
     }, '유저 상세 조회 성공');

@@ -235,6 +235,9 @@ router.get('/support/inquiries/:id', inquiryController.getInquiryByIdAdmin);
 // 문의 답변 등록
 router.post('/support/inquiries/:id/answer', inquiryController.answerInquiry);
 
+// 문의 답변 수정
+router.patch('/support/inquiries/:id/answer', inquiryController.updateAnswer);
+
 // 문의 상태 변경
 router.patch('/support/inquiries/:id/status', inquiryController.updateInquiryStatus);
 
