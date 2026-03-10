@@ -204,11 +204,27 @@ const getUsers = async (req, res) => {
       offset: parseInt(offset),
       limit: parseInt(limit),
       order: [[sortBy, sortOrder]],
-      attributes: { exclude: ['refreshToken'] }
+      attributes: { exclude: ['refreshToken'] },
+      include: [
+        {
+          model: require('../models').UserBankAccount,
+          as: 'bankAccounts',
+          attributes: ['id'],
+          required: false
+        }
+      ]
+    });
+
+    // 계좌 등록 여부 필드 추가
+    const usersWithBankStatus = users.map(user => {
+      const userData = user.toJSON();
+      userData.hasBankAccount = (userData.bankAccounts && userData.bankAccounts.length > 0);
+      delete userData.bankAccounts;
+      return userData;
     });
 
     return success(res, {
-      users,
+      users: usersWithBankStatus,
       pagination: {
         total,
         page: parseInt(page),
