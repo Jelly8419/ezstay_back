@@ -3330,6 +3330,231 @@ PATCH /api/admin/receipts/:id/reject
 
 ---
 
+## 📱 알림톡 관리 API
+
+### 1. 알림톡 템플릿 목록 조회
+
+카카오 알림톡 템플릿의 등록 현황과 Aligo 승인 상태를 조회합니다.
+
+```
+GET /api/admin/alimtalk/templates
+```
+
+**권한**: 모든 관리자
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "totalTemplates": 27,
+    "activeTemplates": 25,
+    "lastSyncTime": "2026-03-11T06:00:00.000Z",
+    "syncError": null,
+    "templates": [
+      {
+        "eventName": "chat_message_host",
+        "tplCode": "UF_8708",
+        "eventLabel": "채팅 확인 알림_호스트",
+        "varMap": { "roomName": "방이름" },
+        "isActive": true,
+        "inspStatus": "APR",
+        "templtName": "채팅 확인 알림_호스트",
+        "lastFetched": "2026-03-11T06:00:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+**필드 설명:**
+| 필드 | 설명 |
+|------|------|
+| `tplCode` | Aligo 등록 템플릿 코드 (null이면 미등록) |
+| `varMap` | JS 변수명 → 카카오 템플릿 #{변수명} 매핑 |
+| `isActive` | tplCode가 있으면 true (발송 가능) |
+| `inspStatus` | Aligo 승인 상태 (APR=승인, REJ=거절, REG=등록중) |
+| `lastSyncTime` | 마지막 Aligo 동기화 시각 |
+
+---
+
+### 2. 알림톡 템플릿 캐시 수동 갱신
+
+Aligo에서 템플릿 정보를 즉시 다시 가져와 캐시를 갱신합니다. (기본 6시간 자동 동기화)
+
+```
+POST /api/admin/alimtalk/templates/sync
+```
+
+**권한**: super_admin, admin
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "templateCount": 25,
+    "lastSyncTime": "2026-03-11T12:30:00.000Z"
+  },
+  "message": "알림톡 템플릿 캐시 갱신 완료"
+}
+```
+
+---
+
+### 3. 알림톡 발송 이력 조회
+
+알림톡 발송 이력을 필터링하여 조회합니다.
+
+```
+GET /api/admin/alimtalk/logs
+```
+
+**권한**: 모든 관리자
+
+**Query Parameters:**
+| 파라미터 | 타입 | 필수 | 기본값 | 설명 |
+|----------|------|------|--------|------|
+| `page` | number | X | 1 | 페이지 번호 |
+| `limit` | number | X | 20 | 페이지당 건수 (최대 100) |
+| `status` | string | X | - | 상태 필터 (SENT, FAILED, RETRIED, FALLBACK_SENT, FALLBACK_FAILED) |
+| `eventName` | string | X | - | 이벤트명 필터 (예: payment_completed_guest) |
+| `receiverId` | number | X | - | 수신자 ID 필터 |
+| `startDate` | string | X | - | 시작일 (YYYY-MM-DD) |
+| `endDate` | string | X | - | 종료일 (YYYY-MM-DD) |
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "logs": [
+      {
+        "id": 150,
+        "eventName": "payment_completed_guest",
+        "contractId": 45,
+        "chatRoomId": null,
+        "receiverId": 12,
+        "receiverPhone": "010-1234-5678",
+        "tplCode": "UF_8373",
+        "status": "SENT",
+        "retryCount": 0,
+        "errorMessage": null,
+        "sentAt": "2026-03-11T10:00:00.000Z",
+        "failedAt": null,
+        "createdAt": "2026-03-11T10:00:00.000Z"
+      }
+    ],
+    "pagination": {
+      "currentPage": 1,
+      "totalPages": 8,
+      "totalCount": 150,
+      "limit": 20
+    }
+  }
+}
+```
+
+**status 값:**
+| 상태 | 설명 |
+|------|------|
+| `PENDING` | 발송 대기 중 |
+| `SENT` | 알림톡 발송 성공 |
+| `FAILED` | 발송 실패 (재시도 가능) |
+| `RETRIED` | 재시도 후 성공 |
+| `FALLBACK_SENT` | SMS 대체 발송 성공 |
+| `FALLBACK_FAILED` | SMS 대체 발송도 실패 |
+
+---
+
+### 4. 알림톡 발송 통계
+
+기간별 알림톡 발송 통계를 조회합니다.
+
+```
+GET /api/admin/alimtalk/stats
+```
+
+**권한**: 모든 관리자
+
+**Query Parameters:**
+| 파라미터 | 타입 | 필수 | 기본값 | 설명 |
+|----------|------|------|--------|------|
+| `startDate` | string | X | 30일 전 | 시작일 (YYYY-MM-DD) |
+| `endDate` | string | X | 오늘 | 종료일 (YYYY-MM-DD) |
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "period": {
+      "startDate": "2026-02-09",
+      "endDate": "2026-03-11"
+    },
+    "summary": {
+      "total": 520,
+      "sent": 480,
+      "retried": 15,
+      "fallbackSent": 10,
+      "failed": 15,
+      "successRate": "97.1%"
+    },
+    "byStatus": [
+      { "status": "SENT", "count": 480 },
+      { "status": "FAILED", "count": 15 },
+      { "status": "RETRIED", "count": 15 },
+      { "status": "FALLBACK_SENT", "count": 10 }
+    ],
+    "byEvent": [
+      {
+        "eventName": "payment_completed_guest",
+        "total": 120,
+        "sent": 115,
+        "failed": 3,
+        "fallback": 2
+      }
+    ]
+  }
+}
+```
+
+---
+
+### 5. 알림톡 수동 재시도
+
+실패한 알림톡 발송 건을 수동으로 재시도합니다.
+
+```
+POST /api/admin/alimtalk/logs/:logId/retry
+```
+
+**권한**: super_admin, admin
+
+**Path Parameters:**
+| 파라미터 | 타입 | 설명 |
+|----------|------|------|
+| `logId` | number | AlimtalkLog ID |
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "logId": 150,
+    "retried": true
+  },
+  "message": "알림톡 재시도 완료"
+}
+```
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 400 | 4001 | 재시도 불가 (이미 성공, 재시도 횟수 초과 등) |
+
+---
+
 ## ⚠️ 에러 코드
 
 ### 공통 에러 코드
@@ -3558,6 +3783,15 @@ PATCH /api/admin/receipts/:id/reject
 | PATCH | `/receipts/:id/issue` | super_admin, admin | 영수증 발급 |
 | PATCH | `/receipts/:id/reject` | super_admin, admin | 영수증 반려 |
 
+### 알림톡 관리
+| Method | Endpoint | 권한 | 설명 |
+|--------|----------|------|------|
+| GET | `/alimtalk/templates` | 모든 관리자 | 템플릿 목록 조회 |
+| POST | `/alimtalk/templates/sync` | super_admin, admin | 캐시 수동 갱신 |
+| GET | `/alimtalk/logs` | 모든 관리자 | 발송 이력 조회 |
+| GET | `/alimtalk/stats` | 모든 관리자 | 발송 통계 |
+| POST | `/alimtalk/logs/:logId/retry` | super_admin, admin | 수동 재시도 |
+
 ---
 
-> 총 **65개** 관리자 API 엔드포인트 (v5.0.0 기준)
+> 총 **70개** 관리자 API 엔드포인트 (v5.1.0 기준)

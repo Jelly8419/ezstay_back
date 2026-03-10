@@ -239,7 +239,7 @@ class NotificationService {
    * 계약 거절 알림 (게스트에게만)
    * @param {Object} contract - 계약 정보
    */
-  static async notifyContractRejected(contract) {
+  static async notifyContractRejected(contract, options = {}) {
     const msg = NotificationMessages.contractRejected();
     await this.create({
       userId: contract.guestId,
@@ -250,6 +250,13 @@ class NotificationService {
       relatedContractId: contract.id,
       relatedRoomId: contract.roomId
     });
+
+    // 알림톡 발송
+    const { guest, room } = options;
+    if (guest && room) {
+      AlimtalkService.sendContractRejected(contract, guest, room)
+        .catch(err => console.error('[Alimtalk] contract_rejected 실패:', err.message));
+    }
   }
 
   /**

@@ -263,10 +263,11 @@ class AlimtalkService {
       endDate: this._formatDate(contract.checkOutDate)
     };
 
-    // 게스트에게
+    // 게스트에게 (옵션 상품이 있으면 포함)
     await this.send('payment_completed_guest', guest, {
       ...commonData,
-      amount: this._formatNumber(paymentData.guestAmount || contract.finalTotalAmount)
+      amount: this._formatNumber(paymentData.guestAmount || contract.finalTotalAmount),
+      optionItems: paymentData.optionItems || '없음'
     }, { contractId: contract.id });
 
     // 호스트에게
@@ -382,6 +383,15 @@ class AlimtalkService {
   /** 4-2. 계약 승인 알림톡 */
   static async sendContractApproved(contract, guest, room) {
     await this.send('contract_approved_guest', guest, {
+      roomName: room?.roomName || '',
+      startDate: this._formatDate(contract.checkInDate),
+      endDate: this._formatDate(contract.checkOutDate)
+    }, { contractId: contract.id });
+  }
+
+  /** 계약 거절 알림톡 (게스트에게) */
+  static async sendContractRejected(contract, guest, room) {
+    await this.send('contract_rejected_guest', guest, {
       roomName: room?.roomName || '',
       startDate: this._formatDate(contract.checkInDate),
       endDate: this._formatDate(contract.checkOutDate)

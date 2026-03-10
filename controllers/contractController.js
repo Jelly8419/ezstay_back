@@ -1254,9 +1254,13 @@ const rejectContract = async (req, res) => {
 
     // TODO: 렌탈 아이템 예약 해제 (재고 복구)
 
-    // 게스트에게 거절 알림 전송
+    // 게스트에게 거절 알림 전송 + 알림톡
     try {
-      await NotificationService.notifyContractRejected(contract);
+      const [guest, room] = await Promise.all([
+        User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
+      ]);
+      await NotificationService.notifyContractRejected(contract, { guest, room });
     } catch (notifyErr) {
       console.error('계약 거절 알림 전송 실패 (무시됨):', notifyErr);
     }
@@ -2179,11 +2183,27 @@ const confirmPayment = async (req, res) => {
     });
 
     // 결제 완료 알림 (호스트 + 게스트) + 알림톡
+    // 옵션 상품 정보 조회 (있는 경우에만)
+    let optionItems = '';
+    if (initialRentalOrder) {
+      try {
+        const orderItems = await RentalOrderItem.findAll({
+          where: { rentalOrderId: initialRentalOrder.id },
+          include: [{ model: RentalItem, as: 'rentalItem', attributes: ['name'] }]
+        });
+        if (orderItems.length > 0) {
+          optionItems = orderItems.map(i => `${i.rentalItem?.name || '옵션'} ${i.quantity}개`).join(', ');
+        }
+      } catch (rentalErr) {
+        console.error('렌탈 아이템 조회 실패 (무시됨):', rentalErr);
+      }
+    }
+
     NotificationService.notifyPaymentCompleted(contract, {
       guest: await User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
       host: await User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
       room: contract.room,
-      paymentData: { guestAmount: payment.totalAmount, hostAmount: contract.totalUsageFee }
+      paymentData: { guestAmount: payment.totalAmount, hostAmount: contract.totalUsageFee, optionItems }
     }).catch(err => {
       console.error('결제 완료 알림 전송 실패 (무시됨):', err);
     });

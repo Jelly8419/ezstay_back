@@ -3237,6 +3237,265 @@ const forceDepositHold = async (req, res) => {
   }
 };
 
+// ============================================
+// 알림톡 관리
+// ============================================
+
+/**
+ * 알림톡 템플릿 목록 조회
+ * GET /api/admin/alimtalk/templates
+ */
+const getAlimtalkTemplates = async (req, res) => {
+  try {
+    const { templates } = require('../config/alimtalkTemplates');
+    const { getCacheStatus } = require('../utils/alimtalkTemplateCache');
+
+    const cacheStatus = getCacheStatus();
+
+    // config에 등록된 tplCode 목록
+    const configTplCodes = new Set(
+      Object.values(templates).map(t => t.tplCode).filter(Boolean)
+    );
+
+    // 1) config 정의 + 캐시 상태 병합
+    const configTemplates = Object.entries(templates).map(([eventName, config]) => {
+      const cached = cacheStatus.templates.find(t => t.tplCode === config.tplCode);
+      return {
+        eventName,
+        tplCode: config.tplCode,
+        eventLabel: config.eventLabel,
+        varMap: config.varMap,
+        isActive: !!config.tplCode,
+        isLinked: true,
+        inspStatus: cached?.inspStatus || null,
+        templtName: cached?.templtName || null,
+        templtContent: cached?.templtContent || null,
+        buttons: cached?.buttons || null,
+        lastFetched: cached?.lastFetched || null
+      };
+    });
+
+    // 2) Aligo에만 있고 config에 없는 템플릿 (미연결)
+    const unmappedTemplates = cacheStatus.templates
+      .filter(t => !configTplCodes.has(t.tplCode))
+      .map(t => ({
+        eventName: null,
+        tplCode: t.tplCode,
+        eventLabel: null,
+        varMap: null,
+        isActive: false,
+        isLinked: false,
+        inspStatus: t.inspStatus,
+        templtName: t.templtName,
+        templtContent: t.templtContent || null,
+        buttons: t.buttons || null,
+        lastFetched: t.lastFetched
+      }));
+
+    const allTemplates = [...configTemplates, ...unmappedTemplates];
+
+    return success(res, {
+      totalTemplates: allTemplates.length,
+      activeTemplates: configTemplates.filter(t => t.isActive).length,
+      unmappedCount: unmappedTemplates.length,
+      lastSyncTime: cacheStatus.lastSyncTime,
+      syncError: cacheStatus.syncError,
+      templates: allTemplates
+    }, '알림톡 템플릿 목록 조회 성공');
+  } catch (err) {
+    console.error('알림톡 템플릿 목록 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 알림톡 템플릿 캐시 수동 갱신
+ * POST /api/admin/alimtalk/templates/sync
+ */
+const syncAlimtalkTemplates = async (req, res) => {
+  try {
+    const { syncTemplates } = require('../utils/alimtalkTemplateCache');
+
+    const result = await syncTemplates();
+
+    if (result?.error) {
+      return error(res, { code: 5001, message: `템플릿 동기화 실패: ${result.error}` }, 500);
+    }
+
+    const { getCacheStatus } = require('../utils/alimtalkTemplateCache');
+    const cacheStatus = getCacheStatus();
+
+    return success(res, {
+      templateCount: cacheStatus.templateCount,
+      lastSyncTime: cacheStatus.lastSyncTime
+    }, '알림톡 템플릿 캐시 갱신 완료');
+  } catch (err) {
+    console.error('알림톡 템플릿 동기화 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 알림톡 발송 이력 조회
+ * GET /api/admin/alimtalk/logs
+ * Query: page, limit, status, eventName, receiverId, startDate, endDate
+ */
+const getAlimtalkLogs = async (req, res) => {
+  try {
+    const { AlimtalkLog } = require('../models');
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    const offset = (page - 1) * limit;
+
+    const where = {};
+
+    if (req.query.status) {
+      where.status = req.query.status;
+    }
+    if (req.query.eventName) {
+      where.eventName = req.query.eventName;
+    }
+    if (req.query.receiverId) {
+      where.receiverId = parseInt(req.query.receiverId);
+    }
+    if (req.query.startDate || req.query.endDate) {
+      where.createdAt = {};
+      if (req.query.startDate) {
+        where.createdAt[Op.gte] = new Date(req.query.startDate);
+      }
+      if (req.query.endDate) {
+        const endDate = new Date(req.query.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        where.createdAt[Op.lte] = endDate;
+      }
+    }
+
+    const { count, rows } = await AlimtalkLog.findAndCountAll({
+      where,
+      order: [['createdAt', 'DESC']],
+      limit,
+      offset,
+      attributes: [
+        'id', 'eventName', 'contractId', 'chatRoomId',
+        'receiverId', 'receiverPhone', 'tplCode', 'status',
+        'retryCount', 'errorMessage', 'sentAt', 'failedAt', 'createdAt'
+      ]
+    });
+
+    return success(res, {
+      logs: rows,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(count / limit),
+        totalCount: count,
+        limit
+      }
+    }, '알림톡 발송 이력 조회 성공');
+  } catch (err) {
+    console.error('알림톡 발송 이력 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 알림톡 발송 통계
+ * GET /api/admin/alimtalk/stats
+ * Query: startDate, endDate (기본: 최근 30일)
+ */
+const getAlimtalkStats = async (req, res) => {
+  try {
+    const { AlimtalkLog } = require('../models');
+
+    const endDate = req.query.endDate ? new Date(req.query.endDate) : new Date();
+    endDate.setHours(23, 59, 59, 999);
+    const startDate = req.query.startDate
+      ? new Date(req.query.startDate)
+      : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const dateFilter = {
+      createdAt: { [Op.between]: [startDate, endDate] }
+    };
+
+    // 상태별 건수
+    const statusCounts = await AlimtalkLog.findAll({
+      where: dateFilter,
+      attributes: [
+        'status',
+        [sequelize.fn('COUNT', sequelize.col('id')), 'count']
+      ],
+      group: ['status'],
+      raw: true
+    });
+
+    // 이벤트별 건수
+    const eventCounts = await AlimtalkLog.findAll({
+      where: dateFilter,
+      attributes: [
+        'eventName',
+        [sequelize.fn('COUNT', sequelize.col('id')), 'total'],
+        [sequelize.fn('SUM', sequelize.literal("CASE WHEN status = 'SENT' THEN 1 ELSE 0 END")), 'sent'],
+        [sequelize.fn('SUM', sequelize.literal("CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END")), 'failed'],
+        [sequelize.fn('SUM', sequelize.literal("CASE WHEN status = 'FALLBACK_SENT' THEN 1 ELSE 0 END")), 'fallback']
+      ],
+      group: ['eventName'],
+      order: [[sequelize.fn('COUNT', sequelize.col('id')), 'DESC']],
+      raw: true
+    });
+
+    // 전체 집계
+    const total = statusCounts.reduce((sum, s) => sum + parseInt(s.count), 0);
+    const sentCount = parseInt(statusCounts.find(s => s.status === 'SENT')?.count || 0);
+    const failedCount = parseInt(statusCounts.find(s => s.status === 'FAILED')?.count || 0);
+    const retriedCount = parseInt(statusCounts.find(s => s.status === 'RETRIED')?.count || 0);
+    const fallbackCount = parseInt(statusCounts.find(s => s.status === 'FALLBACK_SENT')?.count || 0);
+
+    const successCount = sentCount + retriedCount + fallbackCount;
+    const successRate = total > 0 ? ((successCount / total) * 100).toFixed(1) : '0.0';
+
+    return success(res, {
+      period: {
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0]
+      },
+      summary: {
+        total,
+        sent: sentCount,
+        retried: retriedCount,
+        fallbackSent: fallbackCount,
+        failed: failedCount,
+        successRate: `${successRate}%`
+      },
+      byStatus: statusCounts,
+      byEvent: eventCounts
+    }, '알림톡 발송 통계 조회 성공');
+  } catch (err) {
+    console.error('알림톡 발송 통계 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 알림톡 수동 재시도
+ * POST /api/admin/alimtalk/logs/:logId/retry
+ */
+const retryAlimtalkLog = async (req, res) => {
+  try {
+    const AlimtalkService = require('../services/alimtalkService');
+    const { logId } = req.params;
+
+    const result = await AlimtalkService.retryFailed(parseInt(logId));
+
+    if (!result.retried) {
+      return error(res, { code: 4001, message: result.error || '재시도 불가' }, 400);
+    }
+
+    return success(res, { logId: parseInt(logId), retried: true }, '알림톡 재시도 완료');
+  } catch (err) {
+    console.error('알림톡 수동 재시도 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   // 대시보드
   getDashboardStats,
@@ -3288,5 +3547,12 @@ module.exports = {
   getPendingDepositHolds,
   approveDepositHold,
   rejectDepositHold,
-  forceDepositHold
+  forceDepositHold,
+
+  // 알림톡 관리
+  getAlimtalkTemplates,
+  syncAlimtalkTemplates,
+  getAlimtalkLogs,
+  getAlimtalkStats,
+  retryAlimtalkLog
 };

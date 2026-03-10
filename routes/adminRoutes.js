@@ -387,4 +387,31 @@ router.patch(
   adminReceiptController.rejectReceipt
 );
 
+// ============================================
+// 알림톡 관리
+// ============================================
+
+// 알림톡 템플릿 목록 조회
+router.get('/alimtalk/templates', adminController.getAlimtalkTemplates);
+
+// 알림톡 템플릿 캐시 수동 갱신 (super_admin, admin만 가능)
+router.post(
+  '/alimtalk/templates/sync',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.syncAlimtalkTemplates
+);
+
+// 알림톡 발송 이력 조회
+router.get('/alimtalk/logs', adminController.getAlimtalkLogs);
+
+// 알림톡 발송 통계
+router.get('/alimtalk/stats', adminController.getAlimtalkStats);
+
+// 알림톡 수동 재시도 (super_admin, admin만 가능)
+router.post(
+  '/alimtalk/logs/:logId/retry',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.retryAlimtalkLog
+);
+
 module.exports = router;

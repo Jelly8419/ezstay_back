@@ -32,6 +32,9 @@ async function syncTemplates() {
       return { success: false, error: result.error, count: 0 };
     }
 
+    // 기존 캐시 초기화 (삭제/승인취소된 템플릿이 남지 않도록)
+    cache.clear();
+
     let count = 0;
     for (const tpl of result.data) {
       // 승인된 템플릿만 캐시
@@ -122,6 +125,8 @@ function getCacheStatus() {
     templates: Array.from(cache.entries()).map(([code, data]) => ({
       tplCode: code,
       templtName: data.templtName,
+      templtContent: data.templtContent,
+      buttons: data.buttons,
       status: data.status,
       inspStatus: data.inspStatus,
       lastFetched: data.lastFetched
