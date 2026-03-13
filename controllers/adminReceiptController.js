@@ -80,7 +80,7 @@ const getReceiptList = async (req, res) => {
       ],
       order: [
         // PENDING 먼저, 최신 순
-        [sequelize.literal(`FIELD(status, 'PENDING', 'ISSUED')`), 'ASC'],
+        [sequelize.literal(`FIELD(\`Receipt\`.\`status\`, 'PENDING', 'ISSUED')`), 'ASC'],
         ['date', 'DESC'],
         ['createdAt', 'DESC']
       ],
