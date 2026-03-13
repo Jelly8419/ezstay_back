@@ -18,7 +18,8 @@ const {
   duplicateRoom,
   getHostAccount,
   getReceipt,
-  upsertReceipt
+  upsertReceipt,
+  deleteReceipt
 } = require('../controllers/hostController');
 const {
   getAutoMessageTemplates,
@@ -124,6 +125,9 @@ router.get('/receipt', getReceipt);
 
 // 27. 영수증 설정 저장/수정
 router.put('/receipt', upsertReceipt);
+
+// 28. 영수증 설정 삭제
+router.delete('/receipt', deleteReceipt);
 
 // ========================================
 // 정산 관리 API

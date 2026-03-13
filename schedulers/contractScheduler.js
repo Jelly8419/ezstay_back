@@ -6,6 +6,7 @@ const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/syste
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { calculateSettlementDate, calculateSettlementAmount } = require('../services/settlementService');
+const { createReceiptsForReadySettlements } = require('../services/receiptService');
 
 /**
  * 계약 상태 자동 업데이트 스케줄러
@@ -631,6 +632,13 @@ async function updateSettlementReady() {
 
     if (updatedCount > 0) {
       console.log(`[스케줄러] ${updatedCount}건의 정산을 READY 상태로 변경했습니다.`);
+
+      // 정산 READY로 변경된 건에 대해 영수증 자동 생성
+      try {
+        await createReceiptsForReadySettlements();
+      } catch (receiptErr) {
+        console.error('[스케줄러] 영수증 자동 생성 오류:', receiptErr);
+      }
     }
 
     return updatedCount;

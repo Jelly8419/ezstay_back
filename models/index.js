@@ -40,7 +40,8 @@ const Settlement = require('./Settlement');
 const DepositAgreement = require('./DepositAgreement');
 const GuestRefundAccount = require('./GuestRefundAccount');
 const AlimtalkLog = require('./AlimtalkLog');
-const { HostReceiptSetting } = require('./HostReceiptSetting');
+const { ReceiptSetting } = require('./ReceiptSetting');
+const Receipt = require('./Receipt');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -775,28 +776,70 @@ Notification.belongsTo(User, {
 });
 
 // =====================================================
-// HostReceiptSetting 관계 설정 (호스트 영수증 설정)
+// ReceiptSetting 관계 설정 (사용자 영수증 발급 정보 설정)
 // =====================================================
-User.hasOne(HostReceiptSetting, {
-  foreignKey: 'hostId',
+User.hasOne(ReceiptSetting, {
+  foreignKey: 'userId',
   as: 'receiptSetting',
   onDelete: 'NO ACTION',
   onUpdate: 'CASCADE'
 });
-HostReceiptSetting.belongsTo(User, {
-  foreignKey: 'hostId',
-  as: 'host',
+ReceiptSetting.belongsTo(User, {
+  foreignKey: 'userId',
+  as: 'user',
   onDelete: 'NO ACTION',
   onUpdate: 'CASCADE'
 });
 
-HostReceiptSetting.belongsTo(Admin, {
+// =====================================================
+// Receipt 관계 설정 (영수증 발급 건 관리)
+// =====================================================
+User.hasMany(Receipt, {
+  foreignKey: 'userId',
+  as: 'receipts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Receipt.belongsTo(User, {
+  foreignKey: 'userId',
+  as: 'user',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+Contract.hasMany(Receipt, {
+  foreignKey: 'contractId',
+  as: 'receipts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Receipt.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+Settlement.hasMany(Receipt, {
+  foreignKey: 'settlementId',
+  as: 'receipts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Receipt.belongsTo(Settlement, {
+  foreignKey: 'settlementId',
+  as: 'settlement',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+Receipt.belongsTo(Admin, {
   foreignKey: 'issuedBy',
   as: 'issuedByAdmin',
   onDelete: 'NO ACTION',
   onUpdate: 'CASCADE'
 });
-Admin.hasMany(HostReceiptSetting, {
+Admin.hasMany(Receipt, {
   foreignKey: 'issuedBy',
   as: 'issuedReceipts',
   onDelete: 'NO ACTION',
@@ -848,5 +891,6 @@ module.exports = {
   DepositAgreement,
   GuestRefundAccount,
   AlimtalkLog,
-  HostReceiptSetting
+  ReceiptSetting,
+  Receipt
 };

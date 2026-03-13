@@ -2609,6 +2609,10 @@ const approveHostCancelRequest = async (req, res) => {
       cancellationType: 'DURING_STAY'
     }, { transaction });
 
+    // TODO: 호스트 취소 위약금 중 플랫폼 귀속 금액이 있을 경우 영수증 발급 대기 목록 생성
+    // const { createCancelFeeReceipt } = require('../services/receiptService');
+    // await createCancelFeeReceipt({ contractId: contract.id, hostId: contract.hostId, targetType: 'HOST_CANCEL_FEE', platformFeeAmount, date: new Date().toISOString().split('T')[0] }, transaction);
+
     // 상태 변경 로그
     await ContractStatusLog.createLog({
       contractId: contract.id,

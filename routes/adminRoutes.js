@@ -370,21 +370,23 @@ router.patch(
 // 영수증 관리
 // ============================================
 
-// 영수증 신청 목록 조회
+// 영수증 발급 이력 조회 (발급 완료 건) - :id 라우트보다 먼저 선언
+router.get('/receipts/history', adminReceiptController.getReceiptHistory);
+
+// 영수증 CSV 다운로드 - :id 라우트보다 먼저 선언
+router.get('/receipts/export', adminReceiptController.exportReceiptsCsv);
+
+// 영수증 발급 리스트 조회 (발급대기/전체)
 router.get('/receipts', adminReceiptController.getReceiptList);
+
+// 영수증 상세 조회
+router.get('/receipts/:id', adminReceiptController.getReceiptDetail);
 
 // 영수증 발급 완료 처리 (super_admin, admin만 가능)
 router.patch(
   '/receipts/:id/issue',
   requireAdminRole(['super_admin', 'admin']),
   adminReceiptController.issueReceipt
-);
-
-// 영수증 반려 처리 (super_admin, admin만 가능)
-router.patch(
-  '/receipts/:id/reject',
-  requireAdminRole(['super_admin', 'admin']),
-  adminReceiptController.rejectReceipt
 );
 
 // ============================================

@@ -141,8 +141,7 @@ const ErrorCodes = {
   KMC_WORKER_NOT_READY: { code: 4408, message: '인증 모듈이 준비되지 않았습니다.' },
 
   // 영수증 관련 (441x)
-  RECEIPT_NOT_FOUND: { code: 4410, message: '영수증 설정을 찾을 수 없습니다.' },
-  INVALID_RECEIPT_REQUIRED: { code: 4411, message: 'required는 "yes" 또는 "no"여야 합니다.' },
+  RECEIPT_NOT_FOUND: { code: 4410, message: '영수증을 찾을 수 없습니다.' },
   INVALID_RECEIPT_TYPE: { code: 4412, message: '영수증 종류가 올바르지 않습니다.' },
   INVALID_RECEIPT_NUMBER: { code: 4413, message: '영수증 번호가 올바르지 않습니다.' },
   RECEIPT_BUSINESS_NAME_REQUIRED: { code: 4414, message: '세금계산서 발급 시 사업자명은 필수입니다.' },
