@@ -1,33 +1,7 @@
 const axios = require('axios');
 const { UserBankAccount, GuestRefundAccount } = require('../models');
 const { ErrorCodes, success, error, created, deleted } = require('../utils/responseHelper');
-
-// 아임포트 API 은행 코드 매핑
-const BANK_CODES = {
-  '국민은행': '004',
-  '신한은행': '088',
-  '우리은행': '020',
-  '하나은행': '081',
-  'KB국민은행': '004',
-  '기업은행': '003',
-  '농협은행': '011',
-  '카카오뱅크': '090',
-  '토스뱅크': '092',
-  '새마을금고': '045',
-  '신협': '048',
-  '우체국예금보험': '071',
-  '경남은행': '039',
-  '광주은행': '034',
-  '대구은행': '031',
-  '부산은행': '032',
-  '수협은행': '007',
-  '전북은행': '037',
-  '제주은행': '035',
-  '산업은행': '002',
-  '수출입은행': '008',
-  'SC제일은행': '023',
-  '씨티은행': '027'
-};
+const { BANK_NAME_TO_CODE: BANK_CODES } = require('../utils/bankCodes');
 
 // 아임포트 액세스 토큰 캐시
 let accessTokenCache = {

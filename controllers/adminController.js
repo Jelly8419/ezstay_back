@@ -8,6 +8,7 @@ const { sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { calculateRefund } = require('../utils/refundCalculator');
+const { getBankName } = require('../utils/bankCodes');
 
 /**
  * 대시보드 통계 조회
@@ -326,11 +327,23 @@ const getUserDetail = async (req, res) => {
       return error(res, ErrorCodes.USER_NOT_FOUND, 404);
     }
 
-    // 호스트인 경우 등록한 방 개수
-    const hostRoomsCount = await Room.count({ where: { hostId: userId } });
+    // 호스트: 현재 게시중인 방 개수
+    const hostActiveRoomsCount = await Room.count({
+      where: { hostId: userId, status: 'published', isActive: true }
+    });
 
-    // 게스트인 경우 예약 횟수
-    const guestReservationsCount = await Contract.count({ where: { guestId: userId } });
+    // 유효 계약 상태 필터 (결제완료/입주중/완료)
+    const activeContractStatuses = ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED'];
+
+    // 호스트로서 계약 건수
+    const hostContractsCount = await Contract.count({
+      where: { hostId: userId, status: activeContractStatuses }
+    });
+
+    // 게스트로서 계약 건수
+    const guestContractsCount = await Contract.count({
+      where: { guestId: userId, status: activeContractStatuses }
+    });
 
     // 가입 유형 상세 정보 구성
     const accountTypeDetail = user.userType === 'local'
@@ -358,13 +371,28 @@ const getUserDetail = async (req, res) => {
     delete userData.localProfile;
     delete userData.socialProfiles;
 
+    // 은행 코드 → 은행명 치환
+    if (userData.bankAccounts) {
+      userData.bankAccounts = userData.bankAccounts.map(acc => ({
+        ...acc,
+        bankName: getBankName(acc.bankName)
+      }));
+    }
+    if (userData.refundAccount) {
+      userData.refundAccount = {
+        ...userData.refundAccount,
+        bankName: getBankName(userData.refundAccount.bankCode || userData.refundAccount.bankName)
+      };
+    }
+
     return success(res, {
       ...userData,
       accountTypeDetail,
       hasVerifiedBankAccount,
       hasRefundAccount,
-      hostRoomsCount,
-      guestReservationsCount
+      hostActiveRoomsCount,
+      hostContractsCount,
+      guestContractsCount
     }, '유저 상세 조회 성공');
   } catch (err) {
     console.error('유저 상세 조회 실패:', err);
@@ -871,6 +899,11 @@ const getReservationDetail = async (req, res) => {
               model: RoomPhoto,
               as: 'photos',
               attributes: ['id', 'url', 'order']
+            },
+            {
+              model: EzService,
+              as: 'ezService',
+              required: false
             }
           ]
         }

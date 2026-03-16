@@ -326,15 +326,18 @@ router.post(
 // 결제 관리
 // ============================================
 
-// 결제 목록 조회
-router.get('/payments', adminPaymentController.getPayments);
+// 탭1: 주문별 결제 현황 (계약 기준 결제 요약)
+router.get('/payments/summary', adminPaymentController.getPaymentSummary);
 
-// 결제 상세 조회
-router.get('/payments/:paymentId', adminPaymentController.getPaymentDetail);
+// 탭2: 결제/취소 내역 (이벤트 로그)
+router.get('/payments/logs', adminPaymentController.getPaymentLogs);
+
+// 결제 상세 조회 (계약 기준 타임라인)
+router.get('/payments/:contractId', adminPaymentController.getPaymentDetail);
 
 // 관리자 환불 처리 (토스페이먼츠 연동, super_admin/admin만 가능)
 router.post(
-  '/payments/:paymentId/refund',
+  '/payments/:contractId/refund',
   requireAdminRole(['super_admin', 'admin']),
   adminPaymentController.processAdminRefund
 );
