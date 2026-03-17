@@ -326,14 +326,14 @@ router.post(
 // 결제 관리
 // ============================================
 
-// 탭1: 주문별 결제 현황 (계약 기준 결제 요약)
+// 탭1: 주문별 결제 현황 (주문번호 기준 1행, 최종 거래유형)
 router.get('/payments/summary', adminPaymentController.getPaymentSummary);
 
-// 탭2: 결제/취소 내역 (이벤트 로그)
+// 탭2: 결제/취소 내역 (계약별 결제 요약)
 router.get('/payments/logs', adminPaymentController.getPaymentLogs);
 
-// 결제 상세 조회 (계약 기준 타임라인)
-router.get('/payments/:contractId', adminPaymentController.getPaymentDetail);
+// 결제 상세 조회 (주문번호 기준, ?type=contract|rental)
+router.get('/payments/:orderId', adminPaymentController.getPaymentDetail);
 
 // 관리자 환불 처리 (토스페이먼츠 연동, super_admin/admin만 가능)
 router.post(

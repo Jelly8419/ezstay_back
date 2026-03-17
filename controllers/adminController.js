@@ -1,5 +1,5 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, ContractStatusLog, ChatRoom, DepositAgreement, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, ContractStatusLog, ChatRoom, DepositAgreement, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -906,6 +906,33 @@ const getReservationDetail = async (req, res) => {
               required: false
             }
           ]
+        },
+        {
+          model: Payment,
+          as: 'payment',
+          required: false
+        },
+        {
+          model: Refund,
+          as: 'refunds',
+          required: false
+        },
+        {
+          model: RentalOrder,
+          as: 'rentalOrders',
+          where: { status: { [Op.notIn]: ['CANCELLED', 'INITIAL'] } },
+          required: false,
+          include: [
+            {
+              model: RentalOrderItem,
+              as: 'items',
+              include: [{
+                model: RentalItem,
+                as: 'rentalItem',
+                attributes: ['id', 'name', 'price', 'imageUrl']
+              }]
+            }
+          ]
         }
       ]
     });
@@ -917,7 +944,145 @@ const getReservationDetail = async (req, res) => {
       }, 404);
     }
 
-    return success(res, reservation, '예약 상세 조회 성공');
+    // === 결제/환불 타임라인 구성 ===
+    const timeline = [];
+
+    // 1) 계약 결제 완료
+    if (reservation.payment && reservation.payment.status !== 'READY') {
+      const p = reservation.payment;
+      const details = [`방 계약`];
+      if (reservation.room) details[0] = `방 계약, ${reservation.room.roomName}`;
+
+      timeline.push({
+        occurredAt: p.approvedAt || p.createdAt,
+        type: '결제완료',
+        amount: p.totalAmount,
+        description: details.join(', '),
+        actor: 'guest',
+        actorName: reservation.guest?.name || null,
+        pgStatus: p.status,
+        paymentKey: p.paymentKey,
+        method: p.method
+      });
+    }
+
+    // 2) 계약 환불 이력
+    (reservation.refunds || []).forEach(r => {
+      if (r.refundStatus === 'COMPLETED') {
+        let description = '계약 환불';
+        const penaltyAmount = r.penaltyAmount || 0;
+        if (penaltyAmount > 0) {
+          description = `계약 취소 (위약금 ${penaltyAmount.toLocaleString()}원)`;
+        }
+        const metadata = typeof r.metadata === 'string' ? JSON.parse(r.metadata) : (r.metadata || {});
+        if (metadata.depositRefund) {
+          description = '보증금 반환';
+        }
+
+        timeline.push({
+          occurredAt: r.completedAt || r.updatedAt,
+          type: '부분취소',
+          amount: -(r.finalRefundAmount || 0),
+          description,
+          actor: metadata.changedBy || 'system',
+          actorName: null,
+          refundId: r.id
+        });
+      }
+    });
+
+    // 3) 렌탈 결제/환불 이력 (RentalOrderLog 기반)
+    const rentalLogs = await RentalOrderLog.findAll({
+      where: {
+        contractId: reservation.id,
+        action: { [Op.in]: ['PAYMENT_COMPLETED', 'REFUND_COMPLETED', 'ITEM_CANCELLED', 'ORDER_CANCELLED'] }
+      },
+      include: [{
+        model: RentalOrder,
+        as: 'order',
+        attributes: ['id', 'orderId', 'orderType'],
+        where: { orderType: { [Op.ne]: 'INITIAL' } },
+        required: true
+      }],
+      order: [['createdAt', 'ASC']]
+    });
+
+    const rentalOrderMap = new Map(
+      (reservation.rentalOrders || []).map(ro => [ro.id, ro])
+    );
+
+    rentalLogs.forEach(log => {
+      const isPayment = log.action === 'PAYMENT_COMPLETED';
+      const isOrderCancelled = log.action === 'ORDER_CANCELLED';
+      const metadata = log.metadata || {};
+
+      let description;
+      let type;
+
+      if (isPayment) {
+        const ro = rentalOrderMap.get(log.rentalOrderId);
+        const itemDesc = (ro?.items || [])
+          .map(i => `${i.rentalItem?.name || '아이템'} ${i.quantity}개`)
+          .join(', ');
+        description = itemDesc ? `렌탈 결제 (${itemDesc})` : '렌탈 결제';
+        type = '결제완료';
+      } else if (isOrderCancelled) {
+        const ro = rentalOrderMap.get(log.rentalOrderId);
+        const itemDesc = (ro?.items || [])
+          .map(i => `${i.rentalItem?.name || '아이템'} ${i.quantity}개`)
+          .join(', ');
+        description = itemDesc ? `렌탈 주문 전체 취소 (${itemDesc})` : '렌탈 주문 전체 취소';
+        type = '전체취소';
+      } else {
+        description = log.action === 'ITEM_CANCELLED' ? '렌탈 아이템 취소' : '렌탈 환불';
+        type = '부분취소';
+      }
+
+      if (metadata.itemName) {
+        description += `, ${metadata.itemName}`;
+        if (metadata.quantity) description += ` ${metadata.quantity}개`;
+      }
+      if (log.description && !isPayment && !isOrderCancelled) description = log.description;
+
+      const actorMap = { GUEST: 'guest', HOST: 'host', ADMIN: 'admin', SYSTEM: 'system' };
+
+      timeline.push({
+        occurredAt: log.createdAt,
+        type,
+        amount: log.amountChange || 0,
+        description,
+        actor: actorMap[log.actor] || log.actor,
+        actorName: null,
+        rentalOrderId: log.order?.orderId || null
+      });
+    });
+
+    // 시간순 정렬
+    timeline.sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt));
+
+    // === 금액 요약 ===
+    const contractPaidAmount = reservation.finalTotalAmount || 0;
+    const contractRefundTotal = (reservation.refunds || [])
+      .filter(r => r.refundStatus === 'COMPLETED')
+      .reduce((sum, r) => sum + (r.finalRefundAmount || 0), 0);
+    const rentalPaidTotal = (reservation.rentalOrders || [])
+      .reduce((sum, ro) => sum + (parseFloat(ro.paidAmount) || 0), 0);
+    const rentalRefundTotal = (reservation.rentalOrders || [])
+      .reduce((sum, ro) => sum + (parseFloat(ro.refundedAmount) || 0), 0);
+
+    return success(res, {
+      reservation,
+      paymentSummary: {
+        totalPaidAmount: contractPaidAmount + rentalPaidTotal,
+        totalRefundedAmount: contractRefundTotal + rentalRefundTotal,
+        currentBalance: (contractPaidAmount + rentalPaidTotal) - (contractRefundTotal + rentalRefundTotal),
+        contractPaidAmount,
+        contractRefundTotal,
+        rentalPaidTotal,
+        rentalRefundTotal
+      },
+      timeline
+    }, '예약 상세 조회 성공');
   } catch (err) {
     console.error('예약 상세 조회 실패:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
