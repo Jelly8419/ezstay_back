@@ -1963,23 +1963,8 @@ const getPaymentInfo = async (req, res) => {
       responseData.pgAmount = testAmount;
     }
 
-    // 가상계좌 입금 마감시간 = min(체크인시간, 승인시점+24시간)
-    if (contract.approvedAt) {
-      const room = await Room.findByPk(contract.roomId, { attributes: ['checkInTime'] });
-      const approvedAt = new Date(contract.approvedAt);
-      const deadline24h = new Date(approvedAt.getTime() + 24 * 60 * 60 * 1000);
-
-      const checkInDate = new Date(contract.checkInDate);
-      const checkInTime = room ? (room.checkInTime || 15) : 15;
-      const checkInDeadline = new Date(
-        checkInDate.getFullYear(),
-        checkInDate.getMonth(),
-        checkInDate.getDate(),
-        checkInTime, 0, 0
-      );
-
-      responseData.depositDeadline = (deadline24h < checkInDeadline ? deadline24h : checkInDeadline).toISOString();
-    }
+    // TODO: 가상계좌 지원 시 depositDeadline(입금 마감시간) 추가
+    // = min(승인시점+24h, 체크인날짜+입실시간)
 
     return success(res, responseData, '결제 정보를 조회했습니다.');
   } catch (err) {
@@ -2082,10 +2067,12 @@ const confirmPayment = async (req, res) => {
 
     const now = new Date();
     const paymentMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
-    const isVbank = payType === 'VBANK';
 
-    // 가상계좌: 발급만 된 상태(입금 대기), 그 외: 즉시 결제 완료
-    const paymentStatus = isVbank ? 'WAITING_FOR_DEPOSIT' : 'DONE';
+    // TODO: 가상계좌(VBANK) 결제 지원 - 오픈 스펙 제외, 추후 구현
+    // - VBANK 선택 시 status: 'WAITING_FOR_DEPOSIT', Contract APPROVED 유지
+    // - 웹훅으로 입금 확인 후 DONE + PAYMENT_COMPLETED 전환
+    // - 입금 마감시간 검증: min(승인+24h, 체크인시간)
+    // - 관련 파일: controllers/paytagWebhookController.js, server.js 웹훅 라우트
 
     // Payment 레코드 생성 (테스트 모드에서도 실제 금액으로 저장)
     const payment = await Payment.create({
@@ -2093,9 +2080,9 @@ const confirmPayment = async (req, res) => {
       paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
       orderId: contract.orderId,
       method: paymentMethod,
-      status: paymentStatus,
+      status: 'DONE',
       requestedAt: now,
-      approvedAt: isVbank ? null : now,
+      approvedAt: now,
       totalAmount: realAmount,
       balanceAmount: realAmount,
       suppliedAmount: Math.round(realAmount / 1.1),
@@ -2108,71 +2095,28 @@ const confirmPayment = async (req, res) => {
     }, { transaction });
 
     // Contract 상태 업데이트
-    // 가상계좌: APPROVED 유지 (입금 완료 웹훅에서 PAYMENT_COMPLETED로 변경)
-    if (!isVbank) {
-      await contract.update({
-        status: 'PAYMENT_COMPLETED',
-        paymentMethod: paytagClient.mapContractPaymentMethod(payType || 'CARD'),
-        paidAt: now
-      }, { transaction });
-    } else {
-      await contract.update({
-        paymentMethod: paytagClient.mapContractPaymentMethod(payType)
-      }, { transaction });
-    }
+    await contract.update({
+      status: 'PAYMENT_COMPLETED',
+      paymentMethod: paytagClient.mapContractPaymentMethod(payType || 'CARD'),
+      paidAt: now
+    }, { transaction });
 
     // 상태 변경 로그 기록
     await ContractStatusLog.createLog({
       contractId: contract.id,
       fromStatus: 'APPROVED',
-      toStatus: isVbank ? 'APPROVED' : 'PAYMENT_COMPLETED',
+      toStatus: 'PAYMENT_COMPLETED',
       changedBy: 'GUEST',
       changedByUserId: guestId,
-      reason: isVbank ? '가상계좌 발급 완료 (입금 대기)' : '게스트가 결제를 완료했습니다',
+      reason: '게스트가 결제를 완료했습니다',
       metadata: {
         paymentKey: payment.paymentKey,
         paymentMethod: payment.method,
-        totalAmount: payment.totalAmount,
-        ...(isVbank && {
-          vbankCode: paytagResponse.vbankcode,
-          vbankNo: paytagResponse.vbankno,
-          vbankOwner: paytagResponse.vbankowner,
-          expireDate: paytagResponse.orderinfo_expiredt,
-          expireTime: paytagResponse.orderinfo_expiretm
-        })
+        totalAmount: payment.totalAmount
       },
       req,
       transaction
     });
-
-    // 가상계좌: 발급 완료 응답 후 종료 (입금 대기)
-    if (isVbank) {
-      await transaction.commit();
-
-      console.log(`✅ 가상계좌 발급 완료: contractId=${contract.id}, paymentKey=${payment.paymentKey}`);
-
-      return success(res, {
-        contractId: contract.id,
-        orderId: contract.orderId,
-        status: 'APPROVED',
-        payment: {
-          paymentKey: payment.paymentKey,
-          method: payment.method,
-          status: payment.status,
-          totalAmount: payment.totalAmount
-        },
-        vbank: {
-          bankCode: paytagResponse.vbankcode || null,
-          bankName: paytagResponse.vbankname || null,
-          accountNo: paytagResponse.vbankno || null,
-          accountHolder: paytagResponse.vbankowner || null,
-          expireDate: paytagResponse.orderinfo_expiredt || null,
-          expireTime: paytagResponse.orderinfo_expiretm || null
-        }
-      }, '가상계좌가 발급되었습니다. 입금기한 내에 입금해주세요.');
-    }
-
-    // === 이하 즉시 결제 (카드/간편결제) 전용 ===
 
     // 렌탈 주문이 있으면 함께 결제 처리
     let initialRentalOrder = await RentalOrder.findOne({
