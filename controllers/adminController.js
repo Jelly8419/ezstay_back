@@ -9,6 +9,7 @@ const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/syste
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { calculateRefund } = require('../utils/refundCalculator');
 const { getBankName } = require('../utils/bankCodes');
+const paytagClient = require('../utils/paytagClient');
 
 /**
  * 대시보드 통계 조회
@@ -1855,8 +1856,9 @@ const approveRefund = async (req, res) => {
       { transaction }
     );
 
-    // TODO: 실제 환불 처리 로직 (PG사 API 연동)
-    // await processRefundPayment(refund);
+    // TODO: PayTag 환불 API 문서 수령 후 구현 필요
+    // paytagClient.cancelPayment()로 실제 PG 환불 처리
+    // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
 
     await transaction.commit();
 
@@ -1868,7 +1870,7 @@ const approveRefund = async (req, res) => {
         approvedAt: refund.approvedAt,
         finalRefundAmount: refund.finalRefundAmount
       },
-      '환불이 승인되었습니다. 실제 환불 처리는 영업일 기준 3-5일 소요됩니다.'
+      '환불이 승인되었습니다. 실제 환불 처리는 수동으로 진행해주세요.'
     );
   } catch (err) {
     await transaction.rollback();
@@ -2383,8 +2385,8 @@ const adminCancelRentalOrder = async (req, res) => {
       ? parseFloat(refundAmount)
       : orderTotal;
 
-    // TODO: PG(토스페이먼츠) 연동 후, 환불 시 토스 환불 API 호출 필요
-    // cancelPaidRentalOrder() 함수(utils/rentalOrderHelper.js)의 토스 환불 로직 참고
+    // TODO: PayTag 환불 API 문서 수령 후 구현 필요
+    // paytagClient.cancelPayment()로 렌탈 PG 환불 처리
     // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
 
     // 전체 아이템 취소 처리

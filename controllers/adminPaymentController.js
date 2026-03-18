@@ -1,6 +1,6 @@
 const { Payment, PaymentFailureLog, RentalPayment, RentalOrder, RentalOrderItem, RentalItem, Contract, User, Room, Refund, RentalOrderLog, sequelize } = require('../models');
 const { Op } = require('sequelize');
-const axios = require('axios');
+const paytagClient = require('../utils/paytagClient');
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
 
 /**
@@ -474,8 +474,8 @@ exports.getPaymentDetail = async (req, res) => {
 };
 
 /**
- * 관리자 환불 처리 (토스페이먼츠 연동)
- * POST /api/admin/payments/:paymentId/refund
+ * 관리자 환불 처리 (PayTag 연동)
+ * POST /api/admin/payments/:contractId/refund
  */
 exports.processAdminRefund = async (req, res) => {
   const transaction = await sequelize.transaction();
@@ -524,38 +524,12 @@ exports.processAdminRefund = async (req, res) => {
       });
     }
 
-    // 토스페이먼츠 취소 API 호출
-    const tossSecretKey = process.env.TOSS_SECRET_KEY;
-    const encodedKey = Buffer.from(`${tossSecretKey}:`).toString('base64');
+    // TODO: PayTag 환불 API 문서 수령 후 구현 필요
+    // paytagClient.cancelPayment()로 실제 PG 환불 처리
+    // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
 
-    let tossResponse;
-    try {
-      tossResponse = await axios.post(
-        `https://api.tosspayments.com/v1/payments/${payment.paymentKey}/cancel`,
-        {
-          cancelReason: refundReason,
-          cancelAmount: refundAmount
-        },
-        {
-          headers: {
-            Authorization: `Basic ${encodedKey}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-    } catch (tossError) {
-      await transaction.rollback();
-      console.error('토스 환불 실패:', tossError.response?.data || tossError.message);
-      return error(res, ErrorCodes.PAYMENT_NOT_REFUNDABLE, 400, {
-        tossErrorCode: tossError.response?.data?.code,
-        tossErrorMessage: tossError.response?.data?.message
-      });
-    }
-
-    const tossData = tossResponse.data;
-
-    // Payment 상태 업데이트
-    const newBalance = tossData.balanceAmount ?? (payment.balanceAmount - refundAmount);
+    // Payment 상태 업데이트 (DB만 변경)
+    const newBalance = payment.balanceAmount - refundAmount;
     const newStatus = newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED';
 
     await payment.update({
@@ -599,7 +573,7 @@ exports.processAdminRefund = async (req, res) => {
       refundAmount,
       newBalance,
       paymentStatus: newStatus,
-      cancelStatus: tossData.cancels?.[0]?.cancelStatus || null
+      cancelStatus: paytagResponse.resultcode === '0000' ? 'DONE' : null
     }, '환불이 처리되었습니다.');
 
   } catch (err) {

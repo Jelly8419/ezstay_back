@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const axios = require('axios');
+const paytagClient = require('./paytagClient');
 const {
   sequelize,
   RentalOrder,
@@ -656,7 +656,7 @@ async function cancelPaidRentalOrder(rentalOrder, reason, actorId, actor, req, t
     }
   }
 
-  // 토스페이먼츠 환불 API 호출
+  // 결제 정보 조회
   const rentalPayment = await RentalPayment.findOne({
     where: { rentalOrderId: rentalOrder.id },
     transaction
@@ -671,40 +671,16 @@ async function cancelPaidRentalOrder(rentalOrder, reason, actorId, actor, req, t
     throw new Error(`환불 가능 금액이 부족합니다. (가능: ${rentalPayment.balanceAmount}원, 요청: ${refundAmount}원)`);
   }
 
-  const tossSecretKey = process.env.TOSS_SECRET_KEY;
-  const encodedKey = Buffer.from(`${tossSecretKey}:`).toString('base64');
+  // TODO: PayTag 환불 API 문서 수령 후 구현 필요
+  // paytagClient.cancelPayment()로 실제 PG 환불 처리
+  // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
 
-  try {
-    const tossResponse = await axios.post(
-      `https://api.tosspayments.com/v1/payments/${rentalPayment.paymentKey}/cancel`,
-      {
-        cancelReason: reason || '렌탈 주문 취소',
-        cancelAmount: refundAmount
-      },
-      {
-        headers: {
-          Authorization: `Basic ${encodedKey}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    console.log('✅ 토스 환불 성공:', {
-      paymentKey: rentalPayment.paymentKey,
-      refundAmount,
-      cancelStatus: tossResponse.data.cancels?.[0]?.cancelStatus
-    });
-
-    // RentalPayment 잔액 업데이트
-    await rentalPayment.update({
-      balanceAmount: tossResponse.data.balanceAmount,
-      status: tossResponse.data.balanceAmount === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
-    }, { transaction });
-
-  } catch (tossError) {
-    console.error('❌ 토스 환불 실패:', tossError.response?.data || tossError.message);
-    throw new Error(`환불 처리 실패: ${tossError.response?.data?.message || tossError.message}`);
-  }
+  // RentalPayment 잔액 업데이트 (DB만 변경)
+  const newBalance = rentalPayment.balanceAmount - refundAmount;
+  await rentalPayment.update({
+    balanceAmount: newBalance,
+    status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+  }, { transaction });
 
   // 모든 활성 RentalOrderItem 취소
   const cancelledAt = new Date();

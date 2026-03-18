@@ -223,6 +223,10 @@ app.use('/api', rentalOrderRoutes);  // 렌탈 주문 API
 app.use('/api/notifications', notificationRoutes);  // 알림 API
 app.use('/api/auth', kmcRoutes);  // KMC 본인인증
 
+// PayTag 웹훅 (인증 불필요 - PG사에서 직접 호출)
+const paytagWebhookController = require('./controllers/paytagWebhookController');
+app.post('/api/payments/webhook/paytag', paytagWebhookController.handleWebhook);
+
 app.get('/', (req, res) => {
   res.json({ message: 'Rental API Server is running!' });
 });

@@ -1,7 +1,7 @@
 const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalItemReservation, RentalItem, Settlement, DepositAgreement } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
-const axios = require('axios');
+const paytagClient = require('../utils/paytagClient');
 const {
   calculateRentalItemsFee,
   calculateDiscount,
@@ -1883,7 +1883,7 @@ const getPaymentInfo = async (req, res) => {
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'nickname', 'email']
+          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
         }
       ]
     });
@@ -1929,7 +1929,8 @@ const getPaymentInfo = async (req, res) => {
       contractAmount: contract.finalTotalAmount,
       orderName: `${contract.room.roomName} (${contract.totalDays}박)`,
       customerEmail: contract.guest.email,
-      customerName: contract.guest.name
+      customerName: contract.guest.name,
+      customerPhone: contract.guest.phoneNumber || null
     };
 
     // 렌탈 주문이 있으면 정보 추가
@@ -1956,6 +1957,30 @@ const getPaymentInfo = async (req, res) => {
     // 기존 호환성 유지 (amount 필드)
     responseData.amount = responseData.totalAmount;
 
+    // 테스트 모드: 프론트가 SDK에 전달할 실제 PG 결제 금액
+    const testAmount = paytagClient.getTestAmount();
+    if (testAmount) {
+      responseData.pgAmount = testAmount;
+    }
+
+    // 가상계좌 입금 마감시간 = min(체크인시간, 승인시점+24시간)
+    if (contract.approvedAt) {
+      const room = await Room.findByPk(contract.roomId, { attributes: ['checkInTime'] });
+      const approvedAt = new Date(contract.approvedAt);
+      const deadline24h = new Date(approvedAt.getTime() + 24 * 60 * 60 * 1000);
+
+      const checkInDate = new Date(contract.checkInDate);
+      const checkInTime = room ? (room.checkInTime || 15) : 15;
+      const checkInDeadline = new Date(
+        checkInDate.getFullYear(),
+        checkInDate.getMonth(),
+        checkInDate.getDate(),
+        checkInTime, 0, 0
+      );
+
+      responseData.depositDeadline = (deadline24h < checkInDeadline ? deadline24h : checkInDeadline).toISOString();
+    }
+
     return success(res, responseData, '결제 정보를 조회했습니다.');
   } catch (err) {
     console.error('결제 정보 조회 오류:', err);
@@ -1964,7 +1989,7 @@ const getPaymentInfo = async (req, res) => {
 };
 
 /**
- * 결제 승인 (토스페이먼츠 API 호출)
+ * 결제 승인 (PayTag API 호출)
  * POST /api/contracts/:contractId/confirm-payment
  */
 const confirmPayment = async (req, res) => {
@@ -1972,11 +1997,11 @@ const confirmPayment = async (req, res) => {
 
   try {
     const { contractId } = req.params;
-    const { paymentKey, orderId, amount } = req.body;
+    const { recvPayparam, payType, orderId, amount } = req.body;
     const guestId = req.user.id;
 
     // 필수 파라미터 검증
-    if (!paymentKey || !orderId || !amount) {
+    if (!recvPayparam || !orderId || !amount) {
       await transaction.rollback();
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
@@ -2012,111 +2037,142 @@ const confirmPayment = async (req, res) => {
     }
 
     // 금액 검증 (클라이언트 변조 방지)
-    if (contract.finalTotalAmount !== parseInt(amount, 10)) {
+    // 프론트는 항상 실제 금액을 보냄. 테스트 모드에서는 PG만 테스트금액으로 결제됨.
+    // 가상계좌/링크결제는 최소금액 제한이 있어 테스트 금액 적용 제외
+    const testAmount = paytagClient.getTestAmount(payType);
+    const realAmount = contract.finalTotalAmount;
+
+    if (realAmount !== parseInt(amount, 10)) {
       await transaction.rollback();
       return error(res, ErrorCodes.AMOUNT_MISMATCH, 400);
     }
 
-    // 토스페이먼츠 API 호출
-    const tossSecretKey = process.env.TOSS_SECRET_KEY;
-    const encodedKey = Buffer.from(`${tossSecretKey}:`).toString('base64');
+    if (testAmount) {
+      console.log(`🧪 테스트 결제 모드: PG 결제 ${testAmount}원 → DB 저장 ${realAmount}원`);
+    }
 
-    let tossResponse;
+    // PayTag 결제 승인 API 호출
+    let paytagResponse;
     try {
-      tossResponse = await axios.post(
-        'https://api.tosspayments.com/v1/payments/confirm',
-        {
-          paymentKey,
-          orderId,
-          amount: parseInt(amount, 10)
-        },
-        {
-          headers: {
-            Authorization: `Basic ${encodedKey}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-    } catch (tossError) {
+      paytagResponse = await paytagClient.confirmPayment({
+        recvPayparam,
+        payType: payType || 'CARD'
+      });
+    } catch (paytagError) {
       await transaction.rollback();
 
       // 실패 로그 기록
       await PaymentFailureLog.create({
         contractId: contract.id,
         orderId,
-        failureCode: tossError.response?.data?.code || 'UNKNOWN',
-        failureMessage: tossError.response?.data?.message || tossError.message,
-        requestData: { paymentKey, orderId, amount },
-        responseData: tossError.response?.data || null,
+        failureCode: paytagError.paytagErrorCode || 'UNKNOWN',
+        failureMessage: paytagError.paytagErrorMessage || paytagError.message,
+        requestData: { recvPayparam: '(encrypted)', payType, orderId, amount },
+        responseData: paytagError.paytagResponse || null,
         userAgent: req.headers['user-agent'],
         ipAddress: req.ip || req.connection.remoteAddress
       });
 
-      console.error('토스 결제 승인 실패:', tossError.response?.data || tossError.message);
+      console.error('PayTag 결제 승인 실패:', paytagError.message);
       return error(res, ErrorCodes.PAYMENT_CONFIRMATION_FAILED, 400, {
-        tossErrorCode: tossError.response?.data?.code,
-        tossErrorMessage: tossError.response?.data?.message
+        pgErrorCode: paytagError.paytagErrorCode,
+        pgErrorMessage: paytagError.paytagErrorMessage
       });
     }
 
-    const paymentData = tossResponse.data;
     const now = new Date();
+    const paymentMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
+    const isVbank = payType === 'VBANK';
 
-    // Payment 레코드 생성
+    // 가상계좌: 발급만 된 상태(입금 대기), 그 외: 즉시 결제 완료
+    const paymentStatus = isVbank ? 'WAITING_FOR_DEPOSIT' : 'DONE';
+
+    // Payment 레코드 생성 (테스트 모드에서도 실제 금액으로 저장)
     const payment = await Payment.create({
       contractId: contract.id,
-      paymentKey: paymentData.paymentKey,
-      orderId: paymentData.orderId,
-      method: paymentData.method || 'CARD',
-      status: paymentData.status,
-      requestedAt: new Date(paymentData.requestedAt),
-      approvedAt: paymentData.approvedAt ? new Date(paymentData.approvedAt) : now,
-      totalAmount: paymentData.totalAmount,
-      balanceAmount: paymentData.balanceAmount,
-      suppliedAmount: paymentData.suppliedAmount,
-      vat: paymentData.vat,
-      taxFreeAmount: paymentData.taxFreeAmount || 0,
-      currency: paymentData.currency || 'KRW',
-      receiptUrl: paymentData.receipt?.url || null,
-      checkoutUrl: paymentData.checkout?.url || null,
-      paymentResponse: paymentData // 전체 응답 JSON 저장
+      paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
+      orderId: contract.orderId,
+      method: paymentMethod,
+      status: paymentStatus,
+      requestedAt: now,
+      approvedAt: isVbank ? null : now,
+      totalAmount: realAmount,
+      balanceAmount: realAmount,
+      suppliedAmount: Math.round(realAmount / 1.1),
+      vat: realAmount - Math.round(realAmount / 1.1),
+      taxFreeAmount: 0,
+      currency: 'KRW',
+      receiptUrl: paytagResponse.receipt_url || null,
+      checkoutUrl: null,
+      paymentResponse: paytagResponse // 전체 응답 JSON 저장
     }, { transaction });
-
-    // 토스 method를 Contract paymentMethod ENUM으로 매핑
-    const mapPaymentMethod = (tossMethod) => {
-      const methodMap = {
-        'CARD': 'CREDIT_CARD',
-        'VIRTUAL_ACCOUNT': 'BANK_TRANSFER',
-        'TRANSFER': 'BANK_TRANSFER',
-        'MOBILE': 'SIMPLE_PAY',
-        'EASY_PAY': 'SIMPLE_PAY'
-      };
-      return methodMap[tossMethod] || 'CREDIT_CARD';
-    };
 
     // Contract 상태 업데이트
-    await contract.update({
-      status: 'PAYMENT_COMPLETED',
-      paymentMethod: mapPaymentMethod(paymentData.method),
-      paidAt: now
-    }, { transaction });
+    // 가상계좌: APPROVED 유지 (입금 완료 웹훅에서 PAYMENT_COMPLETED로 변경)
+    if (!isVbank) {
+      await contract.update({
+        status: 'PAYMENT_COMPLETED',
+        paymentMethod: paytagClient.mapContractPaymentMethod(payType || 'CARD'),
+        paidAt: now
+      }, { transaction });
+    } else {
+      await contract.update({
+        paymentMethod: paytagClient.mapContractPaymentMethod(payType)
+      }, { transaction });
+    }
 
     // 상태 변경 로그 기록
     await ContractStatusLog.createLog({
       contractId: contract.id,
       fromStatus: 'APPROVED',
-      toStatus: 'PAYMENT_COMPLETED',
+      toStatus: isVbank ? 'APPROVED' : 'PAYMENT_COMPLETED',
       changedBy: 'GUEST',
       changedByUserId: guestId,
-      reason: '게스트가 결제를 완료했습니다',
+      reason: isVbank ? '가상계좌 발급 완료 (입금 대기)' : '게스트가 결제를 완료했습니다',
       metadata: {
         paymentKey: payment.paymentKey,
         paymentMethod: payment.method,
-        totalAmount: payment.totalAmount
+        totalAmount: payment.totalAmount,
+        ...(isVbank && {
+          vbankCode: paytagResponse.vbankcode,
+          vbankNo: paytagResponse.vbankno,
+          vbankOwner: paytagResponse.vbankowner,
+          expireDate: paytagResponse.orderinfo_expiredt,
+          expireTime: paytagResponse.orderinfo_expiretm
+        })
       },
       req,
       transaction
     });
+
+    // 가상계좌: 발급 완료 응답 후 종료 (입금 대기)
+    if (isVbank) {
+      await transaction.commit();
+
+      console.log(`✅ 가상계좌 발급 완료: contractId=${contract.id}, paymentKey=${payment.paymentKey}`);
+
+      return success(res, {
+        contractId: contract.id,
+        orderId: contract.orderId,
+        status: 'APPROVED',
+        payment: {
+          paymentKey: payment.paymentKey,
+          method: payment.method,
+          status: payment.status,
+          totalAmount: payment.totalAmount
+        },
+        vbank: {
+          bankCode: paytagResponse.vbankcode || null,
+          bankName: paytagResponse.vbankname || null,
+          accountNo: paytagResponse.vbankno || null,
+          accountHolder: paytagResponse.vbankowner || null,
+          expireDate: paytagResponse.orderinfo_expiredt || null,
+          expireTime: paytagResponse.orderinfo_expiretm || null
+        }
+      }, '가상계좌가 발급되었습니다. 입금기한 내에 입금해주세요.');
+    }
+
+    // === 이하 즉시 결제 (카드/간편결제) 전용 ===
 
     // 렌탈 주문이 있으면 함께 결제 처리
     let initialRentalOrder = await RentalOrder.findOne({
@@ -2153,8 +2209,8 @@ const confirmPayment = async (req, res) => {
     if (initialRentalOrder) {
       await confirmRentalOrderPayment(
         initialRentalOrder,
-        paymentData.paymentKey,
-        paymentData.method || 'CARD',
+        payment.paymentKey,
+        paymentMethod,
         guestId,
         req,
         transaction
@@ -2720,22 +2776,17 @@ const cancelContractByHost = async (req, res) => {
       approvedAt: cancellationDate
     }, { transaction });
 
-    // TODO: PG 연동 시 구현 필요
-    // 1. 게스트 PG 전액 환불: refundData.totalRefundAmount
-    // 2. 호스트 부담금 PG 결제: refund.hostBurdenAmount (위약금 + 게스트 서비스 수수료)
+    // TODO: PayTag 환불 API 문서 수령 후 구현 필요
+    // 1. 게스트 PG 전액 환불: refund.totalRefundAmount
+    // 2. 호스트 부담금 결제: refund.hostBurdenAmount (위약금 + 게스트 서비스 수수료)
     // 3. 게스트 보전 지급: refund.guestCompensationAmount (위약금)
-    // await processHostBurdenPayment(contract, refund.hostBurdenAmount);
-    // await processGuestCompensation(contract, refund.guestCompensationAmount);
+    // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
 
     await contract.update({
       status: 'CANCELLED_BY_HOST',
       cancellationReason,
       cancelledAt: cancellationDate
     }, { transaction });
-
-    // TODO: 호스트 취소 위약금 중 플랫폼 귀속 금액이 있을 경우 영수증 발급 대기 목록 생성
-    // const { createCancelFeeReceipt } = require('../services/receiptService');
-    // await createCancelFeeReceipt({ contractId: contract.id, hostId, targetType: 'HOST_CANCEL_FEE', platformFeeAmount, date: cancellationDate }, transaction);
 
     // 계약 상태 변경 로그
     await ContractStatusLog.create({
