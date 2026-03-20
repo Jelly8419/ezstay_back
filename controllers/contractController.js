@@ -147,6 +147,22 @@ const createContractRequest = async (req, res) => {
       );
     }
 
+    // 4-1. 날짜 중복 계약 체크
+    const overlappingContract = await Contract.findOne({
+      attributes: ['id'],
+      where: {
+        roomId,
+        status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'CANCEL_REQUESTED'] },
+        checkInDate: { [Op.lt]: checkOutDate },
+        checkOutDate: { [Op.gt]: checkInDate }
+      },
+      transaction
+    });
+    if (overlappingContract) {
+      await transaction.rollback();
+      return error(res, { code: 4305, message: '해당 기간에 이미 계약이 존재합니다' }, 409);
+    }
+
     // 총 일수 재확인
     if (dateValidation.calculatedDays !== totalDays) {
       await transaction.rollback();
