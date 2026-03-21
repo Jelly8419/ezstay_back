@@ -23,7 +23,9 @@ const {
   holdCheckout,
   submitDepositAgreement,
   getDepositAgreement,
-  acceptDepositAgreement
+  acceptDepositAgreement,
+  getHostBurdenPaymentInfo,
+  confirmHostBurdenPayment
 } = require('../controllers/contractController');
 const { confirmPaymentMock } = require('../controllers/mockPaymentController');
 
@@ -303,6 +305,26 @@ router.get('/:contractId/deposit-agreement', authenticateToken, getDepositAgreem
  * POST /api/contracts/:contractId/deposit-agreement/accept
  */
 router.post('/:contractId/deposit-agreement/accept', authenticateToken, acceptDepositAgreement);
+
+/**
+ * 호스트 부담금 결제 정보 조회 (호스트 귀책 취소 후)
+ * GET /api/contracts/:contractId/host-burden-payment-info
+ */
+router.get('/:contractId/host-burden-payment-info', authenticateToken, getHostBurdenPaymentInfo);
+
+/**
+ * 호스트 부담금 결제 승인 (PayTag PG 결제)
+ * POST /api/contracts/:contractId/host-burden-payment
+ *
+ * Request Body:
+ * {
+ *   "recvPayparam": "...",
+ *   "payType": "CARD",
+ *   "orderId": "250111-00001",
+ *   "amount": 150000
+ * }
+ */
+router.post('/:contractId/host-burden-payment', authenticateToken, confirmHostBurdenPayment);
 
 /**
  * Mock 결제 승인 (개발/테스트 환경 전용)
