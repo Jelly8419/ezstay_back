@@ -3073,29 +3073,34 @@ const requestCancelByHost = async (req, res) => {
  * PATCH /api/contracts/:contractId/checkout-hold
  */
 const holdCheckout = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const { contractId } = req.params;
     const hostId = req.user.id;
     const { reason } = req.body;
 
     if (!reason || !reason.trim()) {
+      await transaction.rollback();
       return error(res, {
         code: 4630,
         message: '퇴실 보류 사유를 입력해주세요.'
       }, 400);
     }
 
-    const contract = await Contract.findByPk(contractId);
+    const contract = await Contract.findByPk(contractId, { transaction });
 
     if (!contract) {
+      await transaction.rollback();
       return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
     }
 
     if (contract.hostId !== hostId) {
+      await transaction.rollback();
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
     if (contract.status !== 'COMPLETED') {
+      await transaction.rollback();
       return error(res, {
         code: 4631,
         message: '계약 완료 상태에서만 퇴실 보류가 가능합니다.'
@@ -3103,6 +3108,7 @@ const holdCheckout = async (req, res) => {
     }
 
     if (contract.checkoutStatus !== 'GUEST_COMPLETED') {
+      await transaction.rollback();
       return error(res, {
         code: 4632,
         message: '게스트가 퇴실 완료한 상태에서만 보류가 가능합니다.'
@@ -3111,6 +3117,7 @@ const holdCheckout = async (req, res) => {
 
     // 정책 7.6.3: 퇴실확인 완료 이후에는 보류 신청 불가 (정책 불가역성)
     if (contract.checkoutStatus === 'HOST_CONFIRMED') {
+      await transaction.rollback();
       return error(res, {
         code: 4633,
         message: '퇴실 확인 완료 후에는 보류 신청이 불가합니다.'
@@ -3135,7 +3142,7 @@ const holdCheckout = async (req, res) => {
       holdRequestedAt: now,
       holdRemainingMs,
       deductionReason: reason.trim()
-    });
+    }, { transaction });
 
     // 계약 상태 변경 로그
     await ContractStatusLog.create({
@@ -3150,9 +3157,11 @@ const holdCheckout = async (req, res) => {
         checkoutStatusChange: 'GUEST_COMPLETED → HOLD_REQUESTED',
         holdRemainingMs
       })
-    });
+    }, { transaction });
 
-    // 채팅방 시스템 메시지 발송
+    await transaction.commit();
+
+    // 채팅방 시스템 메시지 발송 (트랜잭션 외부)
     try {
       const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
       if (chatRoom && chatRoom.firebaseChatRoomId) {
@@ -3163,7 +3172,7 @@ const holdCheckout = async (req, res) => {
       console.error('퇴실 보류 신청 시스템 메시지 전송 실패 (무시됨):', chatErr);
     }
 
-    // 게스트에게 알림 발송
+    // 게스트에게 알림 발송 (트랜잭션 외부)
     try {
       await NotificationService.sendNotification({
         userId: contract.guestId,
@@ -3184,6 +3193,7 @@ const holdCheckout = async (req, res) => {
     }, '퇴실 확인 보류가 신청되었습니다. 관리자 승인을 기다립니다.');
 
   } catch (err) {
+    await transaction.rollback();
     console.error('퇴실 보류 신청 처리 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
@@ -3194,12 +3204,14 @@ const holdCheckout = async (req, res) => {
  * POST /api/contracts/:contractId/deposit-agreement
  */
 const submitDepositAgreement = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const { contractId } = req.params;
     const hostId = req.user.id;
     const { deductAmount, agreementText } = req.body;
 
     if (deductAmount == null || deductAmount < 0) {
+      await transaction.rollback();
       return error(res, {
         code: 4640,
         message: '차감 금액을 올바르게 입력해주세요. (0 이상)'
@@ -3207,23 +3219,27 @@ const submitDepositAgreement = async (req, res) => {
     }
 
     if (!agreementText || !agreementText.trim()) {
+      await transaction.rollback();
       return error(res, {
         code: 4641,
         message: '합의 내용을 입력해주세요.'
       }, 400);
     }
 
-    const contract = await Contract.findByPk(contractId);
+    const contract = await Contract.findByPk(contractId, { transaction });
 
     if (!contract) {
+      await transaction.rollback();
       return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
     }
 
     if (contract.hostId !== hostId) {
+      await transaction.rollback();
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
     if (contract.status !== 'COMPLETED') {
+      await transaction.rollback();
       return error(res, {
         code: 4642,
         message: '계약 완료 상태에서만 합의 제출이 가능합니다.'
@@ -3231,6 +3247,7 @@ const submitDepositAgreement = async (req, res) => {
     }
 
     if (contract.checkoutStatus !== 'HOST_PENDING') {
+      await transaction.rollback();
       return error(res, {
         code: 4643,
         message: '관리자 보류 승인 후 합의 상태에서만 합의 내용을 제출할 수 있습니다.'
@@ -3238,8 +3255,9 @@ const submitDepositAgreement = async (req, res) => {
     }
 
     // 게스트가 이미 동의한 경우 수정 불가
-    const existingAgreement = await DepositAgreement.findOne({ where: { contractId: contract.id } });
+    const existingAgreement = await DepositAgreement.findOne({ where: { contractId: contract.id }, transaction });
     if (existingAgreement && existingAgreement.status === 'ACCEPTED') {
+      await transaction.rollback();
       return error(res, {
         code: 4647,
         message: '게스트가 이미 합의에 동의하여 수정이 불가합니다.'
@@ -3247,6 +3265,7 @@ const submitDepositAgreement = async (req, res) => {
     }
 
     if (deductAmount > (contract.deposit || 0)) {
+      await transaction.rollback();
       return error(res, {
         code: 4644,
         message: `차감 금액은 보증금(${contract.deposit?.toLocaleString()}원)을 초과할 수 없습니다.`
@@ -3255,6 +3274,7 @@ const submitDepositAgreement = async (req, res) => {
 
     // 정책 7.9.1: 합의 데드라인 = 관리자 보류 승인 시점 + 10일
     if (!contract.holdApprovedAt) {
+      await transaction.rollback();
       return error(res, {
         code: 4645,
         message: '관리자 보류 승인 정보가 없습니다. 관리자에게 문의해주세요.'
@@ -3264,6 +3284,7 @@ const submitDepositAgreement = async (req, res) => {
     const deadline = new Date(contract.holdApprovedAt);
     deadline.setDate(deadline.getDate() + 10);
     if (new Date() > deadline) {
+      await transaction.rollback();
       return error(res, {
         code: 4646,
         message: '합의 기한(보류 승인 후 10일)이 경과하여 합의 제출이 불가합니다. 보증금이 게스트에게 전액 반환됩니다.'
@@ -3280,7 +3301,7 @@ const submitDepositAgreement = async (req, res) => {
       submittedAt: new Date(),
       status: 'SUBMITTED',
       acceptedAt: null
-    });
+    }, { transaction });
 
     // checkoutStatus는 HOST_PENDING 유지 (합의 제출 여부는 DepositAgreement.status로 판단)
 
@@ -3297,7 +3318,9 @@ const submitDepositAgreement = async (req, res) => {
         deductAmount,
         agreementText: agreementText.trim()
       })
-    });
+    }, { transaction });
+
+    await transaction.commit();
 
     // 채팅방 시스템 메시지 발송
     try {
@@ -3345,6 +3368,7 @@ const submitDepositAgreement = async (req, res) => {
     }, '합의 내용이 제출되었습니다. 게스트의 동의를 기다립니다.');
 
   } catch (err) {
+    await transaction.rollback();
     console.error('합의 내용 제출 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
