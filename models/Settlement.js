@@ -131,6 +131,26 @@ const Settlement = sequelize.define('Settlement', {
     comment: '처리한 관리자 ID'
   },
 
+  // PG 정산 확인 정보 (관리자가 PG사 정산 입금 확인 시 기록)
+  pgSettledAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    field: 'pg_settled_at',
+    comment: 'PG 정산 입금 확인 시각 (관리자 확인 시점)'
+  },
+  pgSettledConfirmedBy: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    field: 'pg_settled_confirmed_by',
+    comment: 'PG 정산 확인한 관리자 ID'
+  },
+  payoutAvailableDate: {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+    field: 'payout_available_date',
+    comment: '지급 가능 최소 날짜 (결제 승인일 + 3영업일, Payout.payableAfter와 동기화)'
+  },
+
   // 토스 서브몰 연동 정보 (향후 사용)
   tossData: {
     type: DataTypes.TEXT,

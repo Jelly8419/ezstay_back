@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { Contract, ChatRoom, Room, User, ContractStatusLog, Settlement, DepositAgreement, sequelize } = require('../models');
+const { Contract, ChatRoom, Room, User, ContractStatusLog, Settlement, Payout, DepositAgreement, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
@@ -953,6 +953,45 @@ async function autoReturnDepositOnDeadline() {
 /**
  * 모든 계약 상태 업데이트 실행
  */
+/**
+ * 10. Payout PAYABLE 전환
+ * - PENDING 상태인 Payout 중
+ * - payableAfter가 오늘이거나 지난 경우
+ * → PAYABLE 상태로 변경 (관리자 지급 실행 가능)
+ *
+ * 정책: 결제 승인일 + 3영업일 이후 지급 가능
+ */
+async function updatePayoutPayable() {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const todayStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
+    const [updatedCount] = await Payout.update(
+      { status: 'PAYABLE' },
+      {
+        where: {
+          status: 'PENDING',
+          payableAfter: { [Op.lte]: todayStr }
+        },
+        transaction
+      }
+    );
+
+    await transaction.commit();
+
+    if (updatedCount > 0) {
+      console.log(`[스케줄러] ${updatedCount}건의 지급을 PAYABLE 상태로 변경했습니다.`);
+    }
+
+    return updatedCount;
+  } catch (error) {
+    await transaction.rollback();
+    console.error('[스케줄러] Payout PAYABLE 전환 오류:', error);
+    return 0;
+  }
+}
+
 async function runContractStatusUpdate() {
   console.log('[스케줄러] 계약 상태 자동 업데이트 시작:', new Date().toISOString());
 
@@ -967,6 +1006,7 @@ async function runContractStatusUpdate() {
     await autoReturnDepositOnDeadline();  // 7. 퇴실 보류 10일 데드라인 자동반환
     await updateSettlementReady();        // 8. 정산 예정일 도래 시 READY 상태 변경
     await autoReturnDeposit();            // 9. 정산 READY 후 보증금 자동 반환
+    await updatePayoutPayable();          // 10. 지급 가능 날짜 도래 시 PAYABLE 전환
 
     console.log('[스케줄러] 계약 상태 자동 업데이트 완료:', new Date().toISOString());
   } catch (error) {
@@ -977,7 +1017,7 @@ async function runContractStatusUpdate() {
 /**
  * 스케줄러 시작
  *
- * 모든 상태 업데이트를 매 10분마다 실행 (9단계)
+ * 모든 상태 업데이트를 매 10분마다 실행 (10단계)
  * 1. 미승인 만료: 72시간 경과 OR 입실날짜 다음날
  * 2. 미결제 만료: 24시간 경과 OR 입실날짜 다음날
  * 3. 임대중: 입실날짜 + 방 입실시간 경과 (+ Settlement 자동 생성)
@@ -987,6 +1027,7 @@ async function runContractStatusUpdate() {
  * 7. 10일 데드라인: 퇴실 보류 후 10일 경과 시 보증금 전액 자동반환
  * 8. 정산 READY: 정산 예정일(입주일+3영업일) 도래 시 PENDING→READY
  * 9. 보증금 반환: 정산 READY 후 RETURN_PENDING→RETURNED (HOST_PENDING 제외)
+ * 10. Payout PAYABLE: payableAfter 도래 시 PENDING→PAYABLE (관리자 지급 실행 대기)
  */
 function startContractScheduler() {
   // 모든 상태 업데이트를 매 10분마다 실행
@@ -1009,5 +1050,6 @@ module.exports = {
   updateCompleted,
   autoReturnDepositOnDeadline,
   updateSettlementReady,
-  autoReturnDeposit
+  autoReturnDeposit,
+  updatePayoutPayable
 };

@@ -153,6 +153,10 @@ sequelize.authenticate()
 // Redis 연결 (비동기, 실패해도 서버는 계속 실행)
 connectRedis();
 
+// 공휴일 캐시 초기화 (영업일 계산에 사용)
+const { init: initHolidayCache } = require('./utils/holidayCache');
+initHolidayCache();
+
 // 계약 상태 자동 업데이트 스케줄러 시작
 const { startContractScheduler } = require('./schedulers/contractScheduler');
 startContractScheduler();

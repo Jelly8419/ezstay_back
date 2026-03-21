@@ -1,4 +1,4 @@
-const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalItemReservation, RentalItem, Settlement, DepositAgreement } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const paytagClient = require('../utils/paytagClient');
@@ -23,6 +23,7 @@ const {
 } = require('../utils/rentalOrderHelper');
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
+const { calculateSettlementDate, calculatePayoutAvailableDate, calculateSettlementAmount } = require('../services/settlementService');
 
 /**
  * 계약 요청 생성 (게스트 -> 호스트)
@@ -1786,6 +1787,27 @@ const requestRefund = async (req, res) => {
           }, { transaction });
 
           console.log(`[requestRefund] PayTag 취소 완료: contractId=${contractId}, cancelamt=${cancelamt}, restamt=${cancelResp.restamt}`);
+
+          // 위약금이 있으면 호스트에게 GUEST_PENALTY Payout 생성
+          if (refundData.penaltyAmount > 0) {
+            const penaltyPayoutAvailableDate = calculatePayoutAvailableDate(payment.approvedAt);
+            const hostBankAccount = await require('../models').UserBankAccount.findOne({
+              where: { userId: contract.hostId, isDefault: true }
+            });
+            await Payout.create({
+              contractId: contract.id,
+              refundId: refund.id,
+              payoutType: 'GUEST_PENALTY',
+              recipientType: 'HOST',
+              recipientId: contract.hostId,
+              amount: refundData.penaltyAmount,
+              status: 'PENDING',
+              payableAfter: penaltyPayoutAvailableDate,
+              bankName: hostBankAccount?.bankName || null,
+              accountNumber: hostBankAccount?.accountNumber || null,
+              accountHolder: hostBankAccount?.accountHolder || null
+            }, { transaction });
+          }
         } catch (pgErr) {
           await transaction.rollback();
           console.error('[requestRefund] PayTag 취소 실패:', pgErr.message);
@@ -2264,6 +2286,45 @@ const confirmPayment = async (req, res) => {
         }
       );
     }
+
+    // Settlement + Payout 생성 (CONTRACT_SETTLEMENT)
+    const payoutAvailableDate = calculatePayoutAvailableDate(now);
+    const settlementExpectedDate = calculateSettlementDate(contract.checkInDate);
+    const settlementAmounts = calculateSettlementAmount(contract);
+
+    const settlement = await Settlement.create({
+      contractId: contract.id,
+      hostId: contract.hostId,
+      status: 'PENDING',
+      rentalFee: settlementAmounts.rentalFee,
+      maintenanceFee: settlementAmounts.maintenanceFee,
+      cleaningFee: settlementAmounts.cleaningFee,
+      hostPlatformFee: settlementAmounts.platformFee,
+      refundDeduction: 0,
+      grossAmount: settlementAmounts.grossSettlement,
+      netAmount: settlementAmounts.grossSettlement, // 환불 없으므로 동일
+      expectedDate: settlementExpectedDate,
+      payoutAvailableDate
+    }, { transaction });
+
+    // 호스트 계좌 정보 조회
+    const hostBankAccount = await require('../models').UserBankAccount.findOne({
+      where: { userId: contract.hostId, isDefault: true }
+    });
+
+    await Payout.create({
+      contractId: contract.id,
+      settlementId: settlement.id,
+      payoutType: 'CONTRACT_SETTLEMENT',
+      recipientType: 'HOST',
+      recipientId: contract.hostId,
+      amount: settlementAmounts.grossSettlement,
+      status: 'PENDING',
+      payableAfter: payoutAvailableDate,
+      bankName: hostBankAccount?.bankName || null,
+      accountNumber: hostBankAccount?.accountNumber || null,
+      accountHolder: hostBankAccount?.accountHolder || null
+    }, { transaction });
 
     await transaction.commit();
 
@@ -2839,8 +2900,6 @@ const cancelContractByHost = async (req, res) => {
         }
       }
     }
-    // 호스트 부담금(위약금 + 게스트 서비스 수수료) 및 게스트 보전 지급은 관리자 수동 처리
-
     await contract.update({
       status: 'CANCELLED_BY_HOST',
       cancellationReason,
@@ -2866,6 +2925,36 @@ const cancelContractByHost = async (req, res) => {
         guestCompensationAmount: refund.guestCompensationAmount
       })
     }, { transaction });
+
+    // 호스트 귀책 위약금(게스트 보상)이 있으면 HOST_CANCELLATION_COMPENSATION Payout 생성
+    if (refundData.penaltyAmount > 0) {
+      const payment = await Payment.findOne({
+        where: { contractId: contract.id },
+        order: [['createdAt', 'DESC']]
+      });
+      const compensationPayableDate = payment
+        ? calculatePayoutAvailableDate(payment.approvedAt)
+        : new Date();
+
+      // 게스트 환급 계좌 조회
+      const guestRefundAccount = await require('../models').GuestRefundAccount.findOne({
+        where: { userId: contract.guestId }
+      });
+
+      await Payout.create({
+        contractId: contract.id,
+        refundId: refund.id,
+        payoutType: 'HOST_CANCELLATION_COMPENSATION',
+        recipientType: 'GUEST',
+        recipientId: contract.guestId,
+        amount: refundData.penaltyAmount,
+        status: 'PENDING',
+        payableAfter: compensationPayableDate,
+        bankName: guestRefundAccount?.bankName || null,
+        accountNumber: guestRefundAccount?.accountNumber || null,
+        accountHolder: guestRefundAccount?.accountHolder || null
+      }, { transaction });
+    }
 
     await transaction.commit();
 
@@ -3421,10 +3510,34 @@ const acceptDepositAgreement = async (req, res) => {
       })
     }, { transaction });
 
-    // TODO: 차감확정 시 Settlement 도메인에 차감분 정산 대상 전달
-    // if (depositStatus === 'DEDUCTION_CONFIRMED' && depositDeduction > 0) {
-    //   await settlementService.createDepositDeductionSettlement(contract.id, depositDeduction, transaction);
-    // }
+    // 차감확정 시 DEPOSIT_DEDUCTION Payout 생성 (호스트 수령)
+    if (depositStatus === 'DEDUCTION_CONFIRMED' && depositDeduction > 0) {
+      const payment = await Payment.findOne({
+        where: { contractId: contract.id },
+        order: [['createdAt', 'DESC']]
+      });
+      const deductionPayableDate = payment
+        ? calculatePayoutAvailableDate(payment.approvedAt)
+        : new Date();
+
+      const hostBankAccount = await require('../models').UserBankAccount.findOne({
+        where: { userId: contract.hostId, isDefault: true }
+      });
+
+      await Payout.create({
+        contractId: contract.id,
+        refundId: null,
+        payoutType: 'DEPOSIT_DEDUCTION',
+        recipientType: 'HOST',
+        recipientId: contract.hostId,
+        amount: depositDeduction,
+        status: 'PENDING',
+        payableAfter: deductionPayableDate,
+        bankName: hostBankAccount?.bankName || null,
+        accountNumber: hostBankAccount?.accountNumber || null,
+        accountHolder: hostBankAccount?.accountHolder || null
+      }, { transaction });
+    }
 
     await transaction.commit();
 
