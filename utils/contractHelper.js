@@ -37,31 +37,18 @@ async function calculateRentalItemsFee(rentalItems, totalDays) {
  * 1. 빠른 입주 할인 (고정 금액) - 먼저 적용
  * 2. 장기계약 할인 (%) - 빠른 입주 할인 적용 후 남은 임대료에 적용
  *
- * @param {string} discountCode - 할인 코드 (쿠폰 등)
  * @param {number} baseRent - 기본 임대료 (일 임대료 × 일수)
  * @param {number} totalDays - 총 숙박 일수
  * @param {Date|string} checkInDate - 체크인 날짜
  * @param {Object} room - 방 정보 (할인 정보 포함)
  * @returns {Promise<Object>} { discountAmount, discountType, quickMoveInDiscount, longTermDiscount }
  */
-async function calculateDiscount(discountCode, baseRent, totalDays, checkInDate, room) {
+async function calculateDiscount(baseRent, totalDays, checkInDate, room) {
   let quickMoveInDiscount = 0;
   let longTermDiscount = 0;
   let discountType = 'NONE';
 
-  // 1. 쿠폰 코드 할인 (최우선)
-  if (discountCode) {
-    // TODO: 실제 쿠폰 시스템 구현 시 쿠폰 테이블에서 조회
-    discountType = 'COUPON';
-    return {
-      discountAmount: 0,
-      discountType,
-      quickMoveInDiscount: 0,
-      longTermDiscount: 0
-    };
-  }
-
-  // 2. 빠른 입주 할인 (고정 금액) - 먼저 적용
+  // 1. 빠른 입주 할인 (고정 금액) - 먼저 적용
   // 조건: 체크인 날짜가 오늘로부터 quickMoveIn일 이내
   if (room.quickMoveIn && room.quickMoveInDiscount) {
     const today = new Date();
@@ -89,12 +76,9 @@ async function calculateDiscount(discountCode, baseRent, totalDays, checkInDate,
   // 총 할인액 (두 할인 모두 적용 가능)
   const totalDiscount = quickMoveInDiscount + longTermDiscount;
 
-  // discountType 결정 (DB에 저장할 대표 타입)
+  // discountType 결정
   if (quickMoveInDiscount > 0 && longTermDiscount > 0) {
-    // 둘 다 적용된 경우 금액이 더 큰 것을 대표 타입으로
-    discountType = longTermDiscount >= quickMoveInDiscount
-      ? 'LONG_TERM_DISCOUNT'
-      : 'QUICK_MOVE_IN';
+    discountType = 'BOTH';
   } else if (longTermDiscount > 0) {
     discountType = 'LONG_TERM_DISCOUNT';
   } else if (quickMoveInDiscount > 0) {

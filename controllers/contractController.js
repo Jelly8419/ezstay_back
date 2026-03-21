@@ -49,7 +49,6 @@ const createContractRequest = async (req, res) => {
       finalTotalAmount,
       rentalItems,
       guestMessage,
-      discountCode,
       discountType,
       paymentMethod,
       installmentMonths,
@@ -104,7 +103,47 @@ const createContractRequest = async (req, res) => {
       );
     }
 
-    // 3-1. 환불정책 스냅샷 조회 (계약 시점의 정책 보존)
+    // 3-1. 방 정보 스냅샷 (계약 시점의 방 상태 보존, 분쟁 대비)
+    const roomSnapshot = {
+      roomId: room.id,
+      roomName: room.roomName,
+      address: room.address,
+      detailAddress: room.detailAddress,
+      buildingType: room.buildingType,
+      floor: room.floor,
+      area: room.area,
+      roomCount: room.roomCount,
+      bathroomCount: room.bathroomCount,
+      isDuplex: room.isDuplex,
+      elevatorAvailable: room.elevatorAvailable,
+      parkingAvailable: room.parkingAvailable,
+      parkingInfo: room.parkingInfo,
+      maxGuests: room.maxGuests,
+      description: room.description,
+      dailyRent: room.dailyRent,
+      dailyMaintenanceFee: room.dailyMaintenanceFee,
+      maintenanceDetail: room.maintenanceDetail,
+      includeElectricity: room.includeElectricity,
+      includeWater: room.includeWater,
+      includeGas: room.includeGas,
+      includeInternet: room.includeInternet,
+      cleaningFee: room.cleaningFee,
+      longTermWeeks: room.longTermWeeks,
+      longTermDiscount: room.longTermDiscount,
+      quickMoveIn: room.quickMoveIn,
+      quickMoveInDiscount: room.quickMoveInDiscount,
+      minContractDays: room.minContractDays,
+      refundPolicy: room.refundPolicy,
+      checkInTime: room.checkInTime,
+      checkOutTime: room.checkOutTime,
+      ezService: room.ezService ? {
+        cleaningService: room.ezService.cleaningService,
+        autoPasswordChange: room.ezService.autoPasswordChange,
+      } : null,
+      capturedAt: new Date().toISOString()
+    };
+
+    // 3-2. 환불정책 스냅샷 조회 (계약 시점의 정책 보존)
     let refundPolicySnapshot = null;
     if (room.refundPolicy) {
       const policyType = await RefundPolicyType.findOne({
@@ -257,7 +296,6 @@ const createContractRequest = async (req, res) => {
     // - 빠른 입주 할인: 고정 금액, 먼저 적용
     // - 장기계약 할인: %, 빠른입주 할인 적용 후 남은 임대료에 적용
     const discountInfo = await calculateDiscount(
-      discountCode,
       serverCalculated.rentalFee,  // baseRent (임대료)
       totalDays,
       checkInDate,
@@ -356,8 +394,6 @@ const createContractRequest = async (req, res) => {
         hostPlatformFee: serverCalculated.hostPlatformFee,  // 호스트 수수료 (3.3%)
         discountAmount: discountAmountServer,
         discountType: discountTypeServer,
-        discountCode: discountCode || null,
-
         subtotal: subtotalServer,
         totalUsageFee: serverCalculated.totalUsageFee,
         deposit: serverCalculated.deposit,
@@ -374,7 +410,8 @@ const createContractRequest = async (req, res) => {
         guestMessage: guestMessage || null,
         status: 'PENDING_APPROVAL',
 
-        // 가격 스냅샷 (분쟁 대비)
+        // 스냅샷 (분쟁 대비)
+        roomSnapshot,
         pricingSnapshot: pricingSnapshot || {},
 
         // 환불정책 스냅샷 (계약 시점의 정책 보존)
@@ -717,7 +754,6 @@ const getHostContracts = async (req, res) => {
           platformFee: contract.platformFee,
           discountAmount: contract.discountAmount,
           discountType: contract.discountType,
-          discountCode: contract.discountCode,
           subtotal: contract.subtotal,
           totalUsageFee: contract.totalUsageFee,
           deposit: contract.deposit,
@@ -841,7 +877,6 @@ const getContractDetail = async (req, res) => {
           platformFee: contract.platformFee,
           discountAmount: contract.discountAmount,
           discountType: contract.discountType,
-          discountCode: contract.discountCode,
           subtotal: contract.subtotal,
           totalUsageFee: contract.totalUsageFee,
           deposit: contract.deposit,
@@ -869,7 +904,8 @@ const getContractDetail = async (req, res) => {
           // 약관 동의
           termsAgreed: contract.termsAgreed,
 
-          // 환불 정책 (계약 시점 스냅샷)
+          // 계약 시점 스냅샷
+          roomSnapshot: contract.roomSnapshot,
           refundPolicyType: contract.refundPolicyType,
           refundPolicySnapshot: contract.refundPolicySnapshot,
 

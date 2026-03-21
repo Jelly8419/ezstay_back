@@ -153,18 +153,11 @@ const Contract = sequelize.define('Contract', {
     }
   },
   discountType: {
-    type: DataTypes.ENUM('NONE', 'LONG_TERM_DISCOUNT', 'QUICK_MOVE_IN', 'COUPON', 'PROMOTIONAL'),
+    type: DataTypes.ENUM('NONE', 'LONG_TERM_DISCOUNT', 'QUICK_MOVE_IN', 'BOTH'),
     allowNull: true,
     field: 'discount_type',
     comment: '할인 유형'
   },
-  discountCode: {
-    type: DataTypes.STRING(50),
-    allowNull: true,
-    field: 'discount_code',
-    comment: '쿠폰 코드 (사용된 경우)'
-  },
-
   // 계산된 금액
   subtotal: {
     type: DataTypes.INTEGER,
@@ -299,6 +292,21 @@ const Contract = sequelize.define('Contract', {
     },
     set(value) {
       this.setDataValue('termsAgreed', JSON.stringify(value));
+    }
+  },
+
+  // 방 정보 스냅샷 (계약 시점의 방 상태 보존, 분쟁 대비)
+  roomSnapshot: {
+    type: DataTypes.TEXT('medium'),
+    allowNull: true,
+    field: 'room_snapshot',
+    comment: '계약 시점 방 정보 스냅샷 (JSON)',
+    get() {
+      const rawValue = this.getDataValue('roomSnapshot');
+      return rawValue ? JSON.parse(rawValue) : null;
+    },
+    set(value) {
+      this.setDataValue('roomSnapshot', value ? JSON.stringify(value) : null);
     }
   },
 
@@ -669,8 +677,7 @@ Contract.DISCOUNT_TYPE_LABELS = {
   NONE: '할인 없음',
   LONG_TERM_DISCOUNT: '장기 할인',
   QUICK_MOVE_IN: '빠른 입주 할인',
-  COUPON: '쿠폰 할인',
-  PROMOTIONAL: '프로모션 할인'
+  BOTH: '빠른 입주 + 장기 할인'
 };
 
 module.exports = Contract;
