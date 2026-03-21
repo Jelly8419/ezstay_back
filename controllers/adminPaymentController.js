@@ -524,12 +524,47 @@ exports.processAdminRefund = async (req, res) => {
       });
     }
 
-    // TODO: PayTag 환불 API 문서 수령 후 구현 필요
-    // paytagClient.cancelPayment()로 실제 PG 환불 처리
-    // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
-
-    // Payment 상태 업데이트 (DB만 변경)
+    // PayTag PG 취소 호출
+    const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
     const newBalance = payment.balanceAmount - refundAmount;
+    const canceltype = newBalance === 0 ? '0' : '1'; // 전체취소 or 부분취소
+
+    let paytagCancelResponse;
+    try {
+      paytagCancelResponse = await paytagClient.cancelPayment({
+        orderno,
+        orgpaydate,
+        orgtranamt,
+        cancelamt: refundAmount,
+        canceltype
+      });
+    } catch (pgErr) {
+      await transaction.rollback();
+      // 1023: 기취소완료 → 이미 취소된 거래
+      if (pgErr.paytagErrorCode === '1023') {
+        return error(res, {
+          code: 4901,
+          message: '이미 취소 완료된 결제입니다.',
+          pgErrorCode: pgErr.paytagErrorCode
+        }, 400);
+      }
+      // 1021: 취소불가
+      if (pgErr.paytagErrorCode === '1021') {
+        return error(res, {
+          code: 4902,
+          message: 'PG사에서 취소를 거부했습니다. 수동 처리가 필요합니다.',
+          pgErrorCode: pgErr.paytagErrorCode
+        }, 400);
+      }
+      console.error('PayTag 취소 API 오류:', pgErr.message);
+      return error(res, {
+        code: 4900,
+        message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
+        pgErrorCode: pgErr.paytagErrorCode
+      }, 502);
+    }
+
+    // PG 취소 성공 → DB 업데이트
     const newStatus = newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED';
 
     await payment.update({
@@ -573,7 +608,7 @@ exports.processAdminRefund = async (req, res) => {
       refundAmount,
       newBalance,
       paymentStatus: newStatus,
-      cancelStatus: paytagResponse.resultcode === '0000' ? 'DONE' : null
+      pgReceiptUrl: paytagCancelResponse.receipt_url || null
     }, '환불이 처리되었습니다.');
 
   } catch (err) {

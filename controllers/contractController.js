@@ -1764,6 +1764,40 @@ const requestRefund = async (req, res) => {
       });
     }
 
+    // 자동 승인(입주 전)이면 PG 취소 즉시 처리
+    if (autoApprove && refundData.finalRefundAmount > 0) {
+      const payment = await Payment.findOne({
+        where: { contractId, status: { [Op.in]: ['DONE', 'PARTIAL_CANCELED'] } },
+        transaction
+      });
+
+      if (payment) {
+        try {
+          const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+          const cancelamt = refundData.finalRefundAmount;
+          const newBalance = payment.balanceAmount - cancelamt;
+          const canceltype = newBalance === 0 ? '0' : '1';
+
+          const cancelResp = await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, cancelamt, canceltype });
+
+          await payment.update({
+            balanceAmount: newBalance,
+            status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+          }, { transaction });
+
+          console.log(`[requestRefund] PayTag 취소 완료: contractId=${contractId}, cancelamt=${cancelamt}, restamt=${cancelResp.restamt}`);
+        } catch (pgErr) {
+          await transaction.rollback();
+          console.error('[requestRefund] PayTag 취소 실패:', pgErr.message);
+          return error(res, {
+            code: 4900,
+            message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
+            pgErrorCode: pgErr.paytagErrorCode
+          }, 502);
+        }
+      }
+    }
+
     await transaction.commit();
 
     // 알림톡 발송 (4-5 게스트 취소) - 트랜잭션 커밋 후
@@ -2772,11 +2806,40 @@ const cancelContractByHost = async (req, res) => {
       approvedAt: cancellationDate
     }, { transaction });
 
-    // TODO: PayTag 환불 API 문서 수령 후 구현 필요
-    // 1. 게스트 PG 전액 환불: refund.totalRefundAmount
-    // 2. 호스트 부담금 결제: refund.hostBurdenAmount (위약금 + 게스트 서비스 수수료)
-    // 3. 게스트 보전 지급: refund.guestCompensationAmount (위약금)
-    // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
+    // PayTag PG 전액 환불 (호스트 귀책 → 게스트 전액 반환)
+    if (refundData.finalRefundAmount > 0) {
+      const payment = await Payment.findOne({
+        where: { contractId: contract.id, status: { [Op.in]: ['DONE', 'PARTIAL_CANCELED'] } },
+        transaction
+      });
+
+      if (payment) {
+        try {
+          const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+          const cancelamt = refundData.finalRefundAmount;
+          const newBalance = payment.balanceAmount - cancelamt;
+          const canceltype = newBalance === 0 ? '0' : '1';
+
+          const cancelResp = await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, cancelamt, canceltype });
+
+          await payment.update({
+            balanceAmount: newBalance,
+            status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+          }, { transaction });
+
+          console.log(`[cancelByHost] PayTag 취소 완료: contractId=${contract.id}, cancelamt=${cancelamt}, restamt=${cancelResp.restamt}`);
+        } catch (pgErr) {
+          await transaction.rollback();
+          console.error('[cancelByHost] PayTag 취소 실패:', pgErr.message);
+          return error(res, {
+            code: 4900,
+            message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
+            pgErrorCode: pgErr.paytagErrorCode
+          }, 502);
+        }
+      }
+    }
+    // 호스트 부담금(위약금 + 게스트 서비스 수수료) 및 게스트 보전 지급은 관리자 수동 처리
 
     await contract.update({
       status: 'CANCELLED_BY_HOST',
