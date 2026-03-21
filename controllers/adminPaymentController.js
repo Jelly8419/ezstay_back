@@ -91,6 +91,7 @@ exports.getPayments = async (req, res) => {
       contractPayments = contractResult.rows.map(p => ({
         id: p.id,
         type: 'contract',
+        paymentType: p.paymentType || 'CONTRACT',
         contractId: p.contractId,
         rentalOrderId: null,
         contractOrderId: p.contract?.orderId || null,
@@ -369,7 +370,7 @@ exports.getPaymentDetail = async (req, res) => {
         },
         {
           model: Payment,
-          as: 'payment',
+          as: 'payments',
           required: false
         },
         {
@@ -387,21 +388,29 @@ exports.getPaymentDetail = async (req, res) => {
     // === 타임라인: 결제/환불(돈이 오가는 이벤트)만 ===
     const timeline = [];
 
-    // 1) 계약 결제 완료 (Payment 기반)
-    if (contract.payment && contract.payment.status !== 'READY') {
-      const p = contract.payment;
+    // 1) 결제 완료 (Payment 기반 - CONTRACT + HOST_BURDEN 모두 포함)
+    const payments = contract.payments || [];
+
+    payments.forEach(p => {
+      if (p.status === 'READY') return;
+      const isHostBurden = p.paymentType === 'HOST_BURDEN';
       timeline.push({
         occurredAt: p.approvedAt || p.createdAt,
         type: '결제완료',
         amount: p.totalAmount,
-        description: `방 계약${contract.room ? `, ${contract.room.roomName}` : ''}`,
-        actor: 'guest',
-        actorName: contract.guest?.name || null,
+        description: isHostBurden
+          ? `호스트 부담금 결제${contract.room ? ` (${contract.room.roomName})` : ''}`
+          : `방 계약${contract.room ? `, ${contract.room.roomName}` : ''}`,
+        actor: isHostBurden ? 'host' : 'guest',
+        actorName: isHostBurden
+          ? (contract.host?.name || null)
+          : (contract.guest?.name || null),
+        paymentType: p.paymentType || 'CONTRACT',
         pgStatus: p.status,
         paymentKey: p.paymentKey,
         method: p.method
       });
-    }
+    });
 
     // 환불 완료 이력 추가
     (contract.refunds || []).forEach(r => {
@@ -433,6 +442,9 @@ exports.getPaymentDetail = async (req, res) => {
 
     // === 금액 요약 ===
     const contractPaidAmount = contract.finalTotalAmount || 0;
+    const hostBurdenPaidAmount = (contract.payments || [])
+      .filter(p => p.paymentType === 'HOST_BURDEN' && p.status === 'DONE')
+      .reduce((sum, p) => sum + (p.totalAmount || 0), 0);
     const contractRefundTotal = (contract.refunds || [])
       .filter(r => r.refundStatus === 'COMPLETED')
       .reduce((sum, r) => sum + (r.finalRefundAmount || 0), 0);
@@ -460,7 +472,9 @@ exports.getPaymentDetail = async (req, res) => {
       host: contract.host || null,
       room: contract.room || null,
       summary: {
-        totalPaidAmount: contractPaidAmount,
+        contractPaidAmount,
+        hostBurdenPaidAmount,
+        totalPaidAmount: contractPaidAmount + hostBurdenPaidAmount,
         totalRefundedAmount: contractRefundTotal,
         currentBalance: contractPaidAmount - contractRefundTotal
       },
@@ -654,7 +668,7 @@ exports.getPaymentLogs = async (req, res) => {
       return { [field]: filter };
     };
 
-    // === 1) 계약 결제 (Payment DONE) ===
+    // === 1) payments 테이블 결제 (CONTRACT + HOST_BURDEN) ===
     const paymentWhere = { status: 'DONE' };
     if (startDate || endDate) Object.assign(paymentWhere, buildDateFilter('approvedAt'));
 
@@ -666,23 +680,29 @@ exports.getPaymentLogs = async (req, res) => {
         attributes: ['id', 'orderId'],
         include: [
           { model: User, as: 'guest', attributes: ['id', 'name'] },
+          { model: User, as: 'host', attributes: ['id', 'name'] },
           { model: Room, as: 'room', attributes: ['id', 'roomName'] }
         ]
       }],
       order: [['approvedAt', safeSortOrder]]
     });
 
-    const paymentLogs = contractPayments.map(p => ({
-      occurredAt: p.approvedAt || p.createdAt,
-      transactionType: '결제완료',
-      paymentMethod: p.method,
-      productType: '계약',
-      amount: p.totalAmount,
-      orderId: p.contract?.orderId || null,
-      userName: p.contract?.guest?.name || null,
-      userType: '게스트',
-      roomName: p.contract?.room?.roomName || null
-    }));
+    const paymentLogs = contractPayments.map(p => {
+      const isHostBurden = p.paymentType === 'HOST_BURDEN';
+      return {
+        occurredAt: p.approvedAt || p.createdAt,
+        transactionType: '결제완료',
+        paymentMethod: p.method,
+        productType: isHostBurden ? '호스트부담금' : '계약',
+        amount: p.totalAmount,
+        orderId: p.contract?.orderId || null,
+        userName: isHostBurden
+          ? (p.contract?.host?.name || null)
+          : (p.contract?.guest?.name || null),
+        userType: isHostBurden ? '호스트' : '게스트',
+        roomName: p.contract?.room?.roomName || null
+      };
+    });
 
     // === 2) 계약 환불 (Refund COMPLETED) ===
     const refundWhere = { refundStatus: 'COMPLETED' };
@@ -888,7 +908,8 @@ exports.getPaymentSummary = async (req, res) => {
       {
         model: Payment,
         as: 'payment',
-        attributes: ['id', 'method', 'status', 'totalAmount', 'balanceAmount'],
+        attributes: ['id', 'method', 'status', 'totalAmount', 'balanceAmount', 'paymentType'],
+        where: { paymentType: 'CONTRACT' },
         required: false
       },
       {

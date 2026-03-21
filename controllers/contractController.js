@@ -2185,6 +2185,7 @@ const confirmPayment = async (req, res) => {
     // Payment 레코드 생성 (테스트 모드에서도 실제 금액으로 저장)
     const payment = await Payment.create({
       contractId: contract.id,
+      paymentType: 'CONTRACT',
       paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
       orderId: contract.orderId,
       method: paymentMethod,
@@ -3733,6 +3734,7 @@ const confirmHostBurdenPayment = async (req, res) => {
     // Payment 레코드 생성
     const payment = await Payment.create({
       contractId: contract.id,
+      paymentType: 'HOST_BURDEN',
       paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
       orderId: contract.orderId,
       method: paymentMethod,

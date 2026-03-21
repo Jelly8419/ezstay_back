@@ -466,6 +466,11 @@ Contract.hasOne(Payment, {
   foreignKey: 'contractId',
   as: 'payment'
 });
+// 계약당 복수 결제 조회용 (CONTRACT + HOST_BURDEN)
+Contract.hasMany(Payment, {
+  foreignKey: 'contractId',
+  as: 'payments'
+});
 Payment.belongsTo(Contract, {
   foreignKey: 'contractId',
   as: 'contract'

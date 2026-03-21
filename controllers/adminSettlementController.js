@@ -137,6 +137,7 @@ exports.getAdminSettlementDetail = async (req, res) => {
               model: Payment,
               as: 'payment',
               attributes: ['id', 'method', 'totalAmount', 'approvedAt'],
+              where: { paymentType: 'CONTRACT' },
               required: false
             },
             {
