@@ -762,9 +762,11 @@ const getPropertyDetail = async (req, res) => {
         roomPassword: room.ezService.roomPassword
       } : null,
 
-      // 방 소개
+      // 방 소개 및 입퇴실 시간
       description: room.description,
       maxGuests: room.maxGuests,
+      checkInTime: room.checkInTime,
+      checkOutTime: room.checkOutTime,
 
       // 상태
       status: room.status,
@@ -1151,6 +1153,8 @@ const getRoomManagementDetail = async (req, res) => {
         address: room.address,
         detailAddress: room.detailAddress,
         dailyRent: room.dailyRent,
+        checkInTime: room.checkInTime,
+        checkOutTime: room.checkOutTime,
         createdAt: room.createdAt,
         updatedAt: room.updatedAt
       },
