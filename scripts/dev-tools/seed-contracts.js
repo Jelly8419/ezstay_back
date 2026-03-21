@@ -333,7 +333,7 @@ async function createPayment(contractId, orderId, totalAmount, requestedAt, appr
     contractId,
     paymentKey: mockPaymentKey(),
     orderId,
-    method: '카드',
+    method: 'CARD',
     status,
     requestedAt,
     approvedAt: status === 'DONE' ? approvedAt : null,
