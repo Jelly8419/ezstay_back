@@ -46,6 +46,7 @@ const DepositAgreement = sequelize.define('DepositAgreement', {
   agreementText: {
     type: DataTypes.TEXT,
     allowNull: false,
+    field: 'agreement_text',
     comment: '합의 내용 (호스트 작성)'
   },
 

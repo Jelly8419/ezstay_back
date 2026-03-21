@@ -299,8 +299,14 @@ router.patch(
 // 보증금 보류 관리
 // ============================================
 
-// 보류 신청 목록 조회
+// 보증금 보류 목록 조회 (전체 상태 + 필터)
+router.get('/deposits', adminController.getDepositHolds);
+
+// 보류 신청 목록 조회 (하위호환 - :contractId 라우트보다 먼저 등록)
 router.get('/deposits/pending-holds', adminController.getPendingDepositHolds);
+
+// 보증금 보류 상세 조회
+router.get('/deposits/:contractId', adminController.getDepositHoldDetail);
 
 // 보류 신청 승인 (super_admin, admin만 가능)
 router.post(

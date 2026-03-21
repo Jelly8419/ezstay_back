@@ -3237,6 +3237,15 @@ const submitDepositAgreement = async (req, res) => {
       }, 400);
     }
 
+    // 게스트가 이미 동의한 경우 수정 불가
+    const existingAgreement = await DepositAgreement.findOne({ where: { contractId: contract.id } });
+    if (existingAgreement && existingAgreement.status === 'ACCEPTED') {
+      return error(res, {
+        code: 4647,
+        message: '게스트가 이미 합의에 동의하여 수정이 불가합니다.'
+      }, 409);
+    }
+
     if (deductAmount > (contract.deposit || 0)) {
       return error(res, {
         code: 4644,
@@ -3447,9 +3456,15 @@ const acceptDepositAgreement = async (req, res) => {
     const depositDeduction = contract.depositAgreement.deductAmount;
     const refundableDeposit = Math.max(0, (contract.deposit || 0) - depositDeduction);
 
-    // 정책 7.9.3 조건 A: 게스트 동의 완료
     // 차감 금액에 따라 차감확정/반환확정 전이
     const depositStatus = depositDeduction > 0 ? 'DEDUCTION_CONFIRMED' : 'RETURN_CONFIRMED';
+
+    // CONTRACT 타입 결제 조회 (보증금은 계약 결제에 포함)
+    const payment = await Payment.findOne({
+      where: { contractId: contract.id, paymentType: 'CONTRACT', status: 'DONE' },
+      order: [['createdAt', 'DESC']],
+      transaction
+    });
 
     // 합의 동의 처리
     await contract.depositAgreement.update({
@@ -3486,10 +3501,6 @@ const acceptDepositAgreement = async (req, res) => {
 
     // 차감확정 시 DEPOSIT_DEDUCTION Payout 생성 (호스트 수령)
     if (depositStatus === 'DEDUCTION_CONFIRMED' && depositDeduction > 0) {
-      const payment = await Payment.findOne({
-        where: { contractId: contract.id },
-        order: [['createdAt', 'DESC']]
-      });
       const deductionPayableDate = payment
         ? calculatePayoutAvailableDate(payment.approvedAt)
         : new Date();
@@ -3514,6 +3525,34 @@ const acceptDepositAgreement = async (req, res) => {
     }
 
     await transaction.commit();
+
+    // 게스트에게 보증금 부분환불 PG 실행 (트랜잭션 외부 - PG 실패 시 롤백 불가)
+    // refundableDeposit > 0 이고 payment가 있는 경우에만 실행
+    if (refundableDeposit > 0 && payment) {
+      try {
+        const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+        const newBalance = payment.balanceAmount - refundableDeposit;
+        const canceltype = newBalance === 0 ? '0' : '1';
+
+        await paytagClient.cancelPayment({
+          orderno,
+          orgpaydate,
+          orgtranamt,
+          cancelamt: refundableDeposit,
+          canceltype
+        });
+
+        await payment.update({
+          balanceAmount: newBalance,
+          status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+        });
+
+        console.log(`[acceptDepositAgreement] 보증금 부분환불 완료: contractId=${contractId}, refundableDeposit=${refundableDeposit}`);
+      } catch (pgErr) {
+        // PG 실패 시 합의 자체는 확정된 상태 유지, 관리자가 수동 처리
+        console.error(`[acceptDepositAgreement] 보증금 부분환불 PG 실패 (contractId=${contractId}):`, pgErr.message);
+      }
+    }
 
     // 채팅방 시스템 메시지 발송
     try {
