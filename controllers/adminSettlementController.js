@@ -168,7 +168,7 @@ exports.getAdminSettlementDetail = async (req, res) => {
 
     // 호스트 계좌 정보 (현재 등록 계좌)
     const bankAccount = await UserBankAccount.findOne({
-      where: { userId: settlement.hostId, isDefault: true },
+      where: { userId: settlement.hostId, isPrimary: true },
       attributes: ['bankName', 'accountNumber', 'accountHolder']
     });
 

@@ -1,5 +1,5 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, ContractStatusLog, ChatRoom, DepositAgreement, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -3297,7 +3297,7 @@ const approveDepositHold = async (req, res) => {
 
   try {
     const { contractId } = req.params;
-    const adminId = req.user.id;
+    const adminId = req.admin.id;
 
     const contract = await Contract.findByPk(contractId, {
       include: [
@@ -3335,8 +3335,8 @@ const approveDepositHold = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
-      changedBy: adminId,
-      changedByRole: 'ADMIN',
+      changedBy: 'ADMIN',
+      changedByUserId: adminId,
       reason: '관리자 보증금 보류 승인',
       metadata: JSON.stringify({
         type: 'DEPOSIT_HOLD_APPROVED',
@@ -3415,7 +3415,7 @@ const rejectDepositHold = async (req, res) => {
 
   try {
     const { contractId } = req.params;
-    const adminId = req.user.id;
+    const adminId = req.admin.id;
     const { reason } = req.body;
 
     const contract = await Contract.findByPk(contractId, { transaction });
@@ -3458,8 +3458,8 @@ const rejectDepositHold = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
-      changedBy: adminId,
-      changedByRole: 'ADMIN',
+      changedBy: 'ADMIN',
+      changedByUserId: adminId,
       reason: reason || '관리자 보증금 보류 거절',
       metadata: JSON.stringify({
         type: 'DEPOSIT_HOLD_REJECTED',
@@ -3522,7 +3522,7 @@ const forceDepositHold = async (req, res) => {
 
   try {
     const { contractId } = req.params;
-    const adminId = req.user.id;
+    const adminId = req.admin.id;
     const { reason } = req.body;
 
     if (!reason || !reason.trim()) {
@@ -3573,8 +3573,8 @@ const forceDepositHold = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
-      changedBy: adminId,
-      changedByRole: 'ADMIN',
+      changedBy: 'ADMIN',
+      changedByUserId: adminId,
       reason: `관리자 강제 반환보류: ${reason.trim()}`,
       metadata: JSON.stringify({
         type: 'DEPOSIT_FORCE_HELD',
@@ -3632,6 +3632,119 @@ const forceDepositHold = async (req, res) => {
 // ============================================
 // 알림톡 관리
 // ============================================
+
+/**
+ * 보증금 환불 재시도
+ * POST /api/admin/deposits/:contractId/retry-refund
+ * 정책: PG 환불 실패(REFUND_FAILED) 건에 대해 관리자가 수동 재시도
+ */
+const retryDepositRefund = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const adminId = req.admin.id;
+
+    const contract = await Contract.findByPk(contractId);
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.depositStatus !== 'REFUND_FAILED') {
+      return error(res, {
+        code: 4680,
+        message: '환불 실패 상태의 계약만 재시도할 수 있습니다.'
+      }, 400);
+    }
+
+    const refundableDeposit = contract.refundableDeposit || 0;
+    if (refundableDeposit <= 0) {
+      return error(res, {
+        code: 4681,
+        message: '환불할 보증금이 없습니다.'
+      }, 400);
+    }
+
+    const payment = await Payment.findOne({
+      where: { contractId: contract.id, status: { [Op.in]: ['DONE', 'PARTIAL_CANCELED'] } }
+    });
+
+    if (!payment) {
+      return error(res, {
+        code: 4682,
+        message: '원결제 정보를 찾을 수 없습니다.'
+      }, 404);
+    }
+
+    // PG 환불 재시도
+    const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+    const newBalance = payment.balanceAmount - refundableDeposit;
+    const canceltype = newBalance === 0 ? '0' : '1';
+
+    try {
+      await paytagClient.cancelPayment({
+        orderno,
+        orgpaydate,
+        orgtranamt,
+        cancelamt: refundableDeposit,
+        canceltype
+      });
+    } catch (pgErr) {
+      // 재시도도 실패 시 로그 기록
+      await PaymentFailureLog.create({
+        contractId: contract.id,
+        orderId: payment.orderId || `DEPOSIT_REFUND_RETRY_${contract.id}`,
+        failureCode: pgErr.paytagErrorCode || 'PG_CANCEL_FAILED',
+        failureMessage: pgErr.paytagErrorMessage || pgErr.message,
+        requestData: {
+          type: 'DEPOSIT_REFUND_RETRY',
+          cancelamt: refundableDeposit,
+          retriedByAdminId: adminId
+        },
+        responseData: pgErr.paytagResponse || null
+      });
+
+      return error(res, {
+        code: 4900,
+        message: `PG 환불 재시도 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
+        pgErrorCode: pgErr.paytagErrorCode
+      }, 502);
+    }
+
+    // PG 성공 시 상태 업데이트
+    await payment.update({
+      balanceAmount: newBalance,
+      status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+    });
+
+    // 원래 확정됐던 depositStatus 복원
+    const restoredStatus = contract.depositDeduction > 0 ? 'DEDUCTION_CONFIRMED' : 'RETURN_CONFIRMED';
+    await contract.update({ depositStatus: restoredStatus });
+
+    await ContractStatusLog.create({
+      contractId: contract.id,
+      fromStatus: 'COMPLETED',
+      toStatus: 'COMPLETED',
+      changedBy: 'ADMIN',
+      changedByUserId: adminId,
+      reason: `관리자 보증금 환불 재시도 성공 (환불액: ${refundableDeposit.toLocaleString()}원)`,
+      metadata: JSON.stringify({
+        type: 'DEPOSIT_REFUND_RETRIED',
+        refundableDeposit,
+        previousStatus: 'REFUND_FAILED',
+        restoredStatus
+      })
+    });
+
+    return success(res, {
+      contractId: contract.id,
+      depositStatus: restoredStatus,
+      refundedAmount: refundableDeposit
+    }, '보증금 환불 재시도 성공');
+
+  } catch (err) {
+    console.error('보증금 환불 재시도 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
 
 /**
  * 알림톡 템플릿 목록 조회
@@ -3942,6 +4055,7 @@ module.exports = {
   approveDepositHold,
   rejectDepositHold,
   forceDepositHold,
+  retryDepositRefund,
 
   // 알림톡 관리
   getAlimtalkTemplates,

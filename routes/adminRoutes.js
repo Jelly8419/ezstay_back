@@ -329,6 +329,13 @@ router.post(
   adminController.forceDepositHold
 );
 
+// 보증금 환불 재시도 (REFUND_FAILED → PG 재시도)
+router.post(
+  '/deposits/:contractId/retry-refund',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.retryDepositRefund
+);
+
 // ============================================
 // 결제 관리
 // ============================================

@@ -564,6 +564,12 @@ const getGuestContracts = async (req, res) => {
           model: User,
           as: 'host',
           attributes: ['id', 'name', 'nickname', 'phoneNumber']
+        },
+        {
+          model: DepositAgreement,
+          as: 'depositAgreement',
+          attributes: ['id', 'status', 'deductAmount'],
+          required: false
         }
       ],
       order: [['createdAt', 'DESC']]
@@ -672,6 +678,9 @@ const getGuestContracts = async (req, res) => {
           deposit: contract.deposit,
           checkoutRequested: contract.checkoutRequested,
 
+          // 보증금 합의 상태 (동의 버튼 분기용)
+          depositAgreementStatus: contract.depositAgreement?.status || null,
+
           createdAt: contract.createdAt
         };
       })
@@ -727,6 +736,12 @@ const getHostContracts = async (req, res) => {
           model: User,
           as: 'guest',
           attributes: ['id', 'name', 'nickname', 'phoneNumber', 'email']
+        },
+        {
+          model: DepositAgreement,
+          as: 'depositAgreement',
+          attributes: ['id', 'status', 'deductAmount'],
+          required: false
         }
       ],
       order: [['createdAt', 'DESC']]
@@ -787,6 +802,9 @@ const getHostContracts = async (req, res) => {
           checkoutRequested: contract.checkoutRequested,
           hostCheckedOut: contract.hostCheckedOut,
 
+          // 보증금 합의 상태 (버튼 분기용)
+          depositAgreementStatus: contract.depositAgreement?.status || null,
+
           // 게스트 정보 (연락처는 결제 완료 이후 상태에서만 노출)
           guest: {
             id: contract.guest.id,
@@ -839,6 +857,11 @@ const getContractDetail = async (req, res) => {
           model: User,
           as: 'guest',
           attributes: ['id', 'name', 'nickname', 'phoneNumber', 'email']
+        },
+        {
+          model: DepositAgreement,
+          as: 'depositAgreement',
+          required: false
         }
       ]
     });
@@ -958,6 +981,18 @@ const getContractDetail = async (req, res) => {
           refundableDeposit: contract.refundableDeposit,
           checkoutRequested: contract.checkoutRequested,
           hostCheckedOut: contract.hostCheckedOut,
+
+          // 보증금 합의 정보
+          depositAgreement: contract.depositAgreement ? {
+            id: contract.depositAgreement.id,
+            deductAmount: contract.depositAgreement.deductAmount,
+            agreementText: contract.depositAgreement.agreementText,
+            holdReason: contract.depositAgreement.holdReason,
+            status: contract.depositAgreement.status,
+            submittedAt: contract.depositAgreement.submittedAt,
+            acceptedAt: contract.depositAgreement.acceptedAt,
+            refundableAmount: (contract.deposit || 0) - contract.depositAgreement.deductAmount
+          } : null,
 
           // 시점 정보
           createdAt: contract.createdAt,
@@ -1792,7 +1827,7 @@ const requestRefund = async (req, res) => {
           if (refundData.penaltyAmount > 0) {
             const penaltyPayoutAvailableDate = calculatePayoutAvailableDate(payment.approvedAt);
             const hostBankAccount = await require('../models').UserBankAccount.findOne({
-              where: { userId: contract.hostId, isDefault: true }
+              where: { userId: contract.hostId, isPrimary: true }
             });
             await Payout.create({
               contractId: contract.id,
@@ -2310,7 +2345,7 @@ const confirmPayment = async (req, res) => {
 
     // 호스트 계좌 정보 조회
     const hostBankAccount = await require('../models').UserBankAccount.findOne({
-      where: { userId: contract.hostId, isDefault: true }
+      where: { userId: contract.hostId, isPrimary: true }
     });
 
     await Payout.create({
@@ -2916,8 +2951,8 @@ const cancelContractByHost = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'PAYMENT_COMPLETED',
       toStatus: 'CANCELLED_BY_HOST',
-      changedBy: hostId,
-      changedByRole: 'HOST',
+      changedBy: 'HOST',
+      changedByUserId: hostId,
       reason: cancellationReason,
       metadata: JSON.stringify({
         cancelledByHost: true,
@@ -3026,8 +3061,8 @@ const requestCancelByHost = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'IN_PROGRESS',
       toStatus: 'IN_PROGRESS', // 상태 변경 없이 취소 요청 기록
-      changedBy: hostId,
-      changedByRole: 'HOST',
+      changedBy: 'HOST',
+      changedByUserId: hostId,
       reason,
       metadata: JSON.stringify({
         type: 'CANCEL_REQUEST_BY_HOST',
@@ -3153,8 +3188,8 @@ const holdCheckout = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
-      changedBy: hostId,
-      changedByRole: 'HOST',
+      changedBy: 'HOST',
+      changedByUserId: hostId,
       reason: reason.trim(),
       metadata: JSON.stringify({
         type: 'CHECKOUT_HOLD_REQUESTED',
@@ -3314,8 +3349,8 @@ const submitDepositAgreement = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
-      changedBy: hostId,
-      changedByRole: 'HOST',
+      changedBy: 'HOST',
+      changedByUserId: hostId,
       reason: `합의 내용 제출: 차감 ${deductAmount.toLocaleString()}원`,
       metadata: JSON.stringify({
         type: 'DEPOSIT_AGREEMENT_SUBMITTED',
@@ -3516,8 +3551,8 @@ const acceptDepositAgreement = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
-      changedBy: guestId,
-      changedByRole: 'GUEST',
+      changedBy: 'GUEST',
+      changedByUserId: guestId,
       reason: '보증금 합의 동의',
       metadata: JSON.stringify({
         type: 'DEPOSIT_AGREEMENT_ACCEPTED',
@@ -3534,7 +3569,7 @@ const acceptDepositAgreement = async (req, res) => {
         : new Date();
 
       const hostBankAccount = await require('../models').UserBankAccount.findOne({
-        where: { userId: contract.hostId, isDefault: true }
+        where: { userId: contract.hostId, isPrimary: true }
       });
 
       await Payout.create({
@@ -3577,8 +3612,41 @@ const acceptDepositAgreement = async (req, res) => {
 
         console.log(`[acceptDepositAgreement] 보증금 부분환불 완료: contractId=${contractId}, refundableDeposit=${refundableDeposit}`);
       } catch (pgErr) {
-        // PG 실패 시 합의 자체는 확정된 상태 유지, 관리자가 수동 처리
         console.error(`[acceptDepositAgreement] 보증금 부분환불 PG 실패 (contractId=${contractId}):`, pgErr.message);
+
+        // depositStatus를 REFUND_FAILED로 변경하여 관리자가 식별 가능하게 함
+        await contract.update({ depositStatus: 'REFUND_FAILED' });
+
+        // PaymentFailureLog에 실패 기록 저장
+        await PaymentFailureLog.create({
+          contractId: contract.id,
+          orderId: payment.orderId || `DEPOSIT_REFUND_${contract.id}`,
+          failureCode: pgErr.paytagErrorCode || 'PG_CANCEL_FAILED',
+          failureMessage: pgErr.paytagErrorMessage || pgErr.message,
+          requestData: {
+            type: 'DEPOSIT_PARTIAL_REFUND',
+            cancelamt: refundableDeposit,
+            depositDeduction,
+            depositStatus
+          },
+          responseData: pgErr.paytagResponse || null
+        });
+
+        // 상태 변경 로그
+        await ContractStatusLog.create({
+          contractId: contract.id,
+          fromStatus: 'COMPLETED',
+          toStatus: 'COMPLETED',
+          changedBy: 'SYSTEM',
+          changedByUserId: null,
+          reason: `보증금 부분환불 PG 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
+          metadata: JSON.stringify({
+            type: 'DEPOSIT_REFUND_FAILED',
+            refundableDeposit,
+            errorCode: pgErr.paytagErrorCode,
+            errorMessage: pgErr.message
+          })
+        });
       }
     }
 

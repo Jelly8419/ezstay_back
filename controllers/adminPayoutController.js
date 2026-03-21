@@ -292,7 +292,7 @@ exports.retryPayout = async (req, res) => {
     let accountSnapshot = {};
     if (payout.recipientType === 'HOST') {
       const hostAccount = await UserBankAccount.findOne({
-        where: { userId: payout.recipientId, isDefault: true }
+        where: { userId: payout.recipientId, isPrimary: true }
       });
       if (hostAccount) {
         accountSnapshot = {

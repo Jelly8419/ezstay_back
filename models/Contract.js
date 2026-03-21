@@ -478,11 +478,11 @@ const Contract = sequelize.define('Contract', {
     comment: '반환 가능 보증금 (보증금 - 차감액)'
   },
   depositStatus: {
-    type: DataTypes.ENUM('HOLDING', 'RETURN_PENDING', 'RETURN_HOLD', 'RETURN_CONFIRMED', 'DEDUCTION_CONFIRMED', 'RETURNED'),
+    type: DataTypes.ENUM('HOLDING', 'RETURN_PENDING', 'RETURN_HOLD', 'RETURN_CONFIRMED', 'DEDUCTION_CONFIRMED', 'RETURNED', 'REFUND_FAILED'),
     allowNull: false,
     defaultValue: 'HOLDING',
     field: 'deposit_status',
-    comment: '보증금 상태 (HOLDING=보관중, RETURN_PENDING=반환대기, RETURN_HOLD=반환보류, RETURN_CONFIRMED=반환확정, DEDUCTION_CONFIRMED=차감확정, RETURNED=반환완료)'
+    comment: '보증금 상태 (HOLDING=보관중, RETURN_PENDING=반환대기, RETURN_HOLD=반환보류, RETURN_CONFIRMED=반환확정, DEDUCTION_CONFIRMED=차감확정, RETURNED=반환완료, REFUND_FAILED=환불실패)'
   },
 
   // 퇴실 세부 상태 (PRD v2)
