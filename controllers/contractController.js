@@ -2913,7 +2913,7 @@ const cancelContractByHost = async (req, res) => {
       fromStatus: 'PAYMENT_COMPLETED',
       toStatus: 'CANCELLED_BY_HOST',
       changedBy: hostId,
-      changedByRole: 'host',
+      changedByRole: 'HOST',
       reason: cancellationReason,
       metadata: JSON.stringify({
         cancelledByHost: true,
@@ -3023,7 +3023,7 @@ const requestCancelByHost = async (req, res) => {
       fromStatus: 'IN_PROGRESS',
       toStatus: 'IN_PROGRESS', // 상태 변경 없이 취소 요청 기록
       changedBy: hostId,
-      changedByRole: 'host',
+      changedByRole: 'HOST',
       reason,
       metadata: JSON.stringify({
         type: 'CANCEL_REQUEST_BY_HOST',
@@ -3143,7 +3143,7 @@ const holdCheckout = async (req, res) => {
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
       changedBy: hostId,
-      changedByRole: 'host',
+      changedByRole: 'HOST',
       reason: reason.trim(),
       metadata: JSON.stringify({
         type: 'CHECKOUT_HOLD_REQUESTED',
@@ -3290,7 +3290,7 @@ const submitDepositAgreement = async (req, res) => {
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
       changedBy: hostId,
-      changedByRole: 'host',
+      changedByRole: 'HOST',
       reason: `합의 내용 제출: 차감 ${deductAmount.toLocaleString()}원`,
       metadata: JSON.stringify({
         type: 'DEPOSIT_AGREEMENT_SUBMITTED',
@@ -3489,7 +3489,7 @@ const acceptDepositAgreement = async (req, res) => {
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
       changedBy: guestId,
-      changedByRole: 'guest',
+      changedByRole: 'GUEST',
       reason: '보증금 합의 동의',
       metadata: JSON.stringify({
         type: 'DEPOSIT_AGREEMENT_ACCEPTED',

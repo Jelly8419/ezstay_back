@@ -3336,7 +3336,7 @@ const approveDepositHold = async (req, res) => {
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
       changedBy: adminId,
-      changedByRole: 'admin',
+      changedByRole: 'ADMIN',
       reason: '관리자 보증금 보류 승인',
       metadata: JSON.stringify({
         type: 'DEPOSIT_HOLD_APPROVED',
@@ -3459,7 +3459,7 @@ const rejectDepositHold = async (req, res) => {
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
       changedBy: adminId,
-      changedByRole: 'admin',
+      changedByRole: 'ADMIN',
       reason: reason || '관리자 보증금 보류 거절',
       metadata: JSON.stringify({
         type: 'DEPOSIT_HOLD_REJECTED',
@@ -3574,7 +3574,7 @@ const forceDepositHold = async (req, res) => {
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
       changedBy: adminId,
-      changedByRole: 'admin',
+      changedByRole: 'ADMIN',
       reason: `관리자 강제 반환보류: ${reason.trim()}`,
       metadata: JSON.stringify({
         type: 'DEPOSIT_FORCE_HELD',
