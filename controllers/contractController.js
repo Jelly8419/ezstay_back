@@ -2768,6 +2768,7 @@ const cancelContractByHost = async (req, res) => {
     const { cancellationReason } = req.body;
 
     if (!cancellationReason || !cancellationReason.trim()) {
+      await transaction.rollback();
       return error(res, {
         code: 4620,
         message: '취소 사유를 입력해주세요.'
@@ -2777,14 +2778,17 @@ const cancelContractByHost = async (req, res) => {
     const contract = await Contract.findByPk(contractId, { transaction });
 
     if (!contract) {
+      await transaction.rollback();
       return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
     }
 
     if (contract.hostId !== hostId) {
+      await transaction.rollback();
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
     if (contract.status !== 'PAYMENT_COMPLETED') {
+      await transaction.rollback();
       return error(res, {
         code: 4621,
         message: '결제 완료 상태에서만 호스트 취소가 가능합니다.'
