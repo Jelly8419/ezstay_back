@@ -1,7 +1,7 @@
 const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalItemReservation, RentalItem, Settlement, DepositAgreement } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
-const axios = require('axios');
+const paytagClient = require('../utils/paytagClient');
 const {
   calculateRentalItemsFee,
   calculateDiscount,
@@ -49,7 +49,6 @@ const createContractRequest = async (req, res) => {
       finalTotalAmount,
       rentalItems,
       guestMessage,
-      discountCode,
       discountType,
       paymentMethod,
       installmentMonths,
@@ -104,7 +103,47 @@ const createContractRequest = async (req, res) => {
       );
     }
 
-    // 3-1. 환불정책 스냅샷 조회 (계약 시점의 정책 보존)
+    // 3-1. 방 정보 스냅샷 (계약 시점의 방 상태 보존, 분쟁 대비)
+    const roomSnapshot = {
+      roomId: room.id,
+      roomName: room.roomName,
+      address: room.address,
+      detailAddress: room.detailAddress,
+      buildingType: room.buildingType,
+      floor: room.floor,
+      area: room.area,
+      roomCount: room.roomCount,
+      bathroomCount: room.bathroomCount,
+      isDuplex: room.isDuplex,
+      elevatorAvailable: room.elevatorAvailable,
+      parkingAvailable: room.parkingAvailable,
+      parkingInfo: room.parkingInfo,
+      maxGuests: room.maxGuests,
+      description: room.description,
+      dailyRent: room.dailyRent,
+      dailyMaintenanceFee: room.dailyMaintenanceFee,
+      maintenanceDetail: room.maintenanceDetail,
+      includeElectricity: room.includeElectricity,
+      includeWater: room.includeWater,
+      includeGas: room.includeGas,
+      includeInternet: room.includeInternet,
+      cleaningFee: room.cleaningFee,
+      longTermWeeks: room.longTermWeeks,
+      longTermDiscount: room.longTermDiscount,
+      quickMoveIn: room.quickMoveIn,
+      quickMoveInDiscount: room.quickMoveInDiscount,
+      minContractDays: room.minContractDays,
+      refundPolicy: room.refundPolicy,
+      checkInTime: room.checkInTime,
+      checkOutTime: room.checkOutTime,
+      ezService: room.ezService ? {
+        cleaningService: room.ezService.cleaningService,
+        autoPasswordChange: room.ezService.autoPasswordChange,
+      } : null,
+      capturedAt: new Date().toISOString()
+    };
+
+    // 3-2. 환불정책 스냅샷 조회 (계약 시점의 정책 보존)
     let refundPolicySnapshot = null;
     if (room.refundPolicy) {
       const policyType = await RefundPolicyType.findOne({
@@ -145,6 +184,22 @@ const createContractRequest = async (req, res) => {
         { code: 4303, message: dateValidation.message },
         400
       );
+    }
+
+    // 4-1. 날짜 중복 계약 체크
+    const overlappingContract = await Contract.findOne({
+      attributes: ['id'],
+      where: {
+        roomId,
+        status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'CANCEL_REQUESTED'] },
+        checkInDate: { [Op.lt]: checkOutDate },
+        checkOutDate: { [Op.gt]: checkInDate }
+      },
+      transaction
+    });
+    if (overlappingContract) {
+      await transaction.rollback();
+      return error(res, { code: 4305, message: '해당 기간에 이미 계약이 존재합니다' }, 409);
     }
 
     // 총 일수 재확인
@@ -241,7 +296,6 @@ const createContractRequest = async (req, res) => {
     // - 빠른 입주 할인: 고정 금액, 먼저 적용
     // - 장기계약 할인: %, 빠른입주 할인 적용 후 남은 임대료에 적용
     const discountInfo = await calculateDiscount(
-      discountCode,
       serverCalculated.rentalFee,  // baseRent (임대료)
       totalDays,
       checkInDate,
@@ -340,8 +394,6 @@ const createContractRequest = async (req, res) => {
         hostPlatformFee: serverCalculated.hostPlatformFee,  // 호스트 수수료 (3.3%)
         discountAmount: discountAmountServer,
         discountType: discountTypeServer,
-        discountCode: discountCode || null,
-
         subtotal: subtotalServer,
         totalUsageFee: serverCalculated.totalUsageFee,
         deposit: serverCalculated.deposit,
@@ -358,7 +410,8 @@ const createContractRequest = async (req, res) => {
         guestMessage: guestMessage || null,
         status: 'PENDING_APPROVAL',
 
-        // 가격 스냅샷 (분쟁 대비)
+        // 스냅샷 (분쟁 대비)
+        roomSnapshot,
         pricingSnapshot: pricingSnapshot || {},
 
         // 환불정책 스냅샷 (계약 시점의 정책 보존)
@@ -701,7 +754,6 @@ const getHostContracts = async (req, res) => {
           platformFee: contract.platformFee,
           discountAmount: contract.discountAmount,
           discountType: contract.discountType,
-          discountCode: contract.discountCode,
           subtotal: contract.subtotal,
           totalUsageFee: contract.totalUsageFee,
           deposit: contract.deposit,
@@ -825,7 +877,6 @@ const getContractDetail = async (req, res) => {
           platformFee: contract.platformFee,
           discountAmount: contract.discountAmount,
           discountType: contract.discountType,
-          discountCode: contract.discountCode,
           subtotal: contract.subtotal,
           totalUsageFee: contract.totalUsageFee,
           deposit: contract.deposit,
@@ -853,7 +904,8 @@ const getContractDetail = async (req, res) => {
           // 약관 동의
           termsAgreed: contract.termsAgreed,
 
-          // 환불 정책 (계약 시점 스냅샷)
+          // 계약 시점 스냅샷
+          roomSnapshot: contract.roomSnapshot,
           refundPolicyType: contract.refundPolicyType,
           refundPolicySnapshot: contract.refundPolicySnapshot,
 
@@ -1254,9 +1306,13 @@ const rejectContract = async (req, res) => {
 
     // TODO: 렌탈 아이템 예약 해제 (재고 복구)
 
-    // 게스트에게 거절 알림 전송
+    // 게스트에게 거절 알림 전송 + 알림톡
     try {
-      await NotificationService.notifyContractRejected(contract);
+      const [guest, room] = await Promise.all([
+        User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
+      ]);
+      await NotificationService.notifyContractRejected(contract, { guest, room });
     } catch (notifyErr) {
       console.error('계약 거절 알림 전송 실패 (무시됨):', notifyErr);
     }
@@ -1334,6 +1390,10 @@ const cancelContractByGuest = async (req, res) => {
       { transaction }
     );
 
+    // TODO: 게스트 취소 위약금 중 플랫폼 귀속 금액이 있을 경우 영수증 발급 대기 목록 생성
+    // const { createCancelFeeReceipt } = require('../services/receiptService');
+    // await createCancelFeeReceipt({ contractId, hostId: contract.hostId, targetType: 'GUEST_CANCEL_FEE', platformFeeAmount, date }, transaction);
+
     // 상태 변경 로그 기록
     await ContractStatusLog.createLog({
       contractId: contract.id,
@@ -1373,7 +1433,17 @@ const cancelContractByGuest = async (req, res) => {
 
     // 호스트/게스트 모두에게 취소 알림 전송
     try {
-      await NotificationService.notifyContractCanceled(contract, CANCEL_TYPES.GUEST_CANCEL);
+      const [cancelGuest, cancelHost, cancelRoom] = await Promise.all([
+        User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
+      ]);
+      await NotificationService.notifyContractCanceled(contract, CANCEL_TYPES.GUEST_CANCEL, {
+        guest: cancelGuest,
+        host: cancelHost,
+        room: cancelRoom,
+        refundData: { guestPenalty: 0, refundAmount: 0, hostPenalty: 0, settlementAmount: 0 }
+      });
     } catch (notifyErr) {
       console.error('계약 취소 알림 전송 실패 (무시됨):', notifyErr);
     }
@@ -1696,6 +1766,28 @@ const requestRefund = async (req, res) => {
 
     await transaction.commit();
 
+    // 알림톡 발송 (4-5 게스트 취소) - 트랜잭션 커밋 후
+    try {
+      const [refundGuest, refundHost, refundRoom] = await Promise.all([
+        User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
+      ]);
+      NotificationService.notifyContractCanceled(contract, CANCEL_TYPES.GUEST_CANCEL, {
+        guest: refundGuest,
+        host: refundHost,
+        room: refundRoom,
+        refundData: {
+          guestPenalty: refund.penaltyAmount || 0,
+          refundAmount: refund.finalRefundAmount || 0,
+          hostPenalty: refund.hostPenaltyAmount || 0,
+          settlementAmount: refund.hostPenaltyAmount || 0
+        }
+      }).catch(err => console.error('환불 취소 알림 전송 실패 (무시됨):', err));
+    } catch (notifyErr) {
+      console.error('환불 취소 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
     // 예상 완료일 계산 (요청일로부터 영업일 기준 5일 후)
     const estimatedCompletionDate = new Date(refund.requestedAt);
     estimatedCompletionDate.setDate(estimatedCompletionDate.getDate() + 5);
@@ -1843,7 +1935,7 @@ const getPaymentInfo = async (req, res) => {
         {
           model: User,
           as: 'guest',
-          attributes: ['id', 'name', 'nickname', 'email']
+          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
         }
       ]
     });
@@ -1889,7 +1981,8 @@ const getPaymentInfo = async (req, res) => {
       contractAmount: contract.finalTotalAmount,
       orderName: `${contract.room.roomName} (${contract.totalDays}박)`,
       customerEmail: contract.guest.email,
-      customerName: contract.guest.name
+      customerName: contract.guest.name,
+      customerPhone: contract.guest.phoneNumber || null
     };
 
     // 렌탈 주문이 있으면 정보 추가
@@ -1916,6 +2009,15 @@ const getPaymentInfo = async (req, res) => {
     // 기존 호환성 유지 (amount 필드)
     responseData.amount = responseData.totalAmount;
 
+    // 테스트 모드: 프론트가 SDK에 전달할 실제 PG 결제 금액
+    const testAmount = paytagClient.getTestAmount();
+    if (testAmount) {
+      responseData.pgAmount = testAmount;
+    }
+
+    // TODO: 가상계좌 지원 시 depositDeadline(입금 마감시간) 추가
+    // = min(승인시점+24h, 체크인날짜+입실시간)
+
     return success(res, responseData, '결제 정보를 조회했습니다.');
   } catch (err) {
     console.error('결제 정보 조회 오류:', err);
@@ -1924,7 +2026,7 @@ const getPaymentInfo = async (req, res) => {
 };
 
 /**
- * 결제 승인 (토스페이먼츠 API 호출)
+ * 결제 승인 (PayTag API 호출)
  * POST /api/contracts/:contractId/confirm-payment
  */
 const confirmPayment = async (req, res) => {
@@ -1932,11 +2034,11 @@ const confirmPayment = async (req, res) => {
 
   try {
     const { contractId } = req.params;
-    const { paymentKey, orderId, amount } = req.body;
+    const { recvPayparam, payType, orderId, amount } = req.body;
     const guestId = req.user.id;
 
     // 필수 파라미터 검증
-    if (!paymentKey || !orderId || !amount) {
+    if (!recvPayparam || !orderId || !amount) {
       await transaction.rollback();
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
@@ -1972,92 +2074,82 @@ const confirmPayment = async (req, res) => {
     }
 
     // 금액 검증 (클라이언트 변조 방지)
-    if (contract.finalTotalAmount !== parseInt(amount, 10)) {
+    // 프론트는 항상 실제 금액을 보냄. 테스트 모드에서는 PG만 테스트금액으로 결제됨.
+    // 가상계좌/링크결제는 최소금액 제한이 있어 테스트 금액 적용 제외
+    const testAmount = paytagClient.getTestAmount(payType);
+    const realAmount = contract.finalTotalAmount;
+
+    if (realAmount !== parseInt(amount, 10)) {
       await transaction.rollback();
       return error(res, ErrorCodes.AMOUNT_MISMATCH, 400);
     }
 
-    // 토스페이먼츠 API 호출
-    const tossSecretKey = process.env.TOSS_SECRET_KEY;
-    const encodedKey = Buffer.from(`${tossSecretKey}:`).toString('base64');
+    if (testAmount) {
+      console.log(`🧪 테스트 결제 모드: PG 결제 ${testAmount}원 → DB 저장 ${realAmount}원`);
+    }
 
-    let tossResponse;
+    // PayTag 결제 승인 API 호출
+    let paytagResponse;
     try {
-      tossResponse = await axios.post(
-        'https://api.tosspayments.com/v1/payments/confirm',
-        {
-          paymentKey,
-          orderId,
-          amount: parseInt(amount, 10)
-        },
-        {
-          headers: {
-            Authorization: `Basic ${encodedKey}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-    } catch (tossError) {
+      paytagResponse = await paytagClient.confirmPayment({
+        recvPayparam,
+        payType: payType || 'CARD'
+      });
+    } catch (paytagError) {
       await transaction.rollback();
 
       // 실패 로그 기록
       await PaymentFailureLog.create({
         contractId: contract.id,
         orderId,
-        failureCode: tossError.response?.data?.code || 'UNKNOWN',
-        failureMessage: tossError.response?.data?.message || tossError.message,
-        requestData: { paymentKey, orderId, amount },
-        responseData: tossError.response?.data || null,
+        failureCode: paytagError.paytagErrorCode || 'UNKNOWN',
+        failureMessage: paytagError.paytagErrorMessage || paytagError.message,
+        requestData: { recvPayparam: '(encrypted)', payType, orderId, amount },
+        responseData: paytagError.paytagResponse || null,
         userAgent: req.headers['user-agent'],
         ipAddress: req.ip || req.connection.remoteAddress
       });
 
-      console.error('토스 결제 승인 실패:', tossError.response?.data || tossError.message);
+      console.error('PayTag 결제 승인 실패:', paytagError.message);
       return error(res, ErrorCodes.PAYMENT_CONFIRMATION_FAILED, 400, {
-        tossErrorCode: tossError.response?.data?.code,
-        tossErrorMessage: tossError.response?.data?.message
+        pgErrorCode: paytagError.paytagErrorCode,
+        pgErrorMessage: paytagError.paytagErrorMessage
       });
     }
 
-    const paymentData = tossResponse.data;
     const now = new Date();
+    const paymentMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
 
-    // Payment 레코드 생성
+    // TODO: 가상계좌(VBANK) 결제 지원 - 오픈 스펙 제외, 추후 구현
+    // - VBANK 선택 시 status: 'WAITING_FOR_DEPOSIT', Contract APPROVED 유지
+    // - 웹훅으로 입금 확인 후 DONE + PAYMENT_COMPLETED 전환
+    // - 입금 마감시간 검증: min(승인+24h, 체크인시간)
+    // - 관련 파일: controllers/paytagWebhookController.js, server.js 웹훅 라우트
+
+    // Payment 레코드 생성 (테스트 모드에서도 실제 금액으로 저장)
     const payment = await Payment.create({
       contractId: contract.id,
-      paymentKey: paymentData.paymentKey,
-      orderId: paymentData.orderId,
-      method: paymentData.method || 'CARD',
-      status: paymentData.status,
-      requestedAt: new Date(paymentData.requestedAt),
-      approvedAt: paymentData.approvedAt ? new Date(paymentData.approvedAt) : now,
-      totalAmount: paymentData.totalAmount,
-      balanceAmount: paymentData.balanceAmount,
-      suppliedAmount: paymentData.suppliedAmount,
-      vat: paymentData.vat,
-      taxFreeAmount: paymentData.taxFreeAmount || 0,
-      currency: paymentData.currency || 'KRW',
-      receiptUrl: paymentData.receipt?.url || null,
-      checkoutUrl: paymentData.checkout?.url || null,
-      paymentResponse: paymentData // 전체 응답 JSON 저장
+      paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
+      orderId: contract.orderId,
+      method: paymentMethod,
+      status: 'DONE',
+      requestedAt: now,
+      approvedAt: now,
+      totalAmount: realAmount,
+      balanceAmount: realAmount,
+      suppliedAmount: Math.round(realAmount / 1.1),
+      vat: realAmount - Math.round(realAmount / 1.1),
+      taxFreeAmount: 0,
+      currency: 'KRW',
+      receiptUrl: paytagResponse.receipt_url || null,
+      checkoutUrl: null,
+      paymentResponse: paytagResponse // 전체 응답 JSON 저장
     }, { transaction });
-
-    // 토스 method를 Contract paymentMethod ENUM으로 매핑
-    const mapPaymentMethod = (tossMethod) => {
-      const methodMap = {
-        'CARD': 'CREDIT_CARD',
-        'VIRTUAL_ACCOUNT': 'BANK_TRANSFER',
-        'TRANSFER': 'BANK_TRANSFER',
-        'MOBILE': 'SIMPLE_PAY',
-        'EASY_PAY': 'SIMPLE_PAY'
-      };
-      return methodMap[tossMethod] || 'CREDIT_CARD';
-    };
 
     // Contract 상태 업데이트
     await contract.update({
       status: 'PAYMENT_COMPLETED',
-      paymentMethod: mapPaymentMethod(paymentData.method),
+      paymentMethod: paytagClient.mapContractPaymentMethod(payType || 'CARD'),
       paidAt: now
     }, { transaction });
 
@@ -2112,8 +2204,10 @@ const confirmPayment = async (req, res) => {
 
     if (initialRentalOrder) {
       await confirmRentalOrderPayment(
-        initialRentalOrder.id,
-        paymentData.paymentKey,
+        initialRentalOrder,
+        payment.paymentKey,
+        paymentMethod,
+        guestId,
         req,
         transaction
       );
@@ -2144,8 +2238,29 @@ const confirmPayment = async (req, res) => {
       console.error(`[자동메시지] 계약 확정 메시지 발송 실패 (무시됨):`, err);
     });
 
-    // 결제 완료 알림 (호스트 + 게스트)
-    NotificationService.notifyPaymentCompleted(contract).catch(err => {
+    // 결제 완료 알림 (호스트 + 게스트) + 알림톡
+    // 옵션 상품 정보 조회 (있는 경우에만)
+    let optionItems = '';
+    if (initialRentalOrder) {
+      try {
+        const orderItems = await RentalOrderItem.findAll({
+          where: { rentalOrderId: initialRentalOrder.id },
+          include: [{ model: RentalItem, as: 'rentalItem', attributes: ['name'] }]
+        });
+        if (orderItems.length > 0) {
+          optionItems = orderItems.map(i => `${i.rentalItem?.name || '옵션'} ${i.quantity}개`).join(', ');
+        }
+      } catch (rentalErr) {
+        console.error('렌탈 아이템 조회 실패 (무시됨):', rentalErr);
+      }
+    }
+
+    NotificationService.notifyPaymentCompleted(contract, {
+      guest: await User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+      host: await User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+      room: contract.room,
+      paymentData: { guestAmount: payment.totalAmount, hostAmount: contract.totalUsageFee, optionItems }
+    }).catch(err => {
       console.error('결제 완료 알림 전송 실패 (무시됨):', err);
     });
 
@@ -2657,12 +2772,11 @@ const cancelContractByHost = async (req, res) => {
       approvedAt: cancellationDate
     }, { transaction });
 
-    // TODO: PG 연동 시 구현 필요
-    // 1. 게스트 PG 전액 환불: refundData.totalRefundAmount
-    // 2. 호스트 부담금 PG 결제: refund.hostBurdenAmount (위약금 + 게스트 서비스 수수료)
+    // TODO: PayTag 환불 API 문서 수령 후 구현 필요
+    // 1. 게스트 PG 전액 환불: refund.totalRefundAmount
+    // 2. 호스트 부담금 결제: refund.hostBurdenAmount (위약금 + 게스트 서비스 수수료)
     // 3. 게스트 보전 지급: refund.guestCompensationAmount (위약금)
-    // await processHostBurdenPayment(contract, refund.hostBurdenAmount);
-    // await processGuestCompensation(contract, refund.guestCompensationAmount);
+    // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
 
     await contract.update({
       status: 'CANCELLED_BY_HOST',
@@ -2703,9 +2817,22 @@ const cancelContractByHost = async (req, res) => {
       console.error('호스트 취소 시스템 메시지 전송 실패 (무시됨):', chatErr);
     }
 
-    // 게스트에게 알림 발송
+    // 게스트에게 알림 발송 + 알림톡
     try {
-      await NotificationService.notifyContractCanceled(contract, 'host');
+      const [cancelGuest, cancelHost, cancelRoom] = await Promise.all([
+        User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
+      ]);
+      await NotificationService.notifyContractCanceled(contract, 'host', {
+        guest: cancelGuest,
+        host: cancelHost,
+        room: cancelRoom,
+        refundData: {
+          penaltyAmount: refund.penaltyAmount,
+          refundAmount: refund.totalRefundAmount
+        }
+      });
     } catch (notifyErr) {
       console.error('호스트 취소 알림 전송 실패 (무시됨):', notifyErr);
     }
@@ -3061,6 +3188,16 @@ const submitDepositAgreement = async (req, res) => {
       console.error('합의 제출 알림 전송 실패 (무시됨):', notifyErr);
     }
 
+    // 알림톡 발송 (4-10 보증금 정산 합의 요청)
+    try {
+      const AlimtalkService = require('../services/alimtalkService');
+      const settlementGuest = await User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] });
+      AlimtalkService.sendDepositSettlementSubmitted(contract, settlementGuest, deductAmount, agreementText)
+        .catch(err => console.error('[Alimtalk] deposit_settlement_submitted 실패:', err.message));
+    } catch (alimtalkErr) {
+      console.error('합의 제출 알림톡 발송 실패 (무시됨):', alimtalkErr);
+    }
+
     return created(res, {
       contractId: contract.id,
       checkoutStatus: 'HOST_PENDING',
@@ -3247,6 +3384,21 @@ const acceptDepositAgreement = async (req, res) => {
       await NotificationService.notifyCheckoutConfirmed(contract);
     } catch (notifyErr) {
       console.error('합의 동의 알림 전송 실패 (무시됨):', notifyErr);
+    }
+
+    // 알림톡 발송 (4-11 보증금 정산 합의 완료)
+    try {
+      const AlimtalkService = require('../services/alimtalkService');
+      const [agreementGuest, agreementHost] = await Promise.all([
+        User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] })
+      ]);
+      AlimtalkService.sendDepositSettlementAgreed(contract, agreementGuest, agreementHost, {
+        guestAmount: refundableDeposit,
+        hostAmount: depositDeduction
+      }).catch(err => console.error('[Alimtalk] deposit_settlement_agreed 실패:', err.message));
+    } catch (alimtalkErr) {
+      console.error('합의 동의 알림톡 발송 실패 (무시됨):', alimtalkErr);
     }
 
     return updated(res, {

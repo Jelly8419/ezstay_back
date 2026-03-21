@@ -8,6 +8,7 @@ const adminSettlementController = require('../controllers/adminSettlementControl
 const noticeController = require('../controllers/noticeController');
 const faqController = require('../controllers/faqController');
 const inquiryController = require('../controllers/inquiryController');
+const adminReceiptController = require('../controllers/adminReceiptController');
 const { authenticateAdmin, requireAdminRole } = require('../middleware/auth');
 const actionLogger = require('../middleware/actionLogger');
 const { adminAuthLimiter, adminApiLimiter } = require('../middleware/rateLimiter');
@@ -234,6 +235,9 @@ router.get('/support/inquiries/:id', inquiryController.getInquiryByIdAdmin);
 // 문의 답변 등록
 router.post('/support/inquiries/:id/answer', inquiryController.answerInquiry);
 
+// 문의 답변 수정
+router.patch('/support/inquiries/:id/answer', inquiryController.updateAnswer);
+
 // 문의 상태 변경
 router.patch('/support/inquiries/:id/status', inquiryController.updateInquiryStatus);
 
@@ -322,15 +326,18 @@ router.post(
 // 결제 관리
 // ============================================
 
-// 결제 목록 조회
-router.get('/payments', adminPaymentController.getPayments);
+// 탭1: 주문별 결제 현황 (주문번호 기준 1행, 최종 거래유형)
+router.get('/payments/summary', adminPaymentController.getPaymentSummary);
 
-// 결제 상세 조회
-router.get('/payments/:paymentId', adminPaymentController.getPaymentDetail);
+// 탭2: 결제/취소 내역 (계약별 결제 요약)
+router.get('/payments/logs', adminPaymentController.getPaymentLogs);
+
+// 결제 상세 조회 (주문번호 기준, ?type=contract|rental)
+router.get('/payments/:orderId', adminPaymentController.getPaymentDetail);
 
 // 관리자 환불 처리 (토스페이먼츠 연동, super_admin/admin만 가능)
 router.post(
-  '/payments/:paymentId/refund',
+  '/payments/:contractId/refund',
   requireAdminRole(['super_admin', 'admin']),
   adminPaymentController.processAdminRefund
 );
@@ -360,6 +367,56 @@ router.patch(
   '/settlements/:contractId/hold',
   requireAdminRole(['super_admin', 'admin']),
   adminSettlementController.holdSettlement
+);
+
+// ============================================
+// 영수증 관리
+// ============================================
+
+// 영수증 발급 이력 조회 (발급 완료 건) - :id 라우트보다 먼저 선언
+router.get('/receipts/history', adminReceiptController.getReceiptHistory);
+
+// 영수증 CSV 다운로드 - :id 라우트보다 먼저 선언
+router.get('/receipts/export', adminReceiptController.exportReceiptsCsv);
+
+// 영수증 발급 리스트 조회 (발급대기/전체)
+router.get('/receipts', adminReceiptController.getReceiptList);
+
+// 영수증 상세 조회
+router.get('/receipts/:id', adminReceiptController.getReceiptDetail);
+
+// 영수증 발급 완료 처리 (super_admin, admin만 가능)
+router.patch(
+  '/receipts/:id/issue',
+  requireAdminRole(['super_admin', 'admin']),
+  adminReceiptController.issueReceipt
+);
+
+// ============================================
+// 알림톡 관리
+// ============================================
+
+// 알림톡 템플릿 목록 조회
+router.get('/alimtalk/templates', adminController.getAlimtalkTemplates);
+
+// 알림톡 템플릿 캐시 수동 갱신 (super_admin, admin만 가능)
+router.post(
+  '/alimtalk/templates/sync',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.syncAlimtalkTemplates
+);
+
+// 알림톡 발송 이력 조회
+router.get('/alimtalk/logs', adminController.getAlimtalkLogs);
+
+// 알림톡 발송 통계
+router.get('/alimtalk/stats', adminController.getAlimtalkStats);
+
+// 알림톡 수동 재시도 (super_admin, admin만 가능)
+router.post(
+  '/alimtalk/logs/:logId/retry',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.retryAlimtalkLog
 );
 
 module.exports = router;

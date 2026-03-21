@@ -4,6 +4,7 @@
  */
 
 const { NotificationMessages, CANCEL_TYPES } = require('../utils/notificationMessages');
+const AlimtalkService = require('./alimtalkService');
 
 /**
  * NotificationService 클래스
@@ -192,9 +193,17 @@ class NotificationService {
       relatedRoomId: contract.roomId,
       metadata: {
         guestName: guest?.name || guest?.nickname,
-        roomName: room?.title
+        roomName: room?.roomName
       }
     });
+
+    // 알림톡 발송 (계약 승인 요청 → 호스트)
+    const { User } = this.getModels();
+    const host = await User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] });
+    if (host) {
+      AlimtalkService.sendContractRequest(contract, host, room)
+        .catch(err => console.error('[Alimtalk] contract_request_host 실패:', err.message));
+    }
   }
 
   /**
@@ -203,7 +212,7 @@ class NotificationService {
    * @param {Object} options - { room }
    */
   static async notifyContractApproved(contract, options = {}) {
-    const { room } = options;
+    const { room, guest } = options;
 
     // 게스트에게만 알림 (결제 안내)
     const guestMsg = NotificationMessages.contractApprovedGuest();
@@ -216,16 +225,21 @@ class NotificationService {
       relatedContractId: contract.id,
       relatedRoomId: contract.roomId,
       metadata: {
-        roomName: room?.title
+        roomName: room?.roomName
       }
     });
+
+    // 알림톡 발송 (4-2)
+    const guestUser = guest || await this._getUser(contract.guestId);
+    AlimtalkService.sendContractApproved(contract, guestUser, room)
+      .catch(err => console.error('[Alimtalk] contract_approved 실패:', err.message));
   }
 
   /**
    * 계약 거절 알림 (게스트에게만)
    * @param {Object} contract - 계약 정보
    */
-  static async notifyContractRejected(contract) {
+  static async notifyContractRejected(contract, options = {}) {
     const msg = NotificationMessages.contractRejected();
     await this.create({
       userId: contract.guestId,
@@ -236,6 +250,13 @@ class NotificationService {
       relatedContractId: contract.id,
       relatedRoomId: contract.roomId
     });
+
+    // 알림톡 발송
+    const { guest, room } = options;
+    if (guest && room) {
+      AlimtalkService.sendContractRejected(contract, guest, room)
+        .catch(err => console.error('[Alimtalk] contract_rejected 실패:', err.message));
+    }
   }
 
   /**
@@ -243,7 +264,7 @@ class NotificationService {
    * @param {Object} contract - 계약 정보
    * @param {string} cancelType - CANCEL_TYPES 중 하나
    */
-  static async notifyContractCanceled(contract, cancelType) {
+  static async notifyContractCanceled(contract, cancelType, options = {}) {
     const msg = NotificationMessages.contractCanceled(cancelType);
 
     // 호스트에게 알림
@@ -269,6 +290,15 @@ class NotificationService {
       relatedRoomId: contract.roomId,
       metadata: { cancelType }
     });
+
+    // 알림톡 발송 (4-5)
+    const { guest, host, room, refundData } = options;
+    if (guest && host && room) {
+      const canceledBy = (cancelType === CANCEL_TYPES.GUEST_CANCEL ||
+                          cancelType === CANCEL_TYPES.GUEST_CANCEL_IN_PROGRESS) ? 'guest' : 'host';
+      AlimtalkService.sendContractCanceled(contract, canceledBy, guest, host, room, refundData || {})
+        .catch(err => console.error('[Alimtalk] contract_canceled 실패:', err.message));
+    }
   }
 
   // =====================================================
@@ -296,7 +326,7 @@ class NotificationService {
    * 결제 완료 알림 (호스트 + 게스트 모두에게)
    * @param {Object} contract - 계약 정보
    */
-  static async notifyPaymentCompleted(contract) {
+  static async notifyPaymentCompleted(contract, options = {}) {
     const msg = NotificationMessages.paymentCompleted();
 
     // 호스트에게 알림
@@ -320,13 +350,20 @@ class NotificationService {
       relatedContractId: contract.id,
       relatedRoomId: contract.roomId
     });
+
+    // 알림톡 발송 (4-3)
+    const { guest, host, room, paymentData } = options;
+    if (guest && host && room) {
+      AlimtalkService.sendPaymentCompleted(contract, guest, host, room, paymentData || {})
+        .catch(err => console.error('[Alimtalk] payment_completed 실패:', err.message));
+    }
   }
 
   /**
    * 옵션 추가 결제 완료 알림 (게스트에게)
    * @param {Object} contract - 계약 정보
    */
-  static async notifyAdditionalOptionPayment(contract) {
+  static async notifyAdditionalOptionPayment(contract, optionData = {}) {
     const msg = NotificationMessages.additionalOptionPayment();
     await this.create({
       userId: contract.guestId,
@@ -337,6 +374,17 @@ class NotificationService {
       relatedContractId: contract.id,
       relatedRoomId: contract.roomId
     });
+
+    // 알림톡 발송 (옵션 추가 결제 → 게스트)
+    const { User, Room } = this.getModels();
+    const [guest, room] = await Promise.all([
+      User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+      Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
+    ]);
+    if (guest) {
+      AlimtalkService.sendOptionPayment(contract, guest, room, optionData)
+        .catch(err => console.error('[Alimtalk] option_payment_guest 실패:', err.message));
+    }
   }
 
   // =====================================================
@@ -386,6 +434,11 @@ class NotificationService {
         hostPhoneNumber: host?.phoneNumber
       }
     });
+
+    // 알림톡 발송 (4-4)
+    const { room } = options;
+    AlimtalkService.sendCheckinToday(contract, guest, host, room)
+      .catch(err => console.error('[Alimtalk] checkin_today 실패:', err.message));
   }
 
   /**
@@ -441,7 +494,7 @@ class NotificationService {
    * 퇴실 당일 알림 (게스트에게)
    * @param {Object} contract - 계약 정보
    */
-  static async notifyCheckoutToday(contract) {
+  static async notifyCheckoutToday(contract, options = {}) {
     const msg = NotificationMessages.checkoutToday();
     await this.create({
       userId: contract.guestId,
@@ -452,6 +505,11 @@ class NotificationService {
       relatedContractId: contract.id,
       relatedRoomId: contract.roomId
     });
+
+    // 알림톡 발송 (4-7)
+    const guest = options.guest || await this._getUser(contract.guestId);
+    AlimtalkService.sendCheckoutToday(contract, guest)
+      .catch(err => console.error('[Alimtalk] checkout_today 실패:', err.message));
   }
 
   /**
@@ -463,7 +521,7 @@ class NotificationService {
     const { guest, room } = options;
     const msg = NotificationMessages.checkoutRequest({
       guestName: guest?.name || guest?.nickname,
-      roomName: room?.title
+      roomName: room?.roomName
     });
 
     await this.create({
@@ -476,9 +534,14 @@ class NotificationService {
       relatedRoomId: contract.roomId,
       metadata: {
         guestName: guest?.name || guest?.nickname,
-        roomName: room?.title
+        roomName: room?.roomName
       }
     });
+
+    // 알림톡 발송 (4-8)
+    const host = await this._getUser(contract.hostId);
+    AlimtalkService.sendCheckoutHostRequest(contract, host)
+      .catch(err => console.error('[Alimtalk] checkout_host_request 실패:', err.message));
   }
 
   /**
@@ -509,6 +572,11 @@ class NotificationService {
       relatedContractId: contract.id,
       relatedRoomId: contract.roomId
     });
+
+    // 알림톡 발송 (4-13 호스트 퇴실 확인 → 보증금 반환)
+    const guest = await this._getUser(contract.guestId);
+    AlimtalkService.sendDepositReturnedNormal(contract, guest)
+      .catch(err => console.error('[Alimtalk] deposit_returned_normal 실패:', err.message));
   }
 
   // =====================================================
@@ -640,10 +708,30 @@ class NotificationService {
    * @param {boolean} approved - 승인 여부
    * @param {string} rejectReason - 반려 사유 (반려 시)
    */
+  // =====================================================
+  // 유틸리티 헬퍼
+  // =====================================================
+
+  /**
+   * 사용자 정보 조회 (알림톡 발송에 필요한 phoneNumber 포함)
+   * @param {number} userId
+   * @returns {Promise<Object>} { id, phoneNumber, name, nickname }
+   */
+  static async _getUser(userId) {
+    const { User } = this.getModels();
+    return await User.findByPk(userId, {
+      attributes: ['id', 'phoneNumber', 'name', 'nickname']
+    });
+  }
+
+  // =====================================================
+  // 매물 심사 관련 알림 생성 헬퍼
+  // =====================================================
+
   static async notifyPropertyReviewResult(room, approved, rejectReason = '') {
     const msg = approved
-      ? NotificationMessages.propertyApproved({ roomName: room.title })
-      : NotificationMessages.propertyRejected({ roomName: room.title, rejectReason });
+      ? NotificationMessages.propertyApproved({ roomName: room.roomName })
+      : NotificationMessages.propertyRejected({ roomName: room.roomName, rejectReason });
 
     await this.create({
       userId: room.hostId,
@@ -653,7 +741,7 @@ class NotificationService {
       message: msg.message,
       relatedRoomId: room.id,
       metadata: {
-        roomName: room.title,
+        roomName: room.roomName,
         approved,
         rejectReason: approved ? null : rejectReason
       }

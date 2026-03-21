@@ -356,6 +356,43 @@ const answerInquiry = async (req, res) => {
 };
 
 /**
+ * 문의 답변 수정 (관리자)
+ * PATCH /api/admin/support/inquiries/:id/answer
+ */
+const updateAnswer = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { answer } = req.body;
+    const adminId = req.admin.id;
+
+    if (!answer) {
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    }
+
+    const inquiry = await Inquiry.findByPk(id);
+
+    if (!inquiry) {
+      return error(res, ErrorCodes.INQUIRY_NOT_FOUND, 404);
+    }
+
+    if (!inquiry.answeredAt) {
+      return error(res, { code: 4501, message: '답변이 등록되지 않은 문의입니다. 답변 등록을 먼저 해주세요.' }, 400);
+    }
+
+    await inquiry.update({
+      answer,
+      answeredBy: adminId,
+      answeredAt: new Date()
+    });
+
+    return updated(res, inquiry, '답변이 수정되었습니다.');
+  } catch (err) {
+    console.error('문의 답변 수정 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
  * 문의 상태 변경 (관리자)
  * PATCH /api/admin/support/inquiries/:id/status
  */
@@ -420,6 +457,7 @@ module.exports = {
   getInquiriesAdmin,
   getInquiryByIdAdmin,
   answerInquiry,
+  updateAnswer,
   updateInquiryStatus,
   deleteInquiryAdmin
 };

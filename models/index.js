@@ -39,6 +39,9 @@ const RentalPaymentFailureLogModel = require('./RentalPaymentFailureLog');
 const Settlement = require('./Settlement');
 const DepositAgreement = require('./DepositAgreement');
 const GuestRefundAccount = require('./GuestRefundAccount');
+const AlimtalkLog = require('./AlimtalkLog');
+const { ReceiptSetting } = require('./ReceiptSetting');
+const Receipt = require('./Receipt');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -739,6 +742,22 @@ GuestRefundAccount.belongsTo(User, {
 });
 
 // =====================================================
+// AlimtalkLog 관계 설정 (카카오 알림톡 발송 이력)
+// =====================================================
+User.hasMany(AlimtalkLog, {
+  foreignKey: 'receiverId',
+  as: 'alimtalkLogs',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+AlimtalkLog.belongsTo(User, {
+  foreignKey: 'receiverId',
+  as: 'receiver',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// =====================================================
 // Notification 관계 설정 (사용자 알림)
 // =====================================================
 
@@ -752,6 +771,77 @@ User.hasMany(Notification, {
 Notification.belongsTo(User, {
   foreignKey: 'userId',
   as: 'user',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// =====================================================
+// ReceiptSetting 관계 설정 (사용자 영수증 발급 정보 설정)
+// =====================================================
+User.hasOne(ReceiptSetting, {
+  foreignKey: 'userId',
+  as: 'receiptSetting',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+ReceiptSetting.belongsTo(User, {
+  foreignKey: 'userId',
+  as: 'user',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// =====================================================
+// Receipt 관계 설정 (영수증 발급 건 관리)
+// =====================================================
+User.hasMany(Receipt, {
+  foreignKey: 'userId',
+  as: 'receipts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Receipt.belongsTo(User, {
+  foreignKey: 'userId',
+  as: 'user',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+Contract.hasMany(Receipt, {
+  foreignKey: 'contractId',
+  as: 'receipts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Receipt.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+Settlement.hasMany(Receipt, {
+  foreignKey: 'settlementId',
+  as: 'receipts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Receipt.belongsTo(Settlement, {
+  foreignKey: 'settlementId',
+  as: 'settlement',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+Receipt.belongsTo(Admin, {
+  foreignKey: 'issuedBy',
+  as: 'issuedByAdmin',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Admin.hasMany(Receipt, {
+  foreignKey: 'issuedBy',
+  as: 'issuedReceipts',
   onDelete: 'NO ACTION',
   onUpdate: 'CASCADE'
 });
@@ -799,5 +889,8 @@ module.exports = {
   RentalPaymentFailureLog,
   Settlement,
   DepositAgreement,
-  GuestRefundAccount
+  GuestRefundAccount,
+  AlimtalkLog,
+  ReceiptSetting,
+  Receipt
 };

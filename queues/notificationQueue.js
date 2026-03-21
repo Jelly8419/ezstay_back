@@ -107,11 +107,12 @@ notificationQueue.process('checkin-today', async (job) => {
   console.log(`[알림 큐] 입주 당일 알림 처리: contractId=${contractId}`);
 
   try {
-    const { Contract, User } = require('../models');
+    const { Contract, User, Room } = require('../models');
     const contract = await Contract.findByPk(contractId, {
       include: [
         { model: User, as: 'guest', attributes: ['id', 'name', 'nickname', 'phoneNumber'] },
-        { model: User, as: 'host', attributes: ['id', 'name', 'nickname', 'phoneNumber'] }
+        { model: User, as: 'host', attributes: ['id', 'name', 'nickname', 'phoneNumber'] },
+        { model: Room, as: 'room', attributes: ['id', 'roomName', 'address'] }
       ]
     });
 
@@ -127,7 +128,8 @@ notificationQueue.process('checkin-today', async (job) => {
 
     await NotificationService.notifyCheckinToday(contract, {
       guest: contract.guest,
-      host: contract.host
+      host: contract.host,
+      room: contract.room
     });
     console.log(`[알림 큐] 입주 당일 알림 발송 완료: contractId=${contractId}`);
     return { success: true, contractId };

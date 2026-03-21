@@ -181,6 +181,10 @@ startRentalOrderScheduler();
 const { startNotificationScheduler } = require('./schedulers/notificationScheduler');
 startNotificationScheduler();
 
+// 카카오 알림톡 스케줄러 시작 (퇴실전일, 실패재시도)
+const { startAlimtalkScheduler } = require('./schedulers/alimtalkScheduler');
+startAlimtalkScheduler();
+
 // Firebase Admin SDK 초기화
 const { initializeFirebase } = require('./config/firebaseAdmin');
 initializeFirebase();
@@ -218,6 +222,10 @@ app.use('/api/admin/rental-items', rentalItemAdminRoutes);  // 관리자용 API
 app.use('/api', rentalOrderRoutes);  // 렌탈 주문 API
 app.use('/api/notifications', notificationRoutes);  // 알림 API
 app.use('/api/auth', kmcRoutes);  // KMC 본인인증
+
+// TODO: 가상계좌 지원 시 웹훅 라우트 활성화
+// const paytagWebhookController = require('./controllers/paytagWebhookController');
+// app.post('/api/payments/webhook/paytag', paytagWebhookController.handleWebhook);
 
 app.get('/', (req, res) => {
   res.json({ message: 'Rental API Server is running!' });

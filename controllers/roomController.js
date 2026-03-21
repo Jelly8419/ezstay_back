@@ -1,4 +1,4 @@
-const { Room, RoomPhoto, RoomAmenity, EzService, User, RentalItem, Contract } = require('../models');
+const { Room, RoomPhoto, RoomAmenity, EzService, User, RentalItem, Contract, BlockedPeriod } = require('../models');
 const { Op } = require('sequelize');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
 const { safeRedisOperation } = require('../config/redis');
@@ -193,6 +193,39 @@ const getRoomById = async (req, res) => {
     };
     // === 할인 정보 계산 끝 ===
 
+    // === 예약 불가 기간 조회 (캘린더 회색 마킹용) ===
+    const [contractPeriods, blockedPeriods] = await Promise.all([
+      // 계약 성사된 건의 임대 기간 (결제완료, 임대중, 완료, 취소요청)
+      Contract.findAll({
+        attributes: ['checkInDate', 'checkOutDate'],
+        where: {
+          roomId: room.id,
+          status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED', 'CANCEL_REQUESTED'] }
+        },
+        raw: true
+      }),
+      // 호스트가 설정한 불가 기간
+      BlockedPeriod.findAll({
+        attributes: ['startDate', 'endDate'],
+        where: { roomId: room.id },
+        raw: true
+      })
+    ]);
+
+    roomData.unavailablePeriods = [
+      ...contractPeriods.map(c => ({
+        startDate: c.checkInDate,
+        endDate: c.checkOutDate,
+        type: 'contract'
+      })),
+      ...blockedPeriods.map(b => ({
+        startDate: b.startDate,
+        endDate: b.endDate,
+        type: 'blocked'
+      }))
+    ];
+    // === 예약 불가 기간 조회 끝 ===
+
     // === 렌탈 아이템 정보 추가 ===
     // 플랫폼에서 직접 판매하는 렌탈 아이템 (호스트 동의 불필요)
     // 모든 활성화된 렌탈 아이템을 표시
@@ -293,14 +326,14 @@ const getRoomsForMap = async (req, res) => {
       return success(res, cachedData, '지도 영역 내 방 목록을 조회했습니다. (캐시)');
     }
 
-    // 예약 불가능한 방 조회
-    const excludeRoomIds = await roomService.getUnavailableRoomIds(checkIn, checkOut);
+    // 예약 불가능한 방 ID 조회
+    const unavailableRoomIds = await roomService.getUnavailableRoomIds(checkIn, checkOut);
 
-    // DB에서 방 목록 조회
-    const rooms = await roomService.fetchRoomsFromDB(coords, excludeRoomIds, limit);
+    // DB에서 방 목록 조회 (제외 없이 전체 조회)
+    const rooms = await roomService.fetchRoomsFromDB(coords, [], limit);
 
-    // 응답 데이터 가공 (할인 적용 여부 계산 포함)
-    const responseData = roomService.transformRoomsForMap(rooms, checkIn, checkOut);
+    // 응답 데이터 가공 (할인 적용 여부 계산 + 예약 가능 여부 포함)
+    const responseData = roomService.transformRoomsForMap(rooms, checkIn, checkOut, unavailableRoomIds);
 
     // Redis 캐시 저장
     await roomService.cacheRooms(cacheKey, responseData);

@@ -140,6 +140,14 @@ const ErrorCodes = {
   KMC_API_ERROR: { code: 4407, message: 'KMC 서버 연동 중 오류가 발생했습니다.' },
   KMC_WORKER_NOT_READY: { code: 4408, message: '인증 모듈이 준비되지 않았습니다.' },
 
+  // 영수증 관련 (441x)
+  RECEIPT_NOT_FOUND: { code: 4410, message: '영수증을 찾을 수 없습니다.' },
+  INVALID_RECEIPT_TYPE: { code: 4412, message: '영수증 종류가 올바르지 않습니다.' },
+  INVALID_RECEIPT_NUMBER: { code: 4413, message: '영수증 번호가 올바르지 않습니다.' },
+  RECEIPT_BUSINESS_NAME_REQUIRED: { code: 4414, message: '세금계산서 발급 시 사업자명은 필수입니다.' },
+  RECEIPT_REP_NAME_REQUIRED: { code: 4415, message: '세금계산서 발급 시 대표자명은 필수입니다.' },
+  RECEIPT_ALREADY_ISSUED: { code: 4416, message: '이미 발급 완료된 영수증입니다.' },
+
   // 서버 관련 (5xxx)
   INTERNAL_ERROR: { code: 5001, message: '서버 오류가 발생했습니다.' },
   DATABASE_ERROR: { code: 5002, message: '데이터베이스 오류가 발생했습니다.' },

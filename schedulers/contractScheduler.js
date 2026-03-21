@@ -1,11 +1,12 @@
 const cron = require('node-cron');
-const { Contract, ChatRoom, Room, ContractStatusLog, Settlement, DepositAgreement, sequelize } = require('../models');
+const { Contract, ChatRoom, Room, User, ContractStatusLog, Settlement, DepositAgreement, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { calculateSettlementDate, calculateSettlementAmount } = require('../services/settlementService');
+const { createReceiptsForReadySettlements } = require('../services/receiptService');
 
 /**
  * 계약 상태 자동 업데이트 스케줄러
@@ -571,6 +572,20 @@ async function autoConfirmCheckout() {
         } catch (notifyErr) {
           console.error(`자동 퇴실 확정 알림 발송 실패 (계약 ID: ${contract.id}):`, notifyErr);
         }
+
+        // 알림톡 발송 (4-15 퇴실 확인 기한 만료)
+        try {
+          const AlimtalkService = require('../services/alimtalkService');
+          const [expGuest, expHost] = await Promise.all([
+            User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+            User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] })
+          ]);
+          const expRoom = await Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] });
+          AlimtalkService.sendCheckoutConfirmExpired(contract, expGuest, expHost, expRoom)
+            .catch(err => console.error(`[Alimtalk] checkout_confirm_expired 실패 (계약 ID: ${contract.id}):`, err.message));
+        } catch (alimtalkErr) {
+          console.error(`자동 퇴실 확정 알림톡 발송 실패 (계약 ID: ${contract.id}):`, alimtalkErr);
+        }
       }
 
       console.log(`[스케줄러] ${pendingCheckouts.length}건의 퇴실 요청을 48시간 자동확정 처리했습니다.`);
@@ -617,6 +632,13 @@ async function updateSettlementReady() {
 
     if (updatedCount > 0) {
       console.log(`[스케줄러] ${updatedCount}건의 정산을 READY 상태로 변경했습니다.`);
+
+      // 정산 READY로 변경된 건에 대해 영수증 자동 생성
+      try {
+        await createReceiptsForReadySettlements();
+      } catch (receiptErr) {
+        console.error('[스케줄러] 영수증 자동 생성 오류:', receiptErr);
+      }
     }
 
     return updatedCount;
@@ -901,6 +923,19 @@ async function autoReturnDepositOnDeadline() {
           await NotificationService.notifyCheckoutConfirmed(contract);
         } catch (notifyErr) {
           console.error(`합의 데드라인 자동반환확정 알림 발송 실패 (계약 ID: ${contract.id}):`, notifyErr);
+        }
+
+        // 알림톡 발송 (4-12 보증금 합의 기한 만료)
+        try {
+          const AlimtalkService = require('../services/alimtalkService');
+          const [expiredGuest, expiredHost] = await Promise.all([
+            User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+            User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] })
+          ]);
+          AlimtalkService.sendDepositAgreementExpired(contract, expiredGuest, expiredHost)
+            .catch(err => console.error(`[Alimtalk] deposit_agreement_expired 실패 (계약 ID: ${contract.id}):`, err.message));
+        } catch (alimtalkErr) {
+          console.error(`합의 데드라인 알림톡 발송 실패 (계약 ID: ${contract.id}):`, alimtalkErr);
         }
       }
 

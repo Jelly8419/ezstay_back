@@ -1,5 +1,5 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, ContractStatusLog, ChatRoom, DepositAgreement, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, ContractStatusLog, ChatRoom, DepositAgreement, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -8,6 +8,8 @@ const { sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { calculateRefund } = require('../utils/refundCalculator');
+const { getBankName } = require('../utils/bankCodes');
+const paytagClient = require('../utils/paytagClient');
 
 /**
  * 대시보드 통계 조회
@@ -52,21 +54,41 @@ const getDashboardStats = async (req, res) => {
       }
     });
 
-    // 이번 달 매출 (결제 완료된 계약의 총 금액)
-    const monthlyRevenue = await Contract.sum('finalTotalAmount', {
+    // 이번 달 매출 - 계약 결제
+    const monthlyContractRevenue = await Contract.sum('finalTotalAmount', {
       where: {
         status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED'] },
         paidAt: { [Op.between]: [firstDayThisMonth, now] }
       }
     }) || 0;
 
-    // 지난 달 매출
-    const lastMonthRevenue = await Contract.sum('finalTotalAmount', {
+    // 이번 달 매출 - 렌탈 결제
+    const monthlyRentalRevenue = await RentalPayment.sum('totalAmount', {
+      where: {
+        status: 'DONE',
+        approvedAt: { [Op.between]: [firstDayThisMonth, now] }
+      }
+    }) || 0;
+
+    const monthlyRevenue = monthlyContractRevenue + monthlyRentalRevenue;
+
+    // 지난 달 매출 - 계약 결제
+    const lastMonthContractRevenue = await Contract.sum('finalTotalAmount', {
       where: {
         status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED'] },
         paidAt: { [Op.between]: [firstDayLastMonth, lastDayLastMonth] }
       }
     }) || 0;
+
+    // 지난 달 매출 - 렌탈 결제
+    const lastMonthRentalRevenue = await RentalPayment.sum('totalAmount', {
+      where: {
+        status: 'DONE',
+        approvedAt: { [Op.between]: [firstDayLastMonth, lastDayLastMonth] }
+      }
+    }) || 0;
+
+    const lastMonthRevenue = lastMonthContractRevenue + lastMonthRentalRevenue;
 
     // 매물 심사 대기 수
     const pendingReviews = await Room.count({ where: { status: 'pending_review' } });
@@ -95,7 +117,16 @@ const getDashboardStats = async (req, res) => {
       totalUsers,
       totalProperties,
       activeReservations,
-      monthlyRevenue: Math.round(monthlyRevenue),
+      monthlyRevenue: {
+        total: Math.round(monthlyRevenue),
+        contract: Math.round(monthlyContractRevenue),
+        rental: Math.round(monthlyRentalRevenue)
+      },
+      lastMonthRevenue: {
+        total: Math.round(lastMonthRevenue),
+        contract: Math.round(lastMonthContractRevenue),
+        rental: Math.round(lastMonthRentalRevenue)
+      },
       pendingReviews,
       pendingInquiries,
       trends: {
@@ -204,11 +235,27 @@ const getUsers = async (req, res) => {
       offset: parseInt(offset),
       limit: parseInt(limit),
       order: [[sortBy, sortOrder]],
-      attributes: { exclude: ['refreshToken'] }
+      attributes: { exclude: ['refreshToken'] },
+      include: [
+        {
+          model: require('../models').UserBankAccount,
+          as: 'bankAccounts',
+          attributes: ['id'],
+          required: false
+        }
+      ]
+    });
+
+    // 계좌 등록 여부 필드 추가
+    const usersWithBankStatus = users.map(user => {
+      const userData = user.toJSON();
+      userData.hasBankAccount = (userData.bankAccounts && userData.bankAccounts.length > 0);
+      delete userData.bankAccounts;
+      return userData;
     });
 
     return success(res, {
-      users,
+      users: usersWithBankStatus,
       pagination: {
         total,
         page: parseInt(page),
@@ -259,6 +306,20 @@ const getUserDetail = async (req, res) => {
           ],
           required: false,
           order: [['isPrimary', 'DESC'], ['createdAt', 'DESC']]
+        },
+        {
+          model: require('../models').GuestRefundAccount,
+          as: 'refundAccount',
+          attributes: [
+            'id',
+            'bankCode',
+            'bankName',
+            'accountNumber',
+            'accountHolder',
+            'isVerified',
+            'verifiedAt'
+          ],
+          required: false
         }
       ]
     });
@@ -267,11 +328,23 @@ const getUserDetail = async (req, res) => {
       return error(res, ErrorCodes.USER_NOT_FOUND, 404);
     }
 
-    // 호스트인 경우 등록한 방 개수
-    const hostRoomsCount = await Room.count({ where: { hostId: userId } });
+    // 호스트: 현재 게시중인 방 개수
+    const hostActiveRoomsCount = await Room.count({
+      where: { hostId: userId, status: 'published', isActive: true }
+    });
 
-    // 게스트인 경우 예약 횟수
-    const guestReservationsCount = await Contract.count({ where: { guestId: userId } });
+    // 유효 계약 상태 필터 (결제완료/입주중/완료)
+    const activeContractStatuses = ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED'];
+
+    // 호스트로서 계약 건수
+    const hostContractsCount = await Contract.count({
+      where: { hostId: userId, status: activeContractStatuses }
+    });
+
+    // 게스트로서 계약 건수
+    const guestContractsCount = await Contract.count({
+      where: { guestId: userId, status: activeContractStatuses }
+    });
 
     // 가입 유형 상세 정보 구성
     const accountTypeDetail = user.userType === 'local'
@@ -292,18 +365,35 @@ const getUserDetail = async (req, res) => {
 
     // 계좌 인증 여부 확인
     const hasVerifiedBankAccount = user.bankAccounts?.some(acc => acc.isVerified) || false;
+    const hasRefundAccount = !!user.refundAccount;
 
     // 응답 데이터 구성
     const userData = user.toJSON();
     delete userData.localProfile;
     delete userData.socialProfiles;
 
+    // 은행 코드 → 은행명 치환
+    if (userData.bankAccounts) {
+      userData.bankAccounts = userData.bankAccounts.map(acc => ({
+        ...acc,
+        bankName: getBankName(acc.bankName)
+      }));
+    }
+    if (userData.refundAccount) {
+      userData.refundAccount = {
+        ...userData.refundAccount,
+        bankName: getBankName(userData.refundAccount.bankCode || userData.refundAccount.bankName)
+      };
+    }
+
     return success(res, {
       ...userData,
       accountTypeDetail,
       hasVerifiedBankAccount,
-      hostRoomsCount,
-      guestReservationsCount
+      hasRefundAccount,
+      hostActiveRoomsCount,
+      hostContractsCount,
+      guestContractsCount
     }, '유저 상세 조회 성공');
   } catch (err) {
     console.error('유저 상세 조회 실패:', err);
@@ -491,9 +581,7 @@ const approveProperty = async (req, res) => {
     // 호스트에게 승인 알림 전송
     try {
       await NotificationService.notifyPropertyReviewResult(
-        room.hostId,
-        room.id,
-        room.title,
+        room,
         true // isApproved
       );
     } catch (notifyErr) {
@@ -542,9 +630,7 @@ const rejectProperty = async (req, res) => {
     // 호스트에게 반려 알림 전송
     try {
       await NotificationService.notifyPropertyReviewResult(
-        room.hostId,
-        room.id,
-        room.title,
+        room,
         false, // isApproved
         rejectionReason
       );
@@ -814,6 +900,38 @@ const getReservationDetail = async (req, res) => {
               model: RoomPhoto,
               as: 'photos',
               attributes: ['id', 'url', 'order']
+            },
+            {
+              model: EzService,
+              as: 'ezService',
+              required: false
+            }
+          ]
+        },
+        {
+          model: Payment,
+          as: 'payment',
+          required: false
+        },
+        {
+          model: Refund,
+          as: 'refunds',
+          required: false
+        },
+        {
+          model: RentalOrder,
+          as: 'rentalOrders',
+          where: { status: { [Op.notIn]: ['CANCELLED', 'INITIAL'] } },
+          required: false,
+          include: [
+            {
+              model: RentalOrderItem,
+              as: 'items',
+              include: [{
+                model: RentalItem,
+                as: 'rentalItem',
+                attributes: ['id', 'name', 'price', 'imageUrl']
+              }]
             }
           ]
         }
@@ -827,7 +945,145 @@ const getReservationDetail = async (req, res) => {
       }, 404);
     }
 
-    return success(res, reservation, '예약 상세 조회 성공');
+    // === 결제/환불 타임라인 구성 ===
+    const timeline = [];
+
+    // 1) 계약 결제 완료
+    if (reservation.payment && reservation.payment.status !== 'READY') {
+      const p = reservation.payment;
+      const details = [`방 계약`];
+      if (reservation.room) details[0] = `방 계약, ${reservation.room.roomName}`;
+
+      timeline.push({
+        occurredAt: p.approvedAt || p.createdAt,
+        type: '결제완료',
+        amount: p.totalAmount,
+        description: details.join(', '),
+        actor: 'guest',
+        actorName: reservation.guest?.name || null,
+        pgStatus: p.status,
+        paymentKey: p.paymentKey,
+        method: p.method
+      });
+    }
+
+    // 2) 계약 환불 이력
+    (reservation.refunds || []).forEach(r => {
+      if (r.refundStatus === 'COMPLETED') {
+        let description = '계약 환불';
+        const penaltyAmount = r.penaltyAmount || 0;
+        if (penaltyAmount > 0) {
+          description = `계약 취소 (위약금 ${penaltyAmount.toLocaleString()}원)`;
+        }
+        const metadata = typeof r.metadata === 'string' ? JSON.parse(r.metadata) : (r.metadata || {});
+        if (metadata.depositRefund) {
+          description = '보증금 반환';
+        }
+
+        timeline.push({
+          occurredAt: r.completedAt || r.updatedAt,
+          type: '부분취소',
+          amount: -(r.finalRefundAmount || 0),
+          description,
+          actor: metadata.changedBy || 'system',
+          actorName: null,
+          refundId: r.id
+        });
+      }
+    });
+
+    // 3) 렌탈 결제/환불 이력 (RentalOrderLog 기반)
+    const rentalLogs = await RentalOrderLog.findAll({
+      where: {
+        contractId: reservation.id,
+        action: { [Op.in]: ['PAYMENT_COMPLETED', 'REFUND_COMPLETED', 'ITEM_CANCELLED', 'ORDER_CANCELLED'] }
+      },
+      include: [{
+        model: RentalOrder,
+        as: 'order',
+        attributes: ['id', 'orderId', 'orderType'],
+        where: { orderType: { [Op.ne]: 'INITIAL' } },
+        required: true
+      }],
+      order: [['createdAt', 'ASC']]
+    });
+
+    const rentalOrderMap = new Map(
+      (reservation.rentalOrders || []).map(ro => [ro.id, ro])
+    );
+
+    rentalLogs.forEach(log => {
+      const isPayment = log.action === 'PAYMENT_COMPLETED';
+      const isOrderCancelled = log.action === 'ORDER_CANCELLED';
+      const metadata = log.metadata || {};
+
+      let description;
+      let type;
+
+      if (isPayment) {
+        const ro = rentalOrderMap.get(log.rentalOrderId);
+        const itemDesc = (ro?.items || [])
+          .map(i => `${i.rentalItem?.name || '아이템'} ${i.quantity}개`)
+          .join(', ');
+        description = itemDesc ? `렌탈 결제 (${itemDesc})` : '렌탈 결제';
+        type = '결제완료';
+      } else if (isOrderCancelled) {
+        const ro = rentalOrderMap.get(log.rentalOrderId);
+        const itemDesc = (ro?.items || [])
+          .map(i => `${i.rentalItem?.name || '아이템'} ${i.quantity}개`)
+          .join(', ');
+        description = itemDesc ? `렌탈 주문 전체 취소 (${itemDesc})` : '렌탈 주문 전체 취소';
+        type = '전체취소';
+      } else {
+        description = log.action === 'ITEM_CANCELLED' ? '렌탈 아이템 취소' : '렌탈 환불';
+        type = '부분취소';
+      }
+
+      if (metadata.itemName) {
+        description += `, ${metadata.itemName}`;
+        if (metadata.quantity) description += ` ${metadata.quantity}개`;
+      }
+      if (log.description && !isPayment && !isOrderCancelled) description = log.description;
+
+      const actorMap = { GUEST: 'guest', HOST: 'host', ADMIN: 'admin', SYSTEM: 'system' };
+
+      timeline.push({
+        occurredAt: log.createdAt,
+        type,
+        amount: log.amountChange || 0,
+        description,
+        actor: actorMap[log.actor] || log.actor,
+        actorName: null,
+        rentalOrderId: log.order?.orderId || null
+      });
+    });
+
+    // 시간순 정렬
+    timeline.sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt));
+
+    // === 금액 요약 ===
+    const contractPaidAmount = reservation.finalTotalAmount || 0;
+    const contractRefundTotal = (reservation.refunds || [])
+      .filter(r => r.refundStatus === 'COMPLETED')
+      .reduce((sum, r) => sum + (r.finalRefundAmount || 0), 0);
+    const rentalPaidTotal = (reservation.rentalOrders || [])
+      .reduce((sum, ro) => sum + (parseFloat(ro.paidAmount) || 0), 0);
+    const rentalRefundTotal = (reservation.rentalOrders || [])
+      .reduce((sum, ro) => sum + (parseFloat(ro.refundedAmount) || 0), 0);
+
+    return success(res, {
+      reservation,
+      paymentSummary: {
+        totalPaidAmount: contractPaidAmount + rentalPaidTotal,
+        totalRefundedAmount: contractRefundTotal + rentalRefundTotal,
+        currentBalance: (contractPaidAmount + rentalPaidTotal) - (contractRefundTotal + rentalRefundTotal),
+        contractPaidAmount,
+        contractRefundTotal,
+        rentalPaidTotal,
+        rentalRefundTotal
+      },
+      timeline
+    }, '예약 상세 조회 성공');
   } catch (err) {
     console.error('예약 상세 조회 실패:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
@@ -1600,8 +1856,9 @@ const approveRefund = async (req, res) => {
       { transaction }
     );
 
-    // TODO: 실제 환불 처리 로직 (PG사 API 연동)
-    // await processRefundPayment(refund);
+    // TODO: PayTag 환불 API 문서 수령 후 구현 필요
+    // paytagClient.cancelPayment()로 실제 PG 환불 처리
+    // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
 
     await transaction.commit();
 
@@ -1613,7 +1870,7 @@ const approveRefund = async (req, res) => {
         approvedAt: refund.approvedAt,
         finalRefundAmount: refund.finalRefundAmount
       },
-      '환불이 승인되었습니다. 실제 환불 처리는 영업일 기준 3-5일 소요됩니다.'
+      '환불이 승인되었습니다. 실제 환불 처리는 수동으로 진행해주세요.'
     );
   } catch (err) {
     await transaction.rollback();
@@ -2128,8 +2385,8 @@ const adminCancelRentalOrder = async (req, res) => {
       ? parseFloat(refundAmount)
       : orderTotal;
 
-    // TODO: PG(토스페이먼츠) 연동 후, 환불 시 토스 환불 API 호출 필요
-    // cancelPaidRentalOrder() 함수(utils/rentalOrderHelper.js)의 토스 환불 로직 참고
+    // TODO: PayTag 환불 API 문서 수령 후 구현 필요
+    // paytagClient.cancelPayment()로 렌탈 PG 환불 처리
     // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
 
     // 전체 아이템 취소 처리
@@ -2552,6 +2809,10 @@ const approveHostCancelRequest = async (req, res) => {
       cancellationType: 'DURING_STAY'
     }, { transaction });
 
+    // TODO: 호스트 취소 위약금 중 플랫폼 귀속 금액이 있을 경우 영수증 발급 대기 목록 생성
+    // const { createCancelFeeReceipt } = require('../services/receiptService');
+    // await createCancelFeeReceipt({ contractId: contract.id, hostId: contract.hostId, targetType: 'HOST_CANCEL_FEE', platformFeeAmount, date: new Date().toISOString().split('T')[0] }, transaction);
+
     // 상태 변경 로그
     await ContractStatusLog.createLog({
       contractId: contract.id,
@@ -2806,7 +3067,7 @@ const getPendingDepositHolds = async (req, res) => {
       include: [
         { model: User, as: 'guest', attributes: ['id', 'name', 'email', 'phoneNumber'] },
         { model: User, as: 'host', attributes: ['id', 'name', 'email', 'phoneNumber'] },
-        { model: Room, as: 'room', attributes: ['id', 'title', 'address'] }
+        { model: Room, as: 'room', attributes: ['id', 'roomName', 'address'] }
       ],
       order: [['holdRequestedAt', 'ASC']],
       limit: parseInt(limit),
@@ -2818,7 +3079,7 @@ const getPendingDepositHolds = async (req, res) => {
         contractId: c.id,
         guest: c.guest,
         host: c.host,
-        room: c.room ? { id: c.room.id, title: c.room.title, address: c.room.address } : null,
+        room: c.room ? { id: c.room.id, roomName: c.room.roomName, address: c.room.address } : null,
         deposit: c.deposit,
         holdRequestedAt: c.holdRequestedAt,
         holdReason: c.deductionReason,
@@ -2926,12 +3187,27 @@ const approveDepositHold = async (req, res) => {
       console.error('보류 승인 알림 전송 실패 (무시됨):', notifyErr);
     }
 
+    // 알림톡 발송 (4-9 보증금 보류 안내)
+    const agreementDeadline = new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000);
+    try {
+      const AlimtalkService = require('../services/alimtalkService');
+      const [holdGuest, holdHost] = await Promise.all([
+        User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+        User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] })
+      ]);
+      const deadlineStr = `${agreementDeadline.getFullYear()}-${String(agreementDeadline.getMonth() + 1).padStart(2, '0')}-${String(agreementDeadline.getDate()).padStart(2, '0')}`;
+      AlimtalkService.sendDepositHold(contract, holdGuest, holdHost, deadlineStr)
+        .catch(err => console.error('[Alimtalk] deposit_hold 실패:', err.message));
+    } catch (alimtalkErr) {
+      console.error('보류 승인 알림톡 발송 실패 (무시됨):', alimtalkErr);
+    }
+
     return updated(res, {
       contractId: contract.id,
       checkoutStatus: 'HOST_PENDING',
       depositStatus: 'RETURN_HOLD',
       holdApprovedAt: now,
-      agreementDeadline: new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000)
+      agreementDeadline
     }, '보증금 보류가 승인되었습니다. 합의 기한: 10일');
 
   } catch (err) {
@@ -3165,6 +3441,265 @@ const forceDepositHold = async (req, res) => {
   }
 };
 
+// ============================================
+// 알림톡 관리
+// ============================================
+
+/**
+ * 알림톡 템플릿 목록 조회
+ * GET /api/admin/alimtalk/templates
+ */
+const getAlimtalkTemplates = async (req, res) => {
+  try {
+    const { templates } = require('../config/alimtalkTemplates');
+    const { getCacheStatus } = require('../utils/alimtalkTemplateCache');
+
+    const cacheStatus = getCacheStatus();
+
+    // config에 등록된 tplCode 목록
+    const configTplCodes = new Set(
+      Object.values(templates).map(t => t.tplCode).filter(Boolean)
+    );
+
+    // 1) config 정의 + 캐시 상태 병합
+    const configTemplates = Object.entries(templates).map(([eventName, config]) => {
+      const cached = cacheStatus.templates.find(t => t.tplCode === config.tplCode);
+      return {
+        eventName,
+        tplCode: config.tplCode,
+        eventLabel: config.eventLabel,
+        varMap: config.varMap,
+        isActive: !!config.tplCode,
+        isLinked: true,
+        inspStatus: cached?.inspStatus || null,
+        templtName: cached?.templtName || null,
+        templtContent: cached?.templtContent || null,
+        buttons: cached?.buttons || null,
+        lastFetched: cached?.lastFetched || null
+      };
+    });
+
+    // 2) Aligo에만 있고 config에 없는 템플릿 (미연결)
+    const unmappedTemplates = cacheStatus.templates
+      .filter(t => !configTplCodes.has(t.tplCode))
+      .map(t => ({
+        eventName: null,
+        tplCode: t.tplCode,
+        eventLabel: null,
+        varMap: null,
+        isActive: false,
+        isLinked: false,
+        inspStatus: t.inspStatus,
+        templtName: t.templtName,
+        templtContent: t.templtContent || null,
+        buttons: t.buttons || null,
+        lastFetched: t.lastFetched
+      }));
+
+    const allTemplates = [...configTemplates, ...unmappedTemplates];
+
+    return success(res, {
+      totalTemplates: allTemplates.length,
+      activeTemplates: configTemplates.filter(t => t.isActive).length,
+      unmappedCount: unmappedTemplates.length,
+      lastSyncTime: cacheStatus.lastSyncTime,
+      syncError: cacheStatus.syncError,
+      templates: allTemplates
+    }, '알림톡 템플릿 목록 조회 성공');
+  } catch (err) {
+    console.error('알림톡 템플릿 목록 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 알림톡 템플릿 캐시 수동 갱신
+ * POST /api/admin/alimtalk/templates/sync
+ */
+const syncAlimtalkTemplates = async (req, res) => {
+  try {
+    const { syncTemplates } = require('../utils/alimtalkTemplateCache');
+
+    const result = await syncTemplates();
+
+    if (result?.error) {
+      return error(res, { code: 5001, message: `템플릿 동기화 실패: ${result.error}` }, 500);
+    }
+
+    const { getCacheStatus } = require('../utils/alimtalkTemplateCache');
+    const cacheStatus = getCacheStatus();
+
+    return success(res, {
+      templateCount: cacheStatus.templateCount,
+      lastSyncTime: cacheStatus.lastSyncTime
+    }, '알림톡 템플릿 캐시 갱신 완료');
+  } catch (err) {
+    console.error('알림톡 템플릿 동기화 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 알림톡 발송 이력 조회
+ * GET /api/admin/alimtalk/logs
+ * Query: page, limit, status, eventName, receiverId, startDate, endDate
+ */
+const getAlimtalkLogs = async (req, res) => {
+  try {
+    const { AlimtalkLog } = require('../models');
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    const offset = (page - 1) * limit;
+
+    const where = {};
+
+    if (req.query.status) {
+      where.status = req.query.status;
+    }
+    if (req.query.eventName) {
+      where.eventName = req.query.eventName;
+    }
+    if (req.query.receiverId) {
+      where.receiverId = parseInt(req.query.receiverId);
+    }
+    if (req.query.startDate || req.query.endDate) {
+      where.createdAt = {};
+      if (req.query.startDate) {
+        where.createdAt[Op.gte] = new Date(req.query.startDate);
+      }
+      if (req.query.endDate) {
+        const endDate = new Date(req.query.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        where.createdAt[Op.lte] = endDate;
+      }
+    }
+
+    const { count, rows } = await AlimtalkLog.findAndCountAll({
+      where,
+      order: [['createdAt', 'DESC']],
+      limit,
+      offset,
+      attributes: [
+        'id', 'eventName', 'contractId', 'chatRoomId',
+        'receiverId', 'receiverPhone', 'tplCode', 'status',
+        'retryCount', 'errorMessage', 'sentAt', 'failedAt', 'createdAt'
+      ]
+    });
+
+    return success(res, {
+      logs: rows,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(count / limit),
+        totalCount: count,
+        limit
+      }
+    }, '알림톡 발송 이력 조회 성공');
+  } catch (err) {
+    console.error('알림톡 발송 이력 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 알림톡 발송 통계
+ * GET /api/admin/alimtalk/stats
+ * Query: startDate, endDate (기본: 최근 30일)
+ */
+const getAlimtalkStats = async (req, res) => {
+  try {
+    const { AlimtalkLog } = require('../models');
+
+    const endDate = req.query.endDate ? new Date(req.query.endDate) : new Date();
+    endDate.setHours(23, 59, 59, 999);
+    const startDate = req.query.startDate
+      ? new Date(req.query.startDate)
+      : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const dateFilter = {
+      createdAt: { [Op.between]: [startDate, endDate] }
+    };
+
+    // 상태별 건수
+    const statusCounts = await AlimtalkLog.findAll({
+      where: dateFilter,
+      attributes: [
+        'status',
+        [sequelize.fn('COUNT', sequelize.col('id')), 'count']
+      ],
+      group: ['status'],
+      raw: true
+    });
+
+    // 이벤트별 건수
+    const eventCounts = await AlimtalkLog.findAll({
+      where: dateFilter,
+      attributes: [
+        'eventName',
+        [sequelize.fn('COUNT', sequelize.col('id')), 'total'],
+        [sequelize.fn('SUM', sequelize.literal("CASE WHEN status = 'SENT' THEN 1 ELSE 0 END")), 'sent'],
+        [sequelize.fn('SUM', sequelize.literal("CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END")), 'failed'],
+        [sequelize.fn('SUM', sequelize.literal("CASE WHEN status = 'FALLBACK_SENT' THEN 1 ELSE 0 END")), 'fallback']
+      ],
+      group: ['eventName'],
+      order: [[sequelize.fn('COUNT', sequelize.col('id')), 'DESC']],
+      raw: true
+    });
+
+    // 전체 집계
+    const total = statusCounts.reduce((sum, s) => sum + parseInt(s.count), 0);
+    const sentCount = parseInt(statusCounts.find(s => s.status === 'SENT')?.count || 0);
+    const failedCount = parseInt(statusCounts.find(s => s.status === 'FAILED')?.count || 0);
+    const retriedCount = parseInt(statusCounts.find(s => s.status === 'RETRIED')?.count || 0);
+    const fallbackCount = parseInt(statusCounts.find(s => s.status === 'FALLBACK_SENT')?.count || 0);
+
+    const successCount = sentCount + retriedCount + fallbackCount;
+    const successRate = total > 0 ? ((successCount / total) * 100).toFixed(1) : '0.0';
+
+    return success(res, {
+      period: {
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0]
+      },
+      summary: {
+        total,
+        sent: sentCount,
+        retried: retriedCount,
+        fallbackSent: fallbackCount,
+        failed: failedCount,
+        successRate: `${successRate}%`
+      },
+      byStatus: statusCounts,
+      byEvent: eventCounts
+    }, '알림톡 발송 통계 조회 성공');
+  } catch (err) {
+    console.error('알림톡 발송 통계 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 알림톡 수동 재시도
+ * POST /api/admin/alimtalk/logs/:logId/retry
+ */
+const retryAlimtalkLog = async (req, res) => {
+  try {
+    const AlimtalkService = require('../services/alimtalkService');
+    const { logId } = req.params;
+
+    const result = await AlimtalkService.retryFailed(parseInt(logId));
+
+    if (!result.retried) {
+      return error(res, { code: 4001, message: result.error || '재시도 불가' }, 400);
+    }
+
+    return success(res, { logId: parseInt(logId), retried: true }, '알림톡 재시도 완료');
+  } catch (err) {
+    console.error('알림톡 수동 재시도 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   // 대시보드
   getDashboardStats,
@@ -3216,5 +3751,12 @@ module.exports = {
   getPendingDepositHolds,
   approveDepositHold,
   rejectDepositHold,
-  forceDepositHold
+  forceDepositHold,
+
+  // 알림톡 관리
+  getAlimtalkTemplates,
+  syncAlimtalkTemplates,
+  getAlimtalkLogs,
+  getAlimtalkStats,
+  retryAlimtalkLog
 };

@@ -564,11 +564,104 @@ const sendTestSystemMessage = async (req, res) => {
   }
 };
 
+/**
+ * 채팅 메시지 알림 요청
+ * 프론트에서 메시지 전송 시 호출 → 5분 윈도우 + 읽음 체크 후 알림톡 발송
+ * POST /api/chats/rooms/:chatRoomId/notify
+ * Body: { receiverId }
+ */
+const notifyChatMessage = async (req, res) => {
+  try {
+    const { chatRoomId } = req.params;
+    const senderId = req.user.id;
+
+    // 채팅방 조회
+    const chatRoom = await ChatRoom.findOne({
+      where: { firebaseChatRoomId: chatRoomId },
+      include: [
+        { model: Room, as: 'room', attributes: ['id', 'roomName'] }
+      ]
+    });
+
+    if (!chatRoom) {
+      return error(res, { code: 3002, message: '채팅방을 찾을 수 없습니다.' }, 404);
+    }
+
+    // 권한 확인 (발신자가 호스트 또는 게스트)
+    if (chatRoom.hostId !== senderId && chatRoom.guestId !== senderId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    // 수신자 결정
+    const receiverId = senderId === chatRoom.hostId ? chatRoom.guestId : chatRoom.hostId;
+
+    // 수신자 정보 조회
+    const receiver = await User.findByPk(receiverId, {
+      attributes: ['id', 'phoneNumber', 'name', 'nickname']
+    });
+
+    if (!receiver || !receiver.phoneNumber) {
+      return success(res, { sent: false, reason: 'no_phone' }, '수신자 전화번호 없음');
+    }
+
+    // 알림톡 발송 (fire-and-forget)
+    const AlimtalkService = require('../services/alimtalkService');
+    const result = await AlimtalkService.sendChatMessageNotify(
+      chatRoom,
+      senderId,
+      receiver,
+      chatRoom.room?.roomName || ''
+    );
+
+    return success(res, result, '채팅 알림 처리 완료');
+  } catch (err) {
+    console.error('채팅 알림 요청 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 채팅방 읽음 처리
+ * 프론트에서 채팅방 진입 / 포커스 시 호출
+ * POST /api/chats/rooms/:chatRoomId/read
+ */
+const markChatAsRead = async (req, res) => {
+  try {
+    const { chatRoomId } = req.params;
+    const userId = req.user.id;
+
+    // 채팅방 조회
+    const chatRoom = await ChatRoom.findOne({
+      where: { firebaseChatRoomId: chatRoomId }
+    });
+
+    if (!chatRoom) {
+      return error(res, { code: 3002, message: '채팅방을 찾을 수 없습니다.' }, 404);
+    }
+
+    // 권한 확인
+    if (chatRoom.hostId !== userId && chatRoom.guestId !== userId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    // Redis 읽음 시간 갱신
+    const AlimtalkService = require('../services/alimtalkService');
+    await AlimtalkService.markChatRead(chatRoom.id, userId);
+
+    return success(res, { read: true }, '읽음 처리 완료');
+  } catch (err) {
+    console.error('채팅 읽음 처리 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
 module.exports = {
   getCustomToken,
   createChatRoom,
   getMyChatRooms,
   getChatRoomDetail,
   getChatRoomByContractId,
-  sendTestSystemMessage
+  sendTestSystemMessage,
+  notifyChatMessage,
+  markChatAsRead
 };
