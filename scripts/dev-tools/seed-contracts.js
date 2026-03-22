@@ -1299,9 +1299,13 @@ async function cleanCommand() {
 
   const transaction = await sequelize.transaction();
   try {
-    // 렌탈 관련 (주문 ID로 조회)
+    // 렌탈 관련 (orderId 기준 + contractId 기준 모두 조회)
+    const rentalOrderWhereCond = { [Op.or]: [{ orderId: { [Op.like]: 'S2%' } }] };
+    if (contractIds.length > 0) {
+      rentalOrderWhereCond[Op.or].push({ contractId: { [Op.in]: contractIds } });
+    }
     const seedRentalOrders = await RentalOrder.findAll({
-      where: { orderId: { [Op.like]: 'S2%' } },
+      where: rentalOrderWhereCond,
       attributes: ['id'],
       transaction,
     });
@@ -1321,8 +1325,16 @@ async function cleanCommand() {
     const delReservations = await RentalItemReservation.destroy({ where: { contractId: { [Op.in]: contractIds } }, transaction });
     console.log(`  🗑️ RentalItemReservation ${delReservations}건 삭제`);
 
+    // RentalOrder: orderId 기준 + contractId 기준 모두 삭제
+    const rentalOrderWhere = [];
     if (rentalOrderIds.length > 0) {
-      const delRentalOrders = await RentalOrder.destroy({ where: { id: { [Op.in]: rentalOrderIds } }, transaction });
+      rentalOrderWhere.push({ id: { [Op.in]: rentalOrderIds } });
+    }
+    if (contractIds.length > 0) {
+      rentalOrderWhere.push({ contractId: { [Op.in]: contractIds } });
+    }
+    if (rentalOrderWhere.length > 0) {
+      const delRentalOrders = await RentalOrder.destroy({ where: { [Op.or]: rentalOrderWhere }, transaction });
       console.log(`  🗑️ RentalOrder ${delRentalOrders}건 삭제`);
     }
 
