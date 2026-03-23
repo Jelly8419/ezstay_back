@@ -13,6 +13,7 @@ const {
 } = require('../utils/contractHelper');
 const { createChatRoomMetadata, sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
+const appConfig = require('../config/app.config');
 const { toAbsoluteUrl } = require('../utils/urlHelper');
 const { calculateRefund } = require('../utils/refundCalculator');
 const { generateOrderId } = require('../utils/orderIdGenerator');
@@ -327,8 +328,8 @@ const createContractRequest = async (req, res) => {
     // 실이용 금액 (할인 적용 + 수수료 포함)
     serverCalculated.totalUsageFee = afterDiscount + serverCalculated.platformFee;
 
-    // 보증금 (30만원 고정)
-    serverCalculated.deposit = 300000;
+    // 보증금
+    serverCalculated.deposit = appConfig.deposit.DEFAULT;
 
     // 최종 결제 금액
     serverCalculated.finalTotal = serverCalculated.totalUsageFee + serverCalculated.deposit;
