@@ -1,15 +1,23 @@
-const sgMail = require('@sendgrid/mail');
+const { SESClient, SendEmailCommand } = require('@aws-sdk/client-ses');
 const { getEmailTemplate } = require('./emailTemplates');
 
-// SendGrid API Key 설정
-if (process.env.SENDGRID_API_KEY) {
-  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+// AWS SES 클라이언트 설정
+let sesClient = null;
+
+if (process.env.AWS_SES_ACCESS_KEY_ID && process.env.AWS_SES_SECRET_ACCESS_KEY) {
+  sesClient = new SESClient({
+    region: process.env.AWS_SES_REGION || 'ap-northeast-2',
+    credentials: {
+      accessKeyId: process.env.AWS_SES_ACCESS_KEY_ID,
+      secretAccessKey: process.env.AWS_SES_SECRET_ACCESS_KEY,
+    },
+  });
 } else {
-  console.warn('⚠️  SENDGRID_API_KEY가 설정되지 않았습니다. 이메일 발송이 불가능합니다.');
+  console.warn('⚠️  AWS SES 인증 정보가 설정되지 않았습니다. 이메일 발송이 불가능합니다.');
 }
 
 /**
- * 인증코드 이메일 발송 (SendGrid)
+ * 인증코드 이메일 발송 (AWS SES)
  * @param {string} to - 수신자 이메일
  * @param {string} code - 6자리 인증코드
  * @param {string} type - 'signup' | 'password_reset'
@@ -17,8 +25,8 @@ if (process.env.SENDGRID_API_KEY) {
  */
 const sendVerificationEmail = async (to, code, type = 'signup') => {
   try {
-    if (!process.env.SENDGRID_API_KEY) {
-      console.error('❌ SendGrid API Key가 설정되지 않았습니다.');
+    if (!sesClient) {
+      console.error('❌ AWS SES 인증 정보가 설정되지 않았습니다.');
       return false;
     }
 
@@ -27,36 +35,44 @@ const sendVerificationEmail = async (to, code, type = 'signup') => {
       : '[Ezstay] 비밀번호 재설정 인증코드';
 
     const htmlContent = getEmailTemplate(code, type);
+    const fromAddress = process.env.EMAIL_FROM || 'noreply@ezstay.com';
 
-    const msg = {
-      to: to,
-      from: process.env.EMAIL_FROM || 'noreply@ezstay.com',
-      subject: subject,
-      html: htmlContent
-    };
+    const command = new SendEmailCommand({
+      Source: fromAddress,
+      Destination: {
+        ToAddresses: [to],
+      },
+      Message: {
+        Subject: {
+          Data: subject,
+          Charset: 'UTF-8',
+        },
+        Body: {
+          Html: {
+            Data: htmlContent,
+            Charset: 'UTF-8',
+          },
+        },
+      },
+    });
 
-    const response = await sgMail.send(msg);
+    const response = await sesClient.send(command);
 
     console.log('✅ 이메일 발송 성공:', to);
-    console.log('📧 SendGrid 응답:', JSON.stringify(response[0], null, 2));
+    console.log('📧 AWS SES MessageId:', response.MessageId);
     return true;
   } catch (error) {
-    console.error('❌ SendGrid 이메일 발송 실패:', error);
-
-    if (error.response) {
-      console.error('에러 상세:', error.response.body);
-    }
-
+    console.error('❌ AWS SES 이메일 발송 실패:', error);
     return false;
   }
 };
 
 /**
- * SendGrid API Key 검증 (선택사항)
+ * AWS SES 설정 검증
  * @returns {boolean} 설정 여부
  */
 const isConfigured = () => {
-  return !!process.env.SENDGRID_API_KEY;
+  return !!(process.env.AWS_SES_ACCESS_KEY_ID && process.env.AWS_SES_SECRET_ACCESS_KEY);
 };
 
 module.exports = {
