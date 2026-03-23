@@ -6,7 +6,7 @@ const rateLimit = require('express-rate-limit');
  */
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15분
-  max: 100, // 최대 100회
+  max: 300, // 최대 100회
   message: {
     success: false,
     code: 4290,
@@ -22,7 +22,7 @@ const generalLimiter = rateLimit({
  * 15분 동안 최대 5회 로그인/회원가입 시도
  */
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15분
+  windowMs: 60 * 60 * 1000, // 15분
   max: 5, // 최대 5회
   message: {
     success: false,
@@ -40,7 +40,7 @@ const authLimiter = rateLimit({
  */
 const uploadLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1시간
-  max: 20, // 최대 20회
+  max: 50, // 최대 20회
   message: {
     success: false,
     code: 4292,
