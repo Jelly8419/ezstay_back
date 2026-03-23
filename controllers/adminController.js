@@ -571,8 +571,10 @@ const approveProperty = async (req, res) => {
       }, 400);
     }
 
-    room.status = 'approved';
+    room.status = 'published';
     room.approvedAt = new Date();
+    room.publishedAt = new Date();
+    room.isActive = true;
     await room.save();
 
     // 캐시 무효화 (ETag 버전 증가)
