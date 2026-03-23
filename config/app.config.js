@@ -36,6 +36,11 @@ module.exports = {
     ALLOWED: ['서울']  // 허용 지역 목록 (주소 앞부분 매칭)
   },
 
+  // 보증금 설정
+  deposit: {
+    DEFAULT: Number(process.env.DEFAULT_DEPOSIT) || 300000
+  },
+
   // 캐시 관련 설정
   cache: {
     ttl: {

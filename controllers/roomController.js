@@ -164,7 +164,7 @@ const getRoomById = async (req, res) => {
     }
 
     // ✅ PRD 요구사항: 고정값 및 계산 필드 추가
-    roomData.deposit = 300000; // 보증금 30만원 고정
+    roomData.deposit = appConfig.deposit.DEFAULT;
     roomData.weeklyRent = roomData.dailyRent ? roomData.dailyRent * 7 : null; // 주간 임대료 계산
 
     // === 할인 정보 계산 (빠른할인 → 장기할인 순차 적용) ===
