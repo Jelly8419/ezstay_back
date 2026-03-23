@@ -4,6 +4,7 @@ const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 const { calculateProgress } = require('../utils/roomProgress');
+const { toAbsoluteUrl } = require('../utils/urlHelper');
 const { sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
@@ -745,7 +746,7 @@ const getPropertyDetail = async (req, res) => {
       // 사진
       photos: room.photos.map(photo => ({
         id: photo.id,
-        url: photo.url,
+        url: toAbsoluteUrl(photo.url),
         order: photo.order
       })),
 

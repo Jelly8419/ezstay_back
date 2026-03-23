@@ -1,6 +1,7 @@
 const { Room, RoomPhoto, RoomAmenity, EzService, User, RentalItem, Contract, BlockedPeriod } = require('../models');
 const { Op } = require('sequelize');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
+const { toAbsoluteUrl } = require('../utils/urlHelper');
 const { safeRedisOperation } = require('../config/redis');
 const crypto = require('crypto');
 const roomService = require('../services/roomService');
@@ -129,20 +130,16 @@ const getRoomById = async (req, res) => {
       return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
-    // photos URL에 BASE_URL 추가 (상대경로만)
-    const baseUrl = process.env.BASE_URL || 'http://localhost:8080';
+    // 이미지 URL 정규화 (상대경로 → 절대경로)
     const roomData = room.toJSON();
     if (roomData.photos && roomData.photos.length > 0) {
       roomData.photos = roomData.photos.map(photo => ({
         ...photo,
-        url: photo.url.startsWith('http') ? photo.url : `${baseUrl}${photo.url}`
+        url: toAbsoluteUrl(photo.url)
       }));
     }
-
-    // 호스트 프로필 이미지 URL에 BASE_URL 추가 (상대경로만)
-    if (roomData.host && roomData.host.profileImageUrl) {
-      const imgUrl = roomData.host.profileImageUrl;
-      roomData.host.profileImageUrl = imgUrl.startsWith('http') ? imgUrl : `${baseUrl}${imgUrl}`;
+    if (roomData.host) {
+      roomData.host.profileImageUrl = toAbsoluteUrl(roomData.host.profileImageUrl);
     }
 
     // 게스트 API이므로 민감 정보 제거 및 JSON 파싱

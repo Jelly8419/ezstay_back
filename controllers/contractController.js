@@ -13,6 +13,7 @@ const {
 } = require('../utils/contractHelper');
 const { createChatRoomMetadata, sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
+const { toAbsoluteUrl } = require('../utils/urlHelper');
 const { calculateRefund } = require('../utils/refundCalculator');
 const { generateOrderId } = require('../utils/orderIdGenerator');
 const { sendContractConfirmedMessages } = require('../schedulers/autoMessageScheduler');
@@ -657,7 +658,7 @@ const getGuestContracts = async (req, res) => {
             address: contract.room.address,
             area: contract.room.area,
             buildingType: contract.room.buildingType,
-            thumbnailUrl: contract.room.photos[0]?.url || null
+            thumbnailUrl: toAbsoluteUrl(contract.room.photos[0]?.url || null)
           },
 
           // 호스트 정보
@@ -790,7 +791,7 @@ const getHostContracts = async (req, res) => {
             address: contract.room.address,
             area: contract.room.area,
             buildingType: contract.room.buildingType,
-            thumbnailUrl: contract.room.photos[0]?.url || null
+            thumbnailUrl: toAbsoluteUrl(contract.room.photos[0]?.url || null)
           },
 
           // 퇴실/보증금 상태 (PRD v2)
@@ -945,7 +946,7 @@ const getContractDetail = async (req, res) => {
             buildingType: contract.room.buildingType,
             photos: contract.room.photos.map(photo => ({
               id: photo.id,
-              url: photo.url,
+              url: toAbsoluteUrl(photo.url),
               order: photo.order
             }))
           },
@@ -1162,13 +1163,13 @@ const approveContract = async (req, res) => {
           id: host.id,
           name: host.name,
           nickname: host.nickname,
-          profileImageUrl: host.profileImageUrl
+          profileImageUrl: toAbsoluteUrl(host.profileImageUrl)
         },
         guestInfo: {
           id: guest.id,
           name: guest.name,
           nickname: guest.nickname,
-          profileImageUrl: guest.profileImageUrl
+          profileImageUrl: toAbsoluteUrl(guest.profileImageUrl)
         },
         checkInDate: contract.checkInDate,
         checkOutDate: contract.checkOutDate,

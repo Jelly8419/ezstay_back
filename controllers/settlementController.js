@@ -4,6 +4,7 @@
  */
 const { Contract, Room, RoomPhoto, User, Refund, UserBankAccount, EzService, sequelize } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
+const { toAbsoluteUrl } = require('../utils/urlHelper');
 const { Op, fn, col, literal } = require('sequelize');
 const {
   calculateSettlementDate,
@@ -142,7 +143,7 @@ const getSettlements = async (req, res) => {
         contractNumber: contract.contractNumber,
         roomId: contract.room?.id,
         roomTitle: contract.room?.roomName,
-        roomThumbnail: contract.room?.photos?.[0]?.url || null,
+        roomThumbnail: toAbsoluteUrl(contract.room?.photos?.[0]?.url || null),
         guestName: contract.guest?.name,
         checkInDate: contract.checkInDate,
         checkOutDate: contract.checkOutDate,
@@ -354,7 +355,7 @@ const getSettlementDetail = async (req, res) => {
         roomId: contract.room?.id,
         title: contract.room?.roomName,
         address: contract.room?.address,
-        thumbnail: contract.room?.photos?.[0]?.url || null
+        thumbnail: toAbsoluteUrl(contract.room?.photos?.[0]?.url || null)
       },
       guest: {
         name: contract.guest?.name,
