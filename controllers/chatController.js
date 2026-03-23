@@ -1,5 +1,6 @@
 const { ChatRoom, Contract, User, Room } = require('../models');
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
+const { toAbsoluteUrl } = require('../utils/urlHelper');
 const {
   createCustomToken,
   createChatRoomMetadata,
@@ -127,13 +128,13 @@ const createChatRoom = async (req, res) => {
         id: contract.host.id,
         name: contract.host.name,
         nickname: contract.host.nickname,
-        profileImageUrl: contract.host.profileImageUrl
+        profileImageUrl: toAbsoluteUrl(contract.host.profileImageUrl)
       },
       guestInfo: {
         id: contract.guest.id,
         name: contract.guest.name,
         nickname: contract.guest.nickname,
-        profileImageUrl: contract.guest.profileImageUrl
+        profileImageUrl: toAbsoluteUrl(contract.guest.profileImageUrl)
       },
       checkInDate: contract.checkInDate,
       checkOutDate: contract.checkOutDate,
@@ -439,13 +440,13 @@ const getChatRoomByContractId = async (req, res) => {
             id: contract.host.id,
             name: contract.host.name,
             nickname: contract.host.nickname,
-            profileImageUrl: contract.host.profileImageUrl
+            profileImageUrl: toAbsoluteUrl(contract.host.profileImageUrl)
           },
           guestInfo: {
             id: contract.guest.id,
             name: contract.guest.name,
             nickname: contract.guest.nickname,
-            profileImageUrl: contract.guest.profileImageUrl
+            profileImageUrl: toAbsoluteUrl(contract.guest.profileImageUrl)
           },
           checkInDate: contract.checkInDate,
           checkOutDate: contract.checkOutDate,

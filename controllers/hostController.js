@@ -5,6 +5,7 @@ const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 const { calculateProgress } = require('../utils/roomProgress');
 const { Op } = require('sequelize');
 const { getFileUrl } = require('../middleware/upload');
+const { toAbsoluteUrl } = require('../utils/urlHelper');
 
 // 1. 기본 정보 등록
 const createRoom = async (req, res) => {
@@ -694,7 +695,7 @@ const getMyRooms = async (req, res) => {
         isActive: room.isActive,
         photos: room.photos && room.photos.length > 0
           ? room.photos.map(photo => ({
-              url: photo.url,
+              url: toAbsoluteUrl(photo.url),
               order: photo.order
             }))
           : [],
@@ -792,7 +793,7 @@ const getRoom = async (req, res) => {
       // 사진
       photos: room.photos.map(photo => ({
         id: photo.id,
-        url: photo.url,
+        url: toAbsoluteUrl(photo.url),
         order: photo.order
       })),
 
