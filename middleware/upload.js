@@ -60,13 +60,16 @@ const uploadToS3 = async (file) => {
     ContentType: file.mimetype,
   }));
 
-  return `https://${BUCKET_NAME}.s3.ap-northeast-2.amazonaws.com/${key}`;
+  return `https://images.ezstay.io/${key}`;
 };
 
 // S3 삭제 (프로덕션만)
 const deleteFromS3 = async (url) => {
   try {
-    const key = url.split('.amazonaws.com/')[1];
+    // CDN(images.ezstay.io) 또는 S3 직접 URL 둘 다 지원
+    const key = url.includes('images.ezstay.io/')
+      ? url.split('images.ezstay.io/')[1]
+      : url.split('.amazonaws.com/')[1];
     if (key) {
       await s3Client.send(new DeleteObjectCommand({
         Bucket: BUCKET_NAME,
