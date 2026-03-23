@@ -75,18 +75,18 @@ router.post('/test-email', async (req, res) => {
       return res.status(400).json({ success: false, message: 'email 필드가 필요합니다.' });
     }
 
-    // SendGrid 설정 확인
+    // AWS SES 설정 확인
     const configured = isConfigured();
-    console.log('📧 SendGrid 설정 여부:', configured);
+    console.log('📧 AWS SES 설정 여부:', configured);
     console.log('📧 EMAIL_FROM:', process.env.EMAIL_FROM);
     console.log('📧 수신자 이메일:', email);
 
     if (!configured) {
       return res.status(500).json({
         success: false,
-        message: 'SendGrid API Key가 설정되지 않았습니다.',
+        message: 'AWS SES 인증 정보가 설정되지 않았습니다.',
         debug: {
-          SENDGRID_API_KEY_EXISTS: !!process.env.SENDGRID_API_KEY,
+          AWS_SES_CONFIGURED: configured,
           EMAIL_FROM: process.env.EMAIL_FROM
         }
       });
@@ -99,12 +99,12 @@ router.post('/test-email', async (req, res) => {
     if (result) {
       return res.json({
         success: true,
-        message: '테스트 이메일이 발송되었습니다. SendGrid Activity Feed를 확인하세요.',
+        message: '테스트 이메일이 발송되었습니다. AWS SES 콘솔에서 확인하세요.',
         debug: {
           from: process.env.EMAIL_FROM,
           to: email,
           code: testCode,
-          sendgridConfigured: configured
+          sesConfigured: configured
         }
       });
     } else {

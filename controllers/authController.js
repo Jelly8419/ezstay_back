@@ -134,16 +134,19 @@ const register = async (req, res) => {
 };
 
 const login = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const { email, password, user_mode } = req.body;
 
     // 입력값 검증
     const emailValidation = validateEmail(email);
     if (!emailValidation.valid) {
+      await transaction.rollback();
       return error(res, ErrorCodes.INVALID_EMAIL, 400);
     }
 
     if (!password) {
+      await transaction.rollback();
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
@@ -157,24 +160,29 @@ const login = async (req, res) => {
         model: LocalUser,
         as: 'localProfile',
         required: true
-      }]
+      }],
+      transaction
     });
 
     if (!user) {
+      await transaction.rollback();
       return error(res, ErrorCodes.USER_NOT_FOUND, 401);
     }
 
     // 계정 상태 확인 (비밀번호 검증 전)
     if (user.accountStatus === 'suspended') {
+      await transaction.rollback();
       return error(res, ErrorCodes.ACCOUNT_SUSPENDED, 403);
     }
     if (user.accountStatus === 'withdrawn') {
+      await transaction.rollback();
       return error(res, ErrorCodes.ACCOUNT_WITHDRAWN, 403);
     }
 
     // 계정 잠금 확인
     const localProfile = user.localProfile;
     if (localProfile.lockUntil && localProfile.lockUntil > new Date()) {
+      await transaction.rollback();
       return error(res, ErrorCodes.ACCOUNT_LOCKED, 401);
     }
 
@@ -190,7 +198,8 @@ const login = async (req, res) => {
         updateData.lockUntil = new Date(Date.now() + 10 * 60 * 1000);
       }
 
-      await localProfile.update(updateData);
+      await localProfile.update(updateData, { transaction });
+      await transaction.commit();
 
       return error(res, ErrorCodes.PASSWORD_MISMATCH, 401);
     }
@@ -199,7 +208,7 @@ const login = async (req, res) => {
     await localProfile.update({
       failedLoginAttempts: 0,
       lockUntil: null
-    });
+    }, { transaction });
 
     // 계좌 등록 여부 확인
     const bankAccount = await UserBankAccount.findOne({
@@ -220,7 +229,9 @@ const login = async (req, res) => {
     await user.update({
       refreshToken,
       lastLoginAt: new Date()
-    });
+    }, { transaction });
+
+    await transaction.commit();
 
     return success(res, {
       user: {
@@ -238,6 +249,7 @@ const login = async (req, res) => {
       refreshToken
     }, '로그인이 완료되었습니다.');
   } catch (err) {
+    await transaction.rollback();
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
@@ -424,23 +436,27 @@ const devBypassLogin = async (req, res) => {
  * @body {string} newPassword - 새 비밀번호 (8~16자, 영문+숫자)
  */
 const resetPassword = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const { email, newPassword } = req.body;
 
     // 필수 필드 검증
     if (!email || !newPassword) {
+      await transaction.rollback();
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
     // 이메일 검증
     const emailValidation = validateEmail(email);
     if (!emailValidation.valid) {
+      await transaction.rollback();
       return error(res, ErrorCodes.INVALID_EMAIL, 400);
     }
 
     // 새 비밀번호 강도 검증
     const passwordValidation = validatePassword(newPassword);
     if (!passwordValidation.valid) {
+      await transaction.rollback();
       return error(res, { code: 4004, message: passwordValidation.message }, 400);
     }
 
@@ -450,16 +466,19 @@ const resetPassword = async (req, res) => {
         email,
         verified: true
       },
-      order: [['verifiedAt', 'DESC']]
+      order: [['verifiedAt', 'DESC']],
+      transaction
     });
 
     if (!verifiedRecord) {
+      await transaction.rollback();
       return error(res, { code: 4015, message: '이메일 인증이 필요합니다.' }, 400);
     }
 
     // 인증 후 10분 이내에만 재설정 가능
     const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
     if (verifiedRecord.verifiedAt < tenMinutesAgo) {
+      await transaction.rollback();
       return error(res, {
         code: 4014,
         message: '인증 시간이 만료되었습니다. 다시 인증해주세요.'
@@ -468,38 +487,46 @@ const resetPassword = async (req, res) => {
 
     // 사용자 조회
     const user = await User.findOne({
-      where: { email, userType: 'local' }
+      where: { email, userType: 'local' },
+      transaction
     });
 
     if (!user) {
+      await transaction.rollback();
       return error(res, ErrorCodes.USER_NOT_FOUND, 404);
     }
 
     // LocalUser 조회
     const localUser = await LocalUser.findOne({
-      where: { userId: user.id }
+      where: { userId: user.id },
+      transaction
     });
 
     if (!localUser) {
+      await transaction.rollback();
       return error(res, ErrorCodes.USER_NOT_FOUND, 404);
     }
 
     // 기존 비밀번호와 동일한지 확인
     const isSamePassword = await comparePassword(newPassword, localUser.password);
     if (isSamePassword) {
+      await transaction.rollback();
       return error(res, { code: 4007, message: '새 비밀번호는 현재 비밀번호와 달라야 합니다.' }, 400);
     }
 
     // 비밀번호 해싱 및 업데이트
     const hashedPassword = await hashPassword(newPassword);
-    await localUser.update({ password: hashedPassword });
+    await localUser.update({ password: hashedPassword }, { transaction });
 
     // 사용된 인증 레코드 무효화 (재사용 방지)
-    await verifiedRecord.destroy();
+    await verifiedRecord.destroy({ transaction });
+
+    await transaction.commit();
 
     return success(res, null, '비밀번호가 재설정되었습니다.');
 
   } catch (err) {
+    await transaction.rollback();
     console.error('비밀번호 재설정 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, process.env.NODE_ENV === 'development' ? err.message : undefined);
   }

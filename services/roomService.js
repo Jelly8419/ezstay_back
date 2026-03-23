@@ -466,10 +466,14 @@ const fetchRoomsFromDB = async (coords, excludeRoomIds, limit) => {
  * @param {string} checkOutDate - 퇴실일 (YYYY-MM-DD) 또는 null
  * @returns {object} 변환된 응답 데이터
  */
-const transformRoomsForMap = (rooms, checkInDate = null, checkOutDate = null) => {
+const transformRoomsForMap = (rooms, checkInDate = null, checkOutDate = null, unavailableRoomIds = []) => {
   const mapData = rooms.map(room => {
     // 할인 계산 (빠른할인 → 장기할인 순차 적용)
     const discountResult = calculateDiscounts(room, checkInDate, checkOutDate);
+    // 날짜 필터가 있을 때만 예약 가능 여부 판단, 없으면 true
+    const isAvailable = checkInDate && checkOutDate
+      ? !unavailableRoomIds.includes(room.id)
+      : true;
 
     return {
       id: room.id,
@@ -481,6 +485,7 @@ const transformRoomsForMap = (rooms, checkInDate = null, checkOutDate = null) =>
       finalDailyRent: discountResult.finalDailyRent,
       totalDiscountAmount: discountResult.totalDiscountAmount,
       appliedDiscounts: discountResult.appliedDiscounts, // ['quick', 'longTerm'] 등
+      isAvailable, // false면 해당 날짜에 예약 불가 (프론트에서 회색 처리)
       area: parseFloat(room.area),
       roomCount: room.roomCount,
       bathroomCount: room.bathroomCount,

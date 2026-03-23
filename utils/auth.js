@@ -21,7 +21,7 @@ if (JWT_REFRESH_SECRET.length < 32) {
   throw new Error('FATAL ERROR: JWT_REFRESH_SECRET must be at least 32 characters long.');
 }
 
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '14d';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
 const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '14d';
 
 const generateTokens = (payload) => {

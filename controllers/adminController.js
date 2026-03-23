@@ -1,5 +1,5 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, ContractStatusLog, ChatRoom, DepositAgreement, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -571,8 +571,10 @@ const approveProperty = async (req, res) => {
       }, 400);
     }
 
-    room.status = 'approved';
+    room.status = 'published';
     room.approvedAt = new Date();
+    room.publishedAt = new Date();
+    room.isActive = true;
     await room.save();
 
     // 캐시 무효화 (ETag 버전 증가)
@@ -755,16 +757,17 @@ const getPropertyDetail = async (req, res) => {
         petsAllowed: room.amenity.petsAllowed
       } : null,
 
-      // 이지서비스 (호스트 제공 무료 부가서비스)
+      // 이지서비스 (청소서비스 + 도어락)
       ezService: room.ezService ? {
         cleaningService: room.ezService.cleaningService,
-        autoPasswordChange: room.ezService.autoPasswordChange,
         roomPassword: room.ezService.roomPassword
       } : null,
 
-      // 방 소개
+      // 방 소개 및 입퇴실 시간
       description: room.description,
       maxGuests: room.maxGuests,
+      checkInTime: room.checkInTime,
+      checkOutTime: room.checkOutTime,
 
       // 상태
       status: room.status,
@@ -1151,6 +1154,8 @@ const getRoomManagementDetail = async (req, res) => {
         address: room.address,
         detailAddress: room.detailAddress,
         dailyRent: room.dailyRent,
+        checkInTime: room.checkInTime,
+        checkOutTime: room.checkOutTime,
         createdAt: room.createdAt,
         updatedAt: room.updatedAt
       },
@@ -3054,49 +3059,233 @@ const rejectHostCancelRequest = async (req, res) => {
 };
 
 /**
- * 보증금 보류 신청 목록 조회
- * GET /api/admin/deposits/pending-holds
+ * 보증금 보류 건 목록 조회 (전체 상태)
+ * GET /api/admin/deposits
+ * Query: status, startDate, endDate, contractId, hostName, page, limit
+ *
+ * 상태 매핑:
+ *  REQUESTED     → checkoutStatus: HOLD_REQUESTED
+ *  APPROVED      → checkoutStatus: HOST_PENDING
+ *  HOST_SUBMITTED → checkoutStatus: HOST_PENDING + depositAgreement.status: SUBMITTED
+ *  AGREED        → depositStatus: DEDUCTION_CONFIRMED | RETURN_CONFIRMED
+ *  AUTO_REFUNDED → depositStatus: RETURN_CONFIRMED + depositAgreement.status: AUTO_RETURNED
  */
-const getPendingDepositHolds = async (req, res) => {
+const getDepositHolds = async (req, res) => {
   try {
-    const { page = 1, limit = 20 } = req.query;
-    const offset = (page - 1) * limit;
+    const { status, startDate, endDate, contractId, hostName, page = 1, limit = 20 } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    // 상태 필터 → checkoutStatus / depositStatus 조건 변환
+    const contractWhere = { status: 'COMPLETED' };
+
+    if (status === 'REQUESTED') {
+      contractWhere.checkoutStatus = 'HOLD_REQUESTED';
+    } else if (status === 'APPROVED') {
+      contractWhere.checkoutStatus = 'HOST_PENDING';
+    } else if (status === 'HOST_SUBMITTED') {
+      contractWhere.checkoutStatus = 'HOST_PENDING';
+    } else if (status === 'AGREED') {
+      contractWhere.depositStatus = { [Op.in]: ['DEDUCTION_CONFIRMED', 'RETURN_CONFIRMED'] };
+      contractWhere.checkoutStatus = 'HOST_CONFIRMED';
+    } else if (status === 'AUTO_REFUNDED') {
+      contractWhere.depositStatus = 'RETURN_CONFIRMED';
+      contractWhere.checkoutStatus = 'HOST_CONFIRMED';
+    } else {
+      // 전체: 보류 관련 상태만 조회
+      contractWhere[Op.or] = [
+        { checkoutStatus: { [Op.in]: ['HOLD_REQUESTED', 'HOST_PENDING'] } },
+        {
+          checkoutStatus: 'HOST_CONFIRMED',
+          depositStatus: { [Op.in]: ['DEDUCTION_CONFIRMED', 'RETURN_CONFIRMED'] }
+        }
+      ];
+    }
+
+    if (contractId) {
+      contractWhere.id = contractId;
+    }
+
+    if (startDate || endDate) {
+      contractWhere.holdRequestedAt = {};
+      if (startDate) contractWhere.holdRequestedAt[Op.gte] = new Date(startDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        contractWhere.holdRequestedAt[Op.lte] = end;
+      }
+    }
+
+    const hostInclude = { model: User, as: 'host', attributes: ['id', 'name', 'email', 'phoneNumber'] };
+    if (hostName) {
+      hostInclude.where = { name: { [Op.like]: `%${hostName}%` } };
+      hostInclude.required = true;
+    }
+
+    // HOST_SUBMITTED 필터는 DepositAgreement 조건 추가 필요
+    const depositAgreementInclude = {
+      model: DepositAgreement,
+      as: 'depositAgreement',
+      required: status === 'HOST_SUBMITTED'
+    };
+    if (status === 'HOST_SUBMITTED') {
+      depositAgreementInclude.where = { status: 'SUBMITTED' };
+    } else if (status === 'AUTO_REFUNDED') {
+      depositAgreementInclude.where = { status: 'AUTO_RETURNED' };
+      depositAgreementInclude.required = true;
+    }
 
     const { count, rows: contracts } = await Contract.findAndCountAll({
-      where: { checkoutStatus: 'HOLD_REQUESTED' },
+      where: contractWhere,
       include: [
         { model: User, as: 'guest', attributes: ['id', 'name', 'email', 'phoneNumber'] },
-        { model: User, as: 'host', attributes: ['id', 'name', 'email', 'phoneNumber'] },
-        { model: Room, as: 'room', attributes: ['id', 'roomName', 'address'] }
+        hostInclude,
+        { model: Room, as: 'room', attributes: ['id', 'roomName'] },
+        depositAgreementInclude
       ],
-      order: [['holdRequestedAt', 'ASC']],
+      order: [['holdRequestedAt', 'DESC']],
       limit: parseInt(limit),
-      offset
+      offset,
+      distinct: true
     });
+
+    // PRD 상태명 매핑
+    const resolveStatus = (c) => {
+      if (c.checkoutStatus === 'HOLD_REQUESTED') return 'REQUESTED';
+      if (c.checkoutStatus === 'HOST_PENDING') {
+        return c.depositAgreement?.status === 'SUBMITTED' ? 'HOST_SUBMITTED' : 'APPROVED';
+      }
+      if (c.checkoutStatus === 'HOST_CONFIRMED') {
+        if (c.depositAgreement?.status === 'AUTO_RETURNED') return 'AUTO_REFUNDED';
+        return 'AGREED';
+      }
+      return 'UNKNOWN';
+    };
 
     return success(res, {
       holds: contracts.map(c => ({
         contractId: c.id,
-        guest: c.guest,
-        host: c.host,
-        room: c.room ? { id: c.room.id, roomName: c.room.roomName, address: c.room.address } : null,
+        room: c.room ? { id: c.room.id, roomName: c.room.roomName } : null,
+        guest: { id: c.guest?.id, name: c.guest?.name },
+        host: { id: c.host?.id, name: c.host?.name },
         deposit: c.deposit,
-        holdRequestedAt: c.holdRequestedAt,
+        deductRequestAmount: c.depositAgreement?.deductAmount ?? null,
         holdReason: c.deductionReason,
-        holdRemainingMs: c.holdRemainingMs
+        holdRequestedAt: c.holdRequestedAt,
+        holdApprovedAt: c.holdApprovedAt,
+        holdStatus: resolveStatus(c)
       })),
       pagination: {
         total: count,
         page: parseInt(page),
         limit: parseInt(limit),
-        totalPages: Math.ceil(count / limit)
+        totalPages: Math.ceil(count / parseInt(limit))
       }
-    }, '보증금 보류 신청 목록을 조회했습니다.');
+    }, '보증금 보류 목록을 조회했습니다.');
 
   } catch (err) {
-    console.error('보증금 보류 신청 목록 조회 오류:', err);
+    console.error('보증금 보류 목록 조회 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
+};
+
+/**
+ * 보증금 보류 상세 조회
+ * GET /api/admin/deposits/:contractId
+ */
+const getDepositHoldDetail = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+
+    const contract = await Contract.findOne({
+      where: { id: contractId, status: 'COMPLETED' },
+      include: [
+        { model: User, as: 'guest', attributes: ['id', 'name', 'email', 'phoneNumber'] },
+        { model: User, as: 'host', attributes: ['id', 'name', 'email', 'phoneNumber'] },
+        { model: Room, as: 'room', attributes: ['id', 'roomName', 'address'] },
+        {
+          model: DepositAgreement,
+          as: 'depositAgreement',
+          attributes: { exclude: [] }
+        }
+      ]
+    });
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    // 상태 변경 로그 (보증금 보류 관련 타입만)
+    const logs = await ContractStatusLog.findAll({
+      where: {
+        contractId,
+        metadata: { [Op.like]: '%DEPOSIT%' }
+      },
+      order: [['createdAt', 'ASC']],
+      attributes: ['id', 'fromStatus', 'toStatus', 'changedBy', 'changedByUserId', 'reason', 'metadata', 'createdAt']
+    });
+
+    const resolveStatus = (c) => {
+      if (c.checkoutStatus === 'HOLD_REQUESTED') return 'REQUESTED';
+      if (c.checkoutStatus === 'HOST_PENDING') {
+        return c.depositAgreement?.status === 'SUBMITTED' ? 'HOST_SUBMITTED' : 'APPROVED';
+      }
+      if (c.checkoutStatus === 'HOST_CONFIRMED') {
+        if (c.depositAgreement?.status === 'AUTO_RETURNED') return 'AUTO_REFUNDED';
+        return 'AGREED';
+      }
+      return null;
+    };
+
+    return success(res, {
+      // 기본 계약 정보
+      contractId: contract.id,
+      checkInDate: contract.checkInDate,
+      checkOutDate: contract.checkOutDate,
+      guest: contract.guest,
+      host: contract.host,
+      room: contract.room,
+      deposit: contract.deposit,
+      // 보류 신청 정보
+      holdStatus: resolveStatus(contract),
+      holdReason: contract.deductionReason,
+      holdRequestedAt: contract.holdRequestedAt,
+      holdApprovedAt: contract.holdApprovedAt,
+      // 합의 정보
+      depositAgreement: contract.depositAgreement ? {
+        id: contract.depositAgreement.id,
+        deductAmount: contract.depositAgreement.deductAmount,
+        agreementText: contract.depositAgreement.agreementText,
+        status: contract.depositAgreement.status,
+        submittedAt: contract.depositAgreement.submittedAt,
+        acceptedAt: contract.depositAgreement.acceptedAt
+      } : null,
+      refundableDeposit: contract.refundableDeposit,
+      depositStatus: contract.depositStatus,
+      // 상태 변경 로그
+      logs: logs.map(l => ({
+        id: l.id,
+        fromStatus: l.fromStatus,
+        toStatus: l.toStatus,
+        changedBy: l.changedBy,
+        reason: l.reason,
+        metadata: typeof l.metadata === 'string' ? JSON.parse(l.metadata) : l.metadata,
+        createdAt: l.createdAt
+      }))
+    }, '보증금 보류 상세 조회 성공');
+
+  } catch (err) {
+    console.error('보증금 보류 상세 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 보증금 보류 신청 목록 조회 (구버전 - 하위호환용, pending-holds 라우트 유지)
+ * GET /api/admin/deposits/pending-holds
+ */
+const getPendingDepositHolds = async (req, res) => {
+  req.query.status = 'REQUESTED';
+  return getDepositHolds(req, res);
 };
 
 /**
@@ -3109,7 +3298,7 @@ const approveDepositHold = async (req, res) => {
 
   try {
     const { contractId } = req.params;
-    const adminId = req.user.id;
+    const adminId = req.admin.id;
 
     const contract = await Contract.findByPk(contractId, {
       include: [
@@ -3147,8 +3336,8 @@ const approveDepositHold = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
-      changedBy: adminId,
-      changedByRole: 'admin',
+      changedBy: 'ADMIN',
+      changedByUserId: adminId,
       reason: '관리자 보증금 보류 승인',
       metadata: JSON.stringify({
         type: 'DEPOSIT_HOLD_APPROVED',
@@ -3227,7 +3416,7 @@ const rejectDepositHold = async (req, res) => {
 
   try {
     const { contractId } = req.params;
-    const adminId = req.user.id;
+    const adminId = req.admin.id;
     const { reason } = req.body;
 
     const contract = await Contract.findByPk(contractId, { transaction });
@@ -3270,8 +3459,8 @@ const rejectDepositHold = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
-      changedBy: adminId,
-      changedByRole: 'admin',
+      changedBy: 'ADMIN',
+      changedByUserId: adminId,
       reason: reason || '관리자 보증금 보류 거절',
       metadata: JSON.stringify({
         type: 'DEPOSIT_HOLD_REJECTED',
@@ -3334,7 +3523,7 @@ const forceDepositHold = async (req, res) => {
 
   try {
     const { contractId } = req.params;
-    const adminId = req.user.id;
+    const adminId = req.admin.id;
     const { reason } = req.body;
 
     if (!reason || !reason.trim()) {
@@ -3385,8 +3574,8 @@ const forceDepositHold = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
-      changedBy: adminId,
-      changedByRole: 'admin',
+      changedBy: 'ADMIN',
+      changedByUserId: adminId,
       reason: `관리자 강제 반환보류: ${reason.trim()}`,
       metadata: JSON.stringify({
         type: 'DEPOSIT_FORCE_HELD',
@@ -3444,6 +3633,119 @@ const forceDepositHold = async (req, res) => {
 // ============================================
 // 알림톡 관리
 // ============================================
+
+/**
+ * 보증금 환불 재시도
+ * POST /api/admin/deposits/:contractId/retry-refund
+ * 정책: PG 환불 실패(REFUND_FAILED) 건에 대해 관리자가 수동 재시도
+ */
+const retryDepositRefund = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const adminId = req.admin.id;
+
+    const contract = await Contract.findByPk(contractId);
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.depositStatus !== 'REFUND_FAILED') {
+      return error(res, {
+        code: 4680,
+        message: '환불 실패 상태의 계약만 재시도할 수 있습니다.'
+      }, 400);
+    }
+
+    const refundableDeposit = contract.refundableDeposit || 0;
+    if (refundableDeposit <= 0) {
+      return error(res, {
+        code: 4681,
+        message: '환불할 보증금이 없습니다.'
+      }, 400);
+    }
+
+    const payment = await Payment.findOne({
+      where: { contractId: contract.id, status: { [Op.in]: ['DONE', 'PARTIAL_CANCELED'] } }
+    });
+
+    if (!payment) {
+      return error(res, {
+        code: 4682,
+        message: '원결제 정보를 찾을 수 없습니다.'
+      }, 404);
+    }
+
+    // PG 환불 재시도
+    const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+    const newBalance = payment.balanceAmount - refundableDeposit;
+    const canceltype = newBalance === 0 ? '0' : '1';
+
+    try {
+      await paytagClient.cancelPayment({
+        orderno,
+        orgpaydate,
+        orgtranamt,
+        cancelamt: refundableDeposit,
+        canceltype
+      });
+    } catch (pgErr) {
+      // 재시도도 실패 시 로그 기록
+      await PaymentFailureLog.create({
+        contractId: contract.id,
+        orderId: payment.orderId || `DEPOSIT_REFUND_RETRY_${contract.id}`,
+        failureCode: pgErr.paytagErrorCode || 'PG_CANCEL_FAILED',
+        failureMessage: pgErr.paytagErrorMessage || pgErr.message,
+        requestData: {
+          type: 'DEPOSIT_REFUND_RETRY',
+          cancelamt: refundableDeposit,
+          retriedByAdminId: adminId
+        },
+        responseData: pgErr.paytagResponse || null
+      });
+
+      return error(res, {
+        code: 4900,
+        message: `PG 환불 재시도 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
+        pgErrorCode: pgErr.paytagErrorCode
+      }, 502);
+    }
+
+    // PG 성공 시 상태 업데이트
+    await payment.update({
+      balanceAmount: newBalance,
+      status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+    });
+
+    // 원래 확정됐던 depositStatus 복원
+    const restoredStatus = contract.depositDeduction > 0 ? 'DEDUCTION_CONFIRMED' : 'RETURN_CONFIRMED';
+    await contract.update({ depositStatus: restoredStatus });
+
+    await ContractStatusLog.create({
+      contractId: contract.id,
+      fromStatus: 'COMPLETED',
+      toStatus: 'COMPLETED',
+      changedBy: 'ADMIN',
+      changedByUserId: adminId,
+      reason: `관리자 보증금 환불 재시도 성공 (환불액: ${refundableDeposit.toLocaleString()}원)`,
+      metadata: JSON.stringify({
+        type: 'DEPOSIT_REFUND_RETRIED',
+        refundableDeposit,
+        previousStatus: 'REFUND_FAILED',
+        restoredStatus
+      })
+    });
+
+    return success(res, {
+      contractId: contract.id,
+      depositStatus: restoredStatus,
+      refundedAmount: refundableDeposit
+    }, '보증금 환불 재시도 성공');
+
+  } catch (err) {
+    console.error('보증금 환불 재시도 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
 
 /**
  * 알림톡 템플릿 목록 조회
@@ -3748,10 +4050,13 @@ module.exports = {
   updateRentalOrderDeliveryStatus,
 
   // 보증금 보류 관리
+  getDepositHolds,
+  getDepositHoldDetail,
   getPendingDepositHolds,
   approveDepositHold,
   rejectDepositHold,
   forceDepositHold,
+  retryDepositRefund,
 
   // 알림톡 관리
   getAlimtalkTemplates,

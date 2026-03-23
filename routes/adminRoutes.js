@@ -9,6 +9,7 @@ const noticeController = require('../controllers/noticeController');
 const faqController = require('../controllers/faqController');
 const inquiryController = require('../controllers/inquiryController');
 const adminReceiptController = require('../controllers/adminReceiptController');
+const adminPayoutController = require('../controllers/adminPayoutController');
 const { authenticateAdmin, requireAdminRole } = require('../middleware/auth');
 const actionLogger = require('../middleware/actionLogger');
 const { adminAuthLimiter, adminApiLimiter } = require('../middleware/rateLimiter');
@@ -298,8 +299,14 @@ router.patch(
 // 보증금 보류 관리
 // ============================================
 
-// 보류 신청 목록 조회
+// 보증금 보류 목록 조회 (전체 상태 + 필터)
+router.get('/deposits', adminController.getDepositHolds);
+
+// 보류 신청 목록 조회 (하위호환 - :contractId 라우트보다 먼저 등록)
 router.get('/deposits/pending-holds', adminController.getPendingDepositHolds);
+
+// 보증금 보류 상세 조회
+router.get('/deposits/:contractId', adminController.getDepositHoldDetail);
 
 // 보류 신청 승인 (super_admin, admin만 가능)
 router.post(
@@ -320,6 +327,13 @@ router.post(
   '/deposits/:contractId/force-hold',
   requireAdminRole(['super_admin', 'admin']),
   adminController.forceDepositHold
+);
+
+// 보증금 환불 재시도 (REFUND_FAILED → PG 재시도)
+router.post(
+  '/deposits/:contractId/retry-refund',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.retryDepositRefund
 );
 
 // ============================================
@@ -343,30 +357,86 @@ router.post(
 );
 
 // ============================================
-// 정산 관리
+// 정산 관리 (settlements 테이블 기반)
 // ============================================
 
 // 정산 목록 조회
 router.get('/settlements', adminSettlementController.getAdminSettlements);
 
-// 정산 엑셀 내보내기 (⚠️ :contractId 라우트보다 먼저 등록)
-router.get('/settlements/export', adminSettlementController.exportAdminSettlements);
-
-// 정산 상세 조회
-router.get('/settlements/:contractId', adminSettlementController.getAdminSettlementDetail);
-
-// 정산 완료 처리 (super_admin, admin만 가능)
-router.patch(
-  '/settlements/:contractId/complete',
-  requireAdminRole(['super_admin', 'admin']),
-  adminSettlementController.markSettlementComplete
-);
+// 정산 상세 조회 (⚠️ action 라우트보다 먼저)
+router.get('/settlements/:settlementId', adminSettlementController.getAdminSettlementDetail);
 
 // 정산 보류 처리 (super_admin, admin만 가능)
 router.patch(
-  '/settlements/:contractId/hold',
+  '/settlements/:settlementId/hold',
   requireAdminRole(['super_admin', 'admin']),
   adminSettlementController.holdSettlement
+);
+
+// 정산 보류 해제 (super_admin, admin만 가능)
+router.patch(
+  '/settlements/:settlementId/unhold',
+  requireAdminRole(['super_admin', 'admin']),
+  adminSettlementController.unholdSettlement
+);
+
+// 정산 금액 조정 (super_admin, admin만 가능)
+router.patch(
+  '/settlements/:settlementId/adjust',
+  requireAdminRole(['super_admin', 'admin']),
+  adminSettlementController.adjustSettlement
+);
+
+// 정산 메모 업데이트
+router.patch(
+  '/settlements/:settlementId/note',
+  requireAdminRole(['super_admin', 'admin']),
+  adminSettlementController.updateSettlementNote
+);
+
+// ============================================
+// 지급 관리 (Payout)
+// ============================================
+
+// 지급 목록 조회
+router.get('/payouts', adminPayoutController.getPayouts);
+
+// 지급 상세 조회 (⚠️ action 라우트보다 먼저)
+router.get('/payouts/:payoutId', adminPayoutController.getPayoutDetail);
+
+// 지급 실행 (PAYABLE → COMPLETED)
+router.post(
+  '/payouts/:payoutId/execute',
+  requireAdminRole(['super_admin', 'admin']),
+  adminPayoutController.executePayout
+);
+
+// 지급 실패 처리
+router.post(
+  '/payouts/:payoutId/fail',
+  requireAdminRole(['super_admin', 'admin']),
+  adminPayoutController.failPayout
+);
+
+// 지급 취소
+router.post(
+  '/payouts/:payoutId/cancel',
+  requireAdminRole(['super_admin', 'admin']),
+  adminPayoutController.cancelPayout
+);
+
+// 지급 재시도 (FAILED → PAYABLE)
+router.post(
+  '/payouts/:payoutId/retry',
+  requireAdminRole(['super_admin', 'admin']),
+  adminPayoutController.retryPayout
+);
+
+// 지급 메모 업데이트
+router.patch(
+  '/payouts/:payoutId/note',
+  requireAdminRole(['super_admin', 'admin']),
+  adminPayoutController.updatePayoutNote
 );
 
 // ============================================

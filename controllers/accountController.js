@@ -108,10 +108,10 @@ const getBankNameByCode = (bankCode) => {
 // 계좌 실명 확인 엔드포인트
 const verifyAccount = async (req, res) => {
   try {
-    const { bank_code, account_num, account_holder_name } = req.body;
+    const { bank_code, account_num } = req.body;
 
     // 입력값 검증
-    if (!bank_code || !account_num || !account_holder_name) {
+    if (!bank_code || !account_num) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
@@ -131,16 +131,12 @@ const verifyAccount = async (req, res) => {
       return error(res, { code: 4302, message: verificationResult.error || '계좌 확인에 실패했습니다.' }, 400);
     }
 
-    // 예금주명 비교
-    const verified = verificationResult.accountHolderName === account_holder_name;
-
-    // 실명 확인만 하고 저장은 하지 않음
+    // API에서 받은 예금주명을 그대로 반환
     return success(res, {
-      verified: verified,
+      verified: true,
       accountHolderName: verificationResult.accountHolderName,
-      bankName: getBankNameByCode(bankCode),
-      inputName: account_holder_name
-    }, verified ? '계좌 확인이 완료되었습니다.' : '계좌 정보가 일치하지 않습니다.');
+      bankName: getBankNameByCode(bankCode)
+    }, '계좌 확인이 완료되었습니다.');
 
   } catch (err) {
     console.error('계좌 확인 오류:', err);

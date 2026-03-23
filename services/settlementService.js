@@ -3,8 +3,38 @@
  * 정산 금액 계산 및 상태 관리 로직
  */
 
+const { holidayCache } = require('../utils/holidayCache');
+
 /**
- * 영업일 추가 계산 (주말 제외, 공휴일은 미포함)
+ * Date → 'YYYY-MM-DD' 문자열 변환 (로컬 시간 기준)
+ * @param {Date} date
+ * @returns {string}
+ */
+const toDateString = (date) => {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+/**
+ * 특정 날짜가 공휴일인지 확인 (캐시 기반, 동기)
+ * holidayCache에 해당 연도가 없으면 false 반환 (폴백)
+ *
+ * @param {Date} date
+ * @returns {boolean}
+ */
+const isHolidayCached = (date) => {
+  const year = date.getFullYear();
+  const cache = holidayCache[year];
+  if (!cache) return false; // 캐시 없으면 공휴일 아닌 것으로 처리
+  return cache.has(toDateString(date));
+};
+
+/**
+ * 영업일 추가 계산 (주말 + 공휴일 제외)
+ * holidayCache가 로드된 경우 공휴일 포함, 미로드 시 주말만 제외
+ *
  * @param {Date} fromDate - 시작일
  * @param {number} businessDays - 추가할 영업일 수
  * @returns {Date} 영업일 기준 결과 날짜
@@ -15,8 +45,8 @@ const addBusinessDays = (fromDate, businessDays) => {
   while (added < businessDays) {
     date.setDate(date.getDate() + 1);
     const dayOfWeek = date.getDay();
-    // 주말(토=6, 일=0) 제외
-    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+    // 주말(토=6, 일=0) 또는 공휴일 제외
+    if (dayOfWeek !== 0 && dayOfWeek !== 6 && !isHolidayCached(date)) {
       added++;
     }
   }
@@ -32,6 +62,17 @@ const addBusinessDays = (fromDate, businessDays) => {
  */
 const calculateSettlementDate = (checkInDate) => {
   return addBusinessDays(new Date(checkInDate), 3);
+};
+
+/**
+ * 지급 가능 날짜 계산 (결제 승인일 + 3영업일)
+ * 정책: PG 정산은 결제 승인 후 영업일 기준 3일 후
+ *
+ * @param {Date|string} approvedAt - 결제 승인 시각
+ * @returns {Date} 지급 가능 날짜
+ */
+const calculatePayoutAvailableDate = (approvedAt) => {
+  return addBusinessDays(new Date(approvedAt), 3);
 };
 
 /**
@@ -199,6 +240,7 @@ const SETTLEMENT_STATUS_LABELS = {
 module.exports = {
   addBusinessDays,
   calculateSettlementDate,
+  calculatePayoutAvailableDate,
   calculateSettlementDateByCheckout,
   getSettlementStatus,
   calculateSettlementAmount,

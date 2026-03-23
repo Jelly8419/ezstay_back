@@ -17,6 +17,13 @@ module.exports = (sequelize) => {
       comment: '계약 ID'
       // references는 models/index.js의 belongsTo에서 정의
     },
+    paymentType: {
+      type: DataTypes.ENUM('CONTRACT', 'HOST_BURDEN'),
+      allowNull: false,
+      defaultValue: 'CONTRACT',
+      field: 'payment_type',
+      comment: '결제 유형 (CONTRACT: 계약 결제, HOST_BURDEN: 호스트 부담금)'
+    },
     paymentKey: {
       type: DataTypes.STRING(255),
       allowNull: false,
@@ -127,6 +134,10 @@ module.exports = (sequelize) => {
       {
         name: 'idx_payment_status',
         fields: ['status']
+      },
+      {
+        name: 'idx_payment_type',
+        fields: ['payment_type']
       }
     ]
   });

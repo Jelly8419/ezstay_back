@@ -1,4 +1,4 @@
-const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalItemReservation, RentalItem, Settlement, DepositAgreement } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const paytagClient = require('../utils/paytagClient');
@@ -23,6 +23,7 @@ const {
 } = require('../utils/rentalOrderHelper');
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
+const { calculateSettlementDate, calculatePayoutAvailableDate, calculateSettlementAmount } = require('../services/settlementService');
 
 /**
  * 계약 요청 생성 (게스트 -> 호스트)
@@ -138,7 +139,6 @@ const createContractRequest = async (req, res) => {
       checkOutTime: room.checkOutTime,
       ezService: room.ezService ? {
         cleaningService: room.ezService.cleaningService,
-        autoPasswordChange: room.ezService.autoPasswordChange,
       } : null,
       capturedAt: new Date().toISOString()
     };
@@ -563,6 +563,12 @@ const getGuestContracts = async (req, res) => {
           model: User,
           as: 'host',
           attributes: ['id', 'name', 'nickname', 'phoneNumber']
+        },
+        {
+          model: DepositAgreement,
+          as: 'depositAgreement',
+          attributes: ['id', 'status', 'deductAmount'],
+          required: false
         }
       ],
       order: [['createdAt', 'DESC']]
@@ -671,6 +677,9 @@ const getGuestContracts = async (req, res) => {
           deposit: contract.deposit,
           checkoutRequested: contract.checkoutRequested,
 
+          // 보증금 합의 상태 (동의 버튼 분기용)
+          depositAgreementStatus: contract.depositAgreement?.status || null,
+
           createdAt: contract.createdAt
         };
       })
@@ -726,6 +735,12 @@ const getHostContracts = async (req, res) => {
           model: User,
           as: 'guest',
           attributes: ['id', 'name', 'nickname', 'phoneNumber', 'email']
+        },
+        {
+          model: DepositAgreement,
+          as: 'depositAgreement',
+          attributes: ['id', 'status', 'deductAmount'],
+          required: false
         }
       ],
       order: [['createdAt', 'DESC']]
@@ -786,6 +801,9 @@ const getHostContracts = async (req, res) => {
           checkoutRequested: contract.checkoutRequested,
           hostCheckedOut: contract.hostCheckedOut,
 
+          // 보증금 합의 상태 (버튼 분기용)
+          depositAgreementStatus: contract.depositAgreement?.status || null,
+
           // 게스트 정보 (연락처는 결제 완료 이후 상태에서만 노출)
           guest: {
             id: contract.guest.id,
@@ -838,6 +856,11 @@ const getContractDetail = async (req, res) => {
           model: User,
           as: 'guest',
           attributes: ['id', 'name', 'nickname', 'phoneNumber', 'email']
+        },
+        {
+          model: DepositAgreement,
+          as: 'depositAgreement',
+          required: false
         }
       ]
     });
@@ -957,6 +980,18 @@ const getContractDetail = async (req, res) => {
           refundableDeposit: contract.refundableDeposit,
           checkoutRequested: contract.checkoutRequested,
           hostCheckedOut: contract.hostCheckedOut,
+
+          // 보증금 합의 정보
+          depositAgreement: contract.depositAgreement ? {
+            id: contract.depositAgreement.id,
+            deductAmount: contract.depositAgreement.deductAmount,
+            agreementText: contract.depositAgreement.agreementText,
+            holdReason: contract.depositAgreement.holdReason,
+            status: contract.depositAgreement.status,
+            submittedAt: contract.depositAgreement.submittedAt,
+            acceptedAt: contract.depositAgreement.acceptedAt,
+            refundableAmount: (contract.deposit || 0) - contract.depositAgreement.deductAmount
+          } : null,
 
           // 시점 정보
           createdAt: contract.createdAt,
@@ -1764,6 +1799,61 @@ const requestRefund = async (req, res) => {
       });
     }
 
+    // 자동 승인(입주 전)이면 PG 취소 즉시 처리
+    if (autoApprove && refundData.finalRefundAmount > 0) {
+      const payment = await Payment.findOne({
+        where: { contractId, status: { [Op.in]: ['DONE', 'PARTIAL_CANCELED'] } },
+        transaction
+      });
+
+      if (payment) {
+        try {
+          const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+          const cancelamt = refundData.finalRefundAmount;
+          const newBalance = payment.balanceAmount - cancelamt;
+          const canceltype = newBalance === 0 ? '0' : '1';
+
+          const cancelResp = await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, cancelamt, canceltype });
+
+          await payment.update({
+            balanceAmount: newBalance,
+            status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+          }, { transaction });
+
+          console.log(`[requestRefund] PayTag 취소 완료: contractId=${contractId}, cancelamt=${cancelamt}, restamt=${cancelResp.restamt}`);
+
+          // 위약금이 있으면 호스트에게 GUEST_PENALTY Payout 생성
+          if (refundData.penaltyAmount > 0) {
+            const penaltyPayoutAvailableDate = calculatePayoutAvailableDate(payment.approvedAt);
+            const hostBankAccount = await require('../models').UserBankAccount.findOne({
+              where: { userId: contract.hostId, isPrimary: true }
+            });
+            await Payout.create({
+              contractId: contract.id,
+              refundId: refund.id,
+              payoutType: 'GUEST_PENALTY',
+              recipientType: 'HOST',
+              recipientId: contract.hostId,
+              amount: refundData.penaltyAmount,
+              status: 'PENDING',
+              payableAfter: penaltyPayoutAvailableDate,
+              bankName: hostBankAccount?.bankName || null,
+              accountNumber: hostBankAccount?.accountNumber || null,
+              accountHolder: hostBankAccount?.accountHolder || null
+            }, { transaction });
+          }
+        } catch (pgErr) {
+          await transaction.rollback();
+          console.error('[requestRefund] PayTag 취소 실패:', pgErr.message);
+          return error(res, {
+            code: 4900,
+            message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
+            pgErrorCode: pgErr.paytagErrorCode
+          }, 502);
+        }
+      }
+    }
+
     await transaction.commit();
 
     // 알림톡 발송 (4-5 게스트 취소) - 트랜잭션 커밋 후
@@ -2129,6 +2219,7 @@ const confirmPayment = async (req, res) => {
     // Payment 레코드 생성 (테스트 모드에서도 실제 금액으로 저장)
     const payment = await Payment.create({
       contractId: contract.id,
+      paymentType: 'CONTRACT',
       paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
       orderId: contract.orderId,
       method: paymentMethod,
@@ -2230,6 +2321,45 @@ const confirmPayment = async (req, res) => {
         }
       );
     }
+
+    // Settlement + Payout 생성 (CONTRACT_SETTLEMENT)
+    const payoutAvailableDate = calculatePayoutAvailableDate(now);
+    const settlementExpectedDate = calculateSettlementDate(contract.checkInDate);
+    const settlementAmounts = calculateSettlementAmount(contract);
+
+    const settlement = await Settlement.create({
+      contractId: contract.id,
+      hostId: contract.hostId,
+      status: 'PENDING',
+      rentalFee: settlementAmounts.rentalFee,
+      maintenanceFee: settlementAmounts.maintenanceFee,
+      cleaningFee: settlementAmounts.cleaningFee,
+      hostPlatformFee: settlementAmounts.platformFee,
+      refundDeduction: 0,
+      grossAmount: settlementAmounts.grossSettlement,
+      netAmount: settlementAmounts.grossSettlement, // 환불 없으므로 동일
+      expectedDate: settlementExpectedDate,
+      payoutAvailableDate
+    }, { transaction });
+
+    // 호스트 계좌 정보 조회
+    const hostBankAccount = await require('../models').UserBankAccount.findOne({
+      where: { userId: contract.hostId, isPrimary: true }
+    });
+
+    await Payout.create({
+      contractId: contract.id,
+      settlementId: settlement.id,
+      payoutType: 'CONTRACT_SETTLEMENT',
+      recipientType: 'HOST',
+      recipientId: contract.hostId,
+      amount: settlementAmounts.grossSettlement,
+      status: 'PENDING',
+      payableAfter: payoutAvailableDate,
+      bankName: hostBankAccount?.bankName || null,
+      accountNumber: hostBankAccount?.accountNumber || null,
+      accountHolder: hostBankAccount?.accountHolder || null
+    }, { transaction });
 
     await transaction.commit();
 
@@ -2672,6 +2802,7 @@ const cancelContractByHost = async (req, res) => {
     const { cancellationReason } = req.body;
 
     if (!cancellationReason || !cancellationReason.trim()) {
+      await transaction.rollback();
       return error(res, {
         code: 4620,
         message: '취소 사유를 입력해주세요.'
@@ -2681,14 +2812,17 @@ const cancelContractByHost = async (req, res) => {
     const contract = await Contract.findByPk(contractId, { transaction });
 
     if (!contract) {
+      await transaction.rollback();
       return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
     }
 
     if (contract.hostId !== hostId) {
+      await transaction.rollback();
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
     if (contract.status !== 'PAYMENT_COMPLETED') {
+      await transaction.rollback();
       return error(res, {
         code: 4621,
         message: '결제 완료 상태에서만 호스트 취소가 가능합니다.'
@@ -2772,12 +2906,39 @@ const cancelContractByHost = async (req, res) => {
       approvedAt: cancellationDate
     }, { transaction });
 
-    // TODO: PayTag 환불 API 문서 수령 후 구현 필요
-    // 1. 게스트 PG 전액 환불: refund.totalRefundAmount
-    // 2. 호스트 부담금 결제: refund.hostBurdenAmount (위약금 + 게스트 서비스 수수료)
-    // 3. 게스트 보전 지급: refund.guestCompensationAmount (위약금)
-    // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
+    // PayTag PG 전액 환불 (호스트 귀책 → 게스트 전액 반환)
+    if (refundData.finalRefundAmount > 0) {
+      const payment = await Payment.findOne({
+        where: { contractId: contract.id, status: { [Op.in]: ['DONE', 'PARTIAL_CANCELED'] } },
+        transaction
+      });
 
+      if (payment) {
+        try {
+          const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+          const cancelamt = refundData.finalRefundAmount;
+          const newBalance = payment.balanceAmount - cancelamt;
+          const canceltype = newBalance === 0 ? '0' : '1';
+
+          const cancelResp = await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, cancelamt, canceltype });
+
+          await payment.update({
+            balanceAmount: newBalance,
+            status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+          }, { transaction });
+
+          console.log(`[cancelByHost] PayTag 취소 완료: contractId=${contract.id}, cancelamt=${cancelamt}, restamt=${cancelResp.restamt}`);
+        } catch (pgErr) {
+          await transaction.rollback();
+          console.error('[cancelByHost] PayTag 취소 실패:', pgErr.message);
+          return error(res, {
+            code: 4900,
+            message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
+            pgErrorCode: pgErr.paytagErrorCode
+          }, 502);
+        }
+      }
+    }
     await contract.update({
       status: 'CANCELLED_BY_HOST',
       cancellationReason,
@@ -2789,8 +2950,8 @@ const cancelContractByHost = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'PAYMENT_COMPLETED',
       toStatus: 'CANCELLED_BY_HOST',
-      changedBy: hostId,
-      changedByRole: 'host',
+      changedBy: 'HOST',
+      changedByUserId: hostId,
       reason: cancellationReason,
       metadata: JSON.stringify({
         cancelledByHost: true,
@@ -2803,6 +2964,9 @@ const cancelContractByHost = async (req, res) => {
         guestCompensationAmount: refund.guestCompensationAmount
       })
     }, { transaction });
+
+    // HOST_CANCELLATION_COMPENSATION Payout은 호스트가 부담금을 PG 결제 완료한 시점에 생성
+    // POST /api/contracts/:contractId/host-burden-payment 참고
 
     await transaction.commit();
 
@@ -2896,8 +3060,8 @@ const requestCancelByHost = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'IN_PROGRESS',
       toStatus: 'IN_PROGRESS', // 상태 변경 없이 취소 요청 기록
-      changedBy: hostId,
-      changedByRole: 'host',
+      changedBy: 'HOST',
+      changedByUserId: hostId,
       reason,
       metadata: JSON.stringify({
         type: 'CANCEL_REQUEST_BY_HOST',
@@ -2947,29 +3111,34 @@ const requestCancelByHost = async (req, res) => {
  * PATCH /api/contracts/:contractId/checkout-hold
  */
 const holdCheckout = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const { contractId } = req.params;
     const hostId = req.user.id;
     const { reason } = req.body;
 
     if (!reason || !reason.trim()) {
+      await transaction.rollback();
       return error(res, {
         code: 4630,
         message: '퇴실 보류 사유를 입력해주세요.'
       }, 400);
     }
 
-    const contract = await Contract.findByPk(contractId);
+    const contract = await Contract.findByPk(contractId, { transaction });
 
     if (!contract) {
+      await transaction.rollback();
       return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
     }
 
     if (contract.hostId !== hostId) {
+      await transaction.rollback();
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
     if (contract.status !== 'COMPLETED') {
+      await transaction.rollback();
       return error(res, {
         code: 4631,
         message: '계약 완료 상태에서만 퇴실 보류가 가능합니다.'
@@ -2977,6 +3146,7 @@ const holdCheckout = async (req, res) => {
     }
 
     if (contract.checkoutStatus !== 'GUEST_COMPLETED') {
+      await transaction.rollback();
       return error(res, {
         code: 4632,
         message: '게스트가 퇴실 완료한 상태에서만 보류가 가능합니다.'
@@ -2985,6 +3155,7 @@ const holdCheckout = async (req, res) => {
 
     // 정책 7.6.3: 퇴실확인 완료 이후에는 보류 신청 불가 (정책 불가역성)
     if (contract.checkoutStatus === 'HOST_CONFIRMED') {
+      await transaction.rollback();
       return error(res, {
         code: 4633,
         message: '퇴실 확인 완료 후에는 보류 신청이 불가합니다.'
@@ -3009,24 +3180,26 @@ const holdCheckout = async (req, res) => {
       holdRequestedAt: now,
       holdRemainingMs,
       deductionReason: reason.trim()
-    });
+    }, { transaction });
 
     // 계약 상태 변경 로그
     await ContractStatusLog.create({
       contractId: contract.id,
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
-      changedBy: hostId,
-      changedByRole: 'host',
+      changedBy: 'HOST',
+      changedByUserId: hostId,
       reason: reason.trim(),
       metadata: JSON.stringify({
         type: 'CHECKOUT_HOLD_REQUESTED',
         checkoutStatusChange: 'GUEST_COMPLETED → HOLD_REQUESTED',
         holdRemainingMs
       })
-    });
+    }, { transaction });
 
-    // 채팅방 시스템 메시지 발송
+    await transaction.commit();
+
+    // 채팅방 시스템 메시지 발송 (트랜잭션 외부)
     try {
       const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
       if (chatRoom && chatRoom.firebaseChatRoomId) {
@@ -3037,7 +3210,7 @@ const holdCheckout = async (req, res) => {
       console.error('퇴실 보류 신청 시스템 메시지 전송 실패 (무시됨):', chatErr);
     }
 
-    // 게스트에게 알림 발송
+    // 게스트에게 알림 발송 (트랜잭션 외부)
     try {
       await NotificationService.sendNotification({
         userId: contract.guestId,
@@ -3058,6 +3231,7 @@ const holdCheckout = async (req, res) => {
     }, '퇴실 확인 보류가 신청되었습니다. 관리자 승인을 기다립니다.');
 
   } catch (err) {
+    await transaction.rollback();
     console.error('퇴실 보류 신청 처리 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
@@ -3068,12 +3242,14 @@ const holdCheckout = async (req, res) => {
  * POST /api/contracts/:contractId/deposit-agreement
  */
 const submitDepositAgreement = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const { contractId } = req.params;
     const hostId = req.user.id;
     const { deductAmount, agreementText } = req.body;
 
     if (deductAmount == null || deductAmount < 0) {
+      await transaction.rollback();
       return error(res, {
         code: 4640,
         message: '차감 금액을 올바르게 입력해주세요. (0 이상)'
@@ -3081,23 +3257,27 @@ const submitDepositAgreement = async (req, res) => {
     }
 
     if (!agreementText || !agreementText.trim()) {
+      await transaction.rollback();
       return error(res, {
         code: 4641,
         message: '합의 내용을 입력해주세요.'
       }, 400);
     }
 
-    const contract = await Contract.findByPk(contractId);
+    const contract = await Contract.findByPk(contractId, { transaction });
 
     if (!contract) {
+      await transaction.rollback();
       return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
     }
 
     if (contract.hostId !== hostId) {
+      await transaction.rollback();
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
     if (contract.status !== 'COMPLETED') {
+      await transaction.rollback();
       return error(res, {
         code: 4642,
         message: '계약 완료 상태에서만 합의 제출이 가능합니다.'
@@ -3105,13 +3285,25 @@ const submitDepositAgreement = async (req, res) => {
     }
 
     if (contract.checkoutStatus !== 'HOST_PENDING') {
+      await transaction.rollback();
       return error(res, {
         code: 4643,
         message: '관리자 보류 승인 후 합의 상태에서만 합의 내용을 제출할 수 있습니다.'
       }, 400);
     }
 
+    // 게스트가 이미 동의한 경우 수정 불가
+    const existingAgreement = await DepositAgreement.findOne({ where: { contractId: contract.id }, transaction });
+    if (existingAgreement && existingAgreement.status === 'ACCEPTED') {
+      await transaction.rollback();
+      return error(res, {
+        code: 4647,
+        message: '게스트가 이미 합의에 동의하여 수정이 불가합니다.'
+      }, 409);
+    }
+
     if (deductAmount > (contract.deposit || 0)) {
+      await transaction.rollback();
       return error(res, {
         code: 4644,
         message: `차감 금액은 보증금(${contract.deposit?.toLocaleString()}원)을 초과할 수 없습니다.`
@@ -3120,6 +3312,7 @@ const submitDepositAgreement = async (req, res) => {
 
     // 정책 7.9.1: 합의 데드라인 = 관리자 보류 승인 시점 + 10일
     if (!contract.holdApprovedAt) {
+      await transaction.rollback();
       return error(res, {
         code: 4645,
         message: '관리자 보류 승인 정보가 없습니다. 관리자에게 문의해주세요.'
@@ -3129,6 +3322,7 @@ const submitDepositAgreement = async (req, res) => {
     const deadline = new Date(contract.holdApprovedAt);
     deadline.setDate(deadline.getDate() + 10);
     if (new Date() > deadline) {
+      await transaction.rollback();
       return error(res, {
         code: 4646,
         message: '합의 기한(보류 승인 후 10일)이 경과하여 합의 제출이 불가합니다. 보증금이 게스트에게 전액 반환됩니다.'
@@ -3145,7 +3339,7 @@ const submitDepositAgreement = async (req, res) => {
       submittedAt: new Date(),
       status: 'SUBMITTED',
       acceptedAt: null
-    });
+    }, { transaction });
 
     // checkoutStatus는 HOST_PENDING 유지 (합의 제출 여부는 DepositAgreement.status로 판단)
 
@@ -3154,15 +3348,17 @@ const submitDepositAgreement = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
-      changedBy: hostId,
-      changedByRole: 'host',
+      changedBy: 'HOST',
+      changedByUserId: hostId,
       reason: `합의 내용 제출: 차감 ${deductAmount.toLocaleString()}원`,
       metadata: JSON.stringify({
         type: 'DEPOSIT_AGREEMENT_SUBMITTED',
         deductAmount,
         agreementText: agreementText.trim()
       })
-    });
+    }, { transaction });
+
+    await transaction.commit();
 
     // 채팅방 시스템 메시지 발송
     try {
@@ -3210,6 +3406,7 @@ const submitDepositAgreement = async (req, res) => {
     }, '합의 내용이 제출되었습니다. 게스트의 동의를 기다립니다.');
 
   } catch (err) {
+    await transaction.rollback();
     console.error('합의 내용 제출 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
@@ -3321,9 +3518,15 @@ const acceptDepositAgreement = async (req, res) => {
     const depositDeduction = contract.depositAgreement.deductAmount;
     const refundableDeposit = Math.max(0, (contract.deposit || 0) - depositDeduction);
 
-    // 정책 7.9.3 조건 A: 게스트 동의 완료
     // 차감 금액에 따라 차감확정/반환확정 전이
     const depositStatus = depositDeduction > 0 ? 'DEDUCTION_CONFIRMED' : 'RETURN_CONFIRMED';
+
+    // CONTRACT 타입 결제 조회 (보증금은 계약 결제에 포함)
+    const payment = await Payment.findOne({
+      where: { contractId: contract.id, paymentType: 'CONTRACT', status: 'DONE' },
+      order: [['createdAt', 'DESC']],
+      transaction
+    });
 
     // 합의 동의 처리
     await contract.depositAgreement.update({
@@ -3347,8 +3550,8 @@ const acceptDepositAgreement = async (req, res) => {
       contractId: contract.id,
       fromStatus: 'COMPLETED',
       toStatus: 'COMPLETED',
-      changedBy: guestId,
-      changedByRole: 'guest',
+      changedBy: 'GUEST',
+      changedByUserId: guestId,
       reason: '보증금 합의 동의',
       metadata: JSON.stringify({
         type: 'DEPOSIT_AGREEMENT_ACCEPTED',
@@ -3358,12 +3561,93 @@ const acceptDepositAgreement = async (req, res) => {
       })
     }, { transaction });
 
-    // TODO: 차감확정 시 Settlement 도메인에 차감분 정산 대상 전달
-    // if (depositStatus === 'DEDUCTION_CONFIRMED' && depositDeduction > 0) {
-    //   await settlementService.createDepositDeductionSettlement(contract.id, depositDeduction, transaction);
-    // }
+    // 차감확정 시 DEPOSIT_DEDUCTION Payout 생성 (호스트 수령)
+    if (depositStatus === 'DEDUCTION_CONFIRMED' && depositDeduction > 0) {
+      const deductionPayableDate = payment
+        ? calculatePayoutAvailableDate(payment.approvedAt)
+        : new Date();
+
+      const hostBankAccount = await require('../models').UserBankAccount.findOne({
+        where: { userId: contract.hostId, isPrimary: true }
+      });
+
+      await Payout.create({
+        contractId: contract.id,
+        refundId: null,
+        payoutType: 'DEPOSIT_DEDUCTION',
+        recipientType: 'HOST',
+        recipientId: contract.hostId,
+        amount: depositDeduction,
+        status: 'PENDING',
+        payableAfter: deductionPayableDate,
+        bankName: hostBankAccount?.bankName || null,
+        accountNumber: hostBankAccount?.accountNumber || null,
+        accountHolder: hostBankAccount?.accountHolder || null
+      }, { transaction });
+    }
 
     await transaction.commit();
+
+    // 게스트에게 보증금 부분환불 PG 실행 (트랜잭션 외부 - PG 실패 시 롤백 불가)
+    // refundableDeposit > 0 이고 payment가 있는 경우에만 실행
+    if (refundableDeposit > 0 && payment) {
+      try {
+        const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+        const newBalance = payment.balanceAmount - refundableDeposit;
+        const canceltype = newBalance === 0 ? '0' : '1';
+
+        await paytagClient.cancelPayment({
+          orderno,
+          orgpaydate,
+          orgtranamt,
+          cancelamt: refundableDeposit,
+          canceltype
+        });
+
+        await payment.update({
+          balanceAmount: newBalance,
+          status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+        });
+
+        console.log(`[acceptDepositAgreement] 보증금 부분환불 완료: contractId=${contractId}, refundableDeposit=${refundableDeposit}`);
+      } catch (pgErr) {
+        console.error(`[acceptDepositAgreement] 보증금 부분환불 PG 실패 (contractId=${contractId}):`, pgErr.message);
+
+        // depositStatus를 REFUND_FAILED로 변경하여 관리자가 식별 가능하게 함
+        await contract.update({ depositStatus: 'REFUND_FAILED' });
+
+        // PaymentFailureLog에 실패 기록 저장
+        await PaymentFailureLog.create({
+          contractId: contract.id,
+          orderId: payment.orderId || `DEPOSIT_REFUND_${contract.id}`,
+          failureCode: pgErr.paytagErrorCode || 'PG_CANCEL_FAILED',
+          failureMessage: pgErr.paytagErrorMessage || pgErr.message,
+          requestData: {
+            type: 'DEPOSIT_PARTIAL_REFUND',
+            cancelamt: refundableDeposit,
+            depositDeduction,
+            depositStatus
+          },
+          responseData: pgErr.paytagResponse || null
+        });
+
+        // 상태 변경 로그
+        await ContractStatusLog.create({
+          contractId: contract.id,
+          fromStatus: 'COMPLETED',
+          toStatus: 'COMPLETED',
+          changedBy: 'SYSTEM',
+          changedByUserId: null,
+          reason: `보증금 부분환불 PG 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
+          metadata: JSON.stringify({
+            type: 'DEPOSIT_REFUND_FAILED',
+            refundableDeposit,
+            errorCode: pgErr.paytagErrorCode,
+            errorMessage: pgErr.message
+          })
+        });
+      }
+    }
 
     // 채팅방 시스템 메시지 발송
     try {
@@ -3418,6 +3702,239 @@ const acceptDepositAgreement = async (req, res) => {
   }
 };
 
+/**
+ * 호스트 부담금 결제 정보 조회
+ * GET /api/contracts/:contractId/host-burden-payment-info
+ *
+ * 호스트 귀책 취소 후 호스트가 지불해야 할 부담금 정보를 반환
+ * - hostBurdenAmount: 위약금 + 게스트 서비스수수료
+ * - hostBurdenStatus: PENDING이어야 결제 가능
+ */
+const getHostBurdenPaymentInfo = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const hostId = req.user.id;
+
+    const contract = await Contract.findOne({
+      where: { id: contractId, hostId },
+      include: [
+        { model: Room, as: 'room', attributes: ['id', 'roomName'] },
+        { model: User, as: 'host', attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber'] }
+      ]
+    });
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.status !== 'CANCELLED_BY_HOST') {
+      return error(res, { code: 5001, message: '호스트 귀책 취소 상태에서만 조회할 수 있습니다.' }, 400);
+    }
+
+    const refund = await Refund.findOne({
+      where: { contractId: contract.id },
+      order: [['createdAt', 'DESC']]
+    });
+
+    if (!refund) {
+      return error(res, { code: 5002, message: '환불 내역을 찾을 수 없습니다.' }, 404);
+    }
+
+    if (refund.hostBurdenStatus !== 'PENDING') {
+      return error(res, {
+        code: 5003,
+        message: refund.hostBurdenStatus === 'PAID'
+          ? '이미 결제 완료된 부담금입니다.'
+          : '결제할 수 없는 상태입니다.'
+      }, 400);
+    }
+
+    const testAmount = paytagClient.getTestAmount();
+
+    return success(res, {
+      contractId: contract.id,
+      orderId: contract.orderId,
+      refundId: refund.id,
+      hostBurdenAmount: refund.hostBurdenAmount,
+      hostBurdenStatus: refund.hostBurdenStatus,
+      guestCompensationAmount: refund.guestCompensationAmount,
+      orderName: `호스트 귀책 취소 부담금 (${contract.room?.roomName || ''})`,
+      customerName: contract.host?.name || contract.host?.nickname,
+      customerPhone: contract.host?.phoneNumber || null,
+      ...(testAmount ? { pgAmount: testAmount } : {})
+    }, '호스트 부담금 결제 정보를 조회했습니다.');
+  } catch (err) {
+    console.error('호스트 부담금 결제 정보 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 호스트 부담금 결제 승인 (PayTag API 호출)
+ * POST /api/contracts/:contractId/host-burden-payment
+ *
+ * Body: { recvPayparam, payType, orderId, amount }
+ *
+ * 처리 순서:
+ * 1. PayTag 결제 승인
+ * 2. Payment 레코드 생성 (HOST_BURDEN 타입)
+ * 3. Refund.hostBurdenStatus = 'PAID'
+ * 4. HOST_CANCELLATION_COMPENSATION Payout 생성 (payableAfter = 부담금 결제일 + 3영업일)
+ */
+const confirmHostBurdenPayment = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { contractId } = req.params;
+    const { recvPayparam, payType, orderId, amount } = req.body;
+    const hostId = req.user.id;
+
+    if (!recvPayparam || !orderId || !amount) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    }
+
+    const contract = await Contract.findOne({
+      where: { id: contractId, hostId },
+      transaction
+    });
+
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.status !== 'CANCELLED_BY_HOST') {
+      await transaction.rollback();
+      return error(res, { code: 5001, message: '호스트 귀책 취소 상태에서만 결제할 수 있습니다.' }, 400);
+    }
+
+    const refund = await Refund.findOne({
+      where: { contractId: contract.id },
+      order: [['createdAt', 'DESC']],
+      transaction
+    });
+
+    if (!refund) {
+      await transaction.rollback();
+      return error(res, { code: 5002, message: '환불 내역을 찾을 수 없습니다.' }, 404);
+    }
+
+    if (refund.hostBurdenStatus !== 'PENDING') {
+      await transaction.rollback();
+      return error(res, {
+        code: 5003,
+        message: refund.hostBurdenStatus === 'PAID'
+          ? '이미 결제 완료된 부담금입니다.'
+          : '결제할 수 없는 상태입니다.'
+      }, 400);
+    }
+
+    // orderId 검증 (계약 orderId 기반)
+    if (contract.orderId !== orderId) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.ORDER_ID_MISMATCH, 400);
+    }
+
+    // 금액 검증
+    const testAmount = paytagClient.getTestAmount(payType);
+    if (refund.hostBurdenAmount !== parseInt(amount, 10)) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.AMOUNT_MISMATCH, 400);
+    }
+
+    if (testAmount) {
+      console.log(`🧪 테스트 결제 모드 (호스트 부담금): PG ${testAmount}원 → DB ${refund.hostBurdenAmount}원`);
+    }
+
+    // PayTag 결제 승인
+    let paytagResponse;
+    try {
+      paytagResponse = await paytagClient.confirmPayment({
+        recvPayparam,
+        payType: payType || 'CARD'
+      });
+    } catch (paytagError) {
+      await transaction.rollback();
+      console.error('PayTag 호스트 부담금 결제 실패:', paytagError.message);
+      return error(res, ErrorCodes.PAYMENT_CONFIRMATION_FAILED, 400, {
+        pgErrorCode: paytagError.paytagErrorCode,
+        pgErrorMessage: paytagError.paytagErrorMessage
+      });
+    }
+
+    const now = new Date();
+    const paymentMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
+
+    // Payment 레코드 생성
+    const payment = await Payment.create({
+      contractId: contract.id,
+      paymentType: 'HOST_BURDEN',
+      paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
+      orderId: contract.orderId,
+      method: paymentMethod,
+      status: 'DONE',
+      requestedAt: now,
+      approvedAt: now,
+      totalAmount: refund.hostBurdenAmount,
+      balanceAmount: refund.hostBurdenAmount,
+      suppliedAmount: Math.round(refund.hostBurdenAmount / 1.1),
+      vat: refund.hostBurdenAmount - Math.round(refund.hostBurdenAmount / 1.1),
+      taxFreeAmount: 0,
+      currency: 'KRW',
+      receiptUrl: paytagResponse.receipt_url || null,
+      checkoutUrl: null,
+      paymentResponse: paytagResponse
+    }, { transaction });
+
+    // Refund hostBurdenStatus PAID로 업데이트
+    await refund.update({ hostBurdenStatus: 'PAID' }, { transaction });
+
+    // HOST_CANCELLATION_COMPENSATION Payout 생성
+    // payableAfter = 호스트 부담금 결제 승인일 + 3영업일
+    const payableAfter = calculatePayoutAvailableDate(now);
+
+    const { GuestRefundAccount } = require('../models');
+    const guestRefundAccount = await GuestRefundAccount.findOne({
+      where: { userId: contract.guestId }
+    });
+
+    if (refund.guestCompensationAmount > 0) {
+      await Payout.create({
+        contractId: contract.id,
+        refundId: refund.id,
+        payoutType: 'HOST_CANCELLATION_COMPENSATION',
+        recipientType: 'GUEST',
+        recipientId: contract.guestId,
+        amount: refund.guestCompensationAmount,
+        status: 'PENDING',
+        payableAfter,
+        bankName: guestRefundAccount?.bankName || null,
+        accountNumber: guestRefundAccount?.accountNumber || null,
+        accountHolder: guestRefundAccount?.accountHolder || null
+      }, { transaction });
+    }
+
+    await transaction.commit();
+
+    console.log(`✅ 호스트 부담금 결제 완료: contractId=${contract.id}, amount=${refund.hostBurdenAmount}, payableAfter=${payableAfter}`);
+
+    return success(res, {
+      contractId: contract.id,
+      refundId: refund.id,
+      paymentId: payment.id,
+      hostBurdenAmount: refund.hostBurdenAmount,
+      hostBurdenStatus: 'PAID',
+      guestCompensationAmount: refund.guestCompensationAmount,
+      payableAfter,
+      paymentKey: payment.paymentKey
+    }, '호스트 부담금 결제가 완료되었습니다.');
+  } catch (err) {
+    await transaction.rollback();
+    console.error('호스트 부담금 결제 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   createContractRequest,
   getGuestContracts,
@@ -3439,5 +3956,7 @@ module.exports = {
   holdCheckout,
   submitDepositAgreement,
   getDepositAgreement,
-  acceptDepositAgreement
+  acceptDepositAgreement,
+  getHostBurdenPaymentInfo,
+  confirmHostBurdenPayment
 };

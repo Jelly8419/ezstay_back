@@ -37,6 +37,7 @@ const RentalOrderLog = require('./RentalOrderLog');
 const RentalPaymentModel = require('./RentalPayment');
 const RentalPaymentFailureLogModel = require('./RentalPaymentFailureLog');
 const Settlement = require('./Settlement');
+const PayoutModel = require('./Payout');
 const DepositAgreement = require('./DepositAgreement');
 const GuestRefundAccount = require('./GuestRefundAccount');
 const AlimtalkLog = require('./AlimtalkLog');
@@ -83,6 +84,7 @@ const ContractSequence = ContractSequenceModel(sequelize);
 // 결제 관련 모델 초기화
 const Payment = PaymentModel(sequelize);
 const PaymentFailureLog = PaymentFailureLogModel(sequelize);
+const Payout = PayoutModel(sequelize);
 const RentalPayment = RentalPaymentModel(sequelize);
 const RentalPaymentFailureLog = RentalPaymentFailureLogModel(sequelize);
 
@@ -464,6 +466,11 @@ Contract.hasOne(Payment, {
   foreignKey: 'contractId',
   as: 'payment'
 });
+// 계약당 복수 결제 조회용 (CONTRACT + HOST_BURDEN)
+Contract.hasMany(Payment, {
+  foreignKey: 'contractId',
+  as: 'payments'
+});
 Payment.belongsTo(Contract, {
   foreignKey: 'contractId',
   as: 'contract'
@@ -710,6 +717,74 @@ Settlement.belongsTo(User, {
 });
 
 // =====================================================
+// Payout 관계 설정 (지급 관리)
+// =====================================================
+Contract.hasMany(Payout, {
+  foreignKey: 'contractId',
+  as: 'payouts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Payout.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+Settlement.hasMany(Payout, {
+  foreignKey: 'settlementId',
+  as: 'payouts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Payout.belongsTo(Settlement, {
+  foreignKey: 'settlementId',
+  as: 'settlement',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+Refund.hasMany(Payout, {
+  foreignKey: 'refundId',
+  as: 'payouts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Payout.belongsTo(Refund, {
+  foreignKey: 'refundId',
+  as: 'refund',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+User.hasMany(Payout, {
+  foreignKey: 'recipientId',
+  as: 'payouts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Payout.belongsTo(User, {
+  foreignKey: 'recipientId',
+  as: 'recipient',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+Admin.hasMany(Payout, {
+  foreignKey: 'adminId',
+  as: 'processedPayouts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Payout.belongsTo(Admin, {
+  foreignKey: 'adminId',
+  as: 'processedByAdmin',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// =====================================================
 // DepositAgreement 관계 설정 (보증금 합의)
 // =====================================================
 Contract.hasOne(DepositAgreement, {
@@ -888,6 +963,7 @@ module.exports = {
   RentalPayment,
   RentalPaymentFailureLog,
   Settlement,
+  Payout,
   DepositAgreement,
   GuestRefundAccount,
   AlimtalkLog,

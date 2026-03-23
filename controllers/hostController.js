@@ -165,6 +165,8 @@ const updateBasicInfo = async (req, res) => {
 
 // 3. 요금 설정 (1일 기준)
 const updatePricing = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
   try {
     const { roomId } = req.params;
     const hostId = req.user.id;
@@ -182,7 +184,9 @@ const updatePricing = async (req, res) => {
       includeInternet,
       cleaningFee,
       minContractDays,
-      refundPolicy
+      refundPolicy,
+      cleaningService,
+      roomPassword
     } = req.body;
 
     const room = await Room.findOne({
@@ -190,8 +194,12 @@ const updatePricing = async (req, res) => {
     });
 
     if (!room) {
+      await transaction.rollback();
       return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
+
+    // cleaningService=true이면 cleaningFee를 0으로 강제
+    const finalCleaningFee = cleaningService === true ? 0 : cleaningFee;
 
     await room.update({
       dailyRent,
@@ -205,16 +213,28 @@ const updatePricing = async (req, res) => {
       includeWater: includeWater || false,
       includeGas: includeGas || false,
       includeInternet: includeInternet || false,
-      cleaningFee,
+      cleaningFee: finalCleaningFee,
       minContractDays,
       refundPolicy
-    });
+    }, { transaction });
 
-    // 지도 캐시 무효화 (dailyRent 변경)
+    // 청소서비스 관련 EzService 저장
+    if (cleaningService !== undefined) {
+      await EzService.upsert({
+        roomId: room.id,
+        cleaningService: cleaningService || false,
+        roomPassword: cleaningService === true ? roomPassword : null
+      }, { transaction });
+    }
+
+    await transaction.commit();
+
+    // 지도 캐시 무효화
     await invalidateRoomCache();
 
     return updated(res, { roomId: room.id }, '요금 정보가 저장되었습니다.');
   } catch (err) {
+    await transaction.rollback();
     console.error('Pricing update error:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
@@ -368,7 +388,6 @@ const updateFreeServices = async (req, res) => {
     const hostId = req.user.id;
     const {
       cleaningService,
-      autoPasswordChange,
       roomPassword
     } = req.body;
 
@@ -377,18 +396,17 @@ const updateFreeServices = async (req, res) => {
     });
 
     if (!room) {
+      await transaction.rollback();
       return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
     await EzService.upsert({
       roomId: room.id,
       cleaningService: cleaningService || false,
-      autoPasswordChange: autoPasswordChange || false,
-      roomPassword
+      roomPassword: cleaningService === true ? roomPassword : null
     }, { transaction });
 
-    // cleaningService가 true인 경우 cleaning_fee를 0으로 설정
-    // (청소 서비스는 Ezstay에서 제공하므로 호스트 청소비 불필요)
+    // cleaningService=true이면 cleaningFee를 0으로 설정
     if (cleaningService === true) {
       await room.update({
         cleaningFee: 0
@@ -402,7 +420,7 @@ const updateFreeServices = async (req, res) => {
       await invalidateRoomCache();
     }
 
-    return updated(res, { roomId: room.id }, '무료 부가서비스 정보가 저장되었습니다.');
+    return updated(res, { roomId: room.id }, '부가서비스 정보가 저장되었습니다.');
   } catch (err) {
     await transaction.rollback();
     console.error('Free services update error:', err);
@@ -786,10 +804,9 @@ const getRoom = async (req, res) => {
         petsAllowed: room.amenity.petsAllowed
       } : null,
 
-      // 이지서비스 (호스트 제공 무료 부가서비스)
+      // 이지서비스 (청소서비스 + 도어락)
       ezService: room.ezService ? {
         cleaningService: room.ezService.cleaningService,
-        autoPasswordChange: room.ezService.autoPasswordChange,
         roomPassword: room.ezService.roomPassword
       } : null,
 
@@ -1006,7 +1023,6 @@ const duplicateRoom = async (req, res) => {
       await EzService.create({
         roomId: newRoom.id,
         cleaningService: originalRoom.ezService.cleaningService,
-        autoPasswordChange: originalRoom.ezService.autoPasswordChange,
         roomPassword: originalRoom.ezService.roomPassword
       }, { transaction });
     }
