@@ -60,7 +60,24 @@ const sendAlimtalk = async (params) => {
     formData.append('message_1', message);
 
     if (button) {
-      formData.append('button_1', typeof button === 'string' ? button : JSON.stringify(button));
+      // Aligo API button_1 포맷: {"button":[{name, linkType, linkMo, linkPc, ...}]}
+      // 캐시된 버튼 배열을 Aligo 발송 포맷으로 변환
+      let buttonPayload;
+      if (typeof button === 'string') {
+        buttonPayload = button;
+      } else {
+        const btnArray = Array.isArray(button) ? button : [button];
+        const cleaned = btnArray.map(({ name, linkType, linkMo, linkPc, linkIos, linkAnd }) => ({
+          name,
+          linkType,
+          linkMo: linkMo || '',
+          linkPc: linkPc || '',
+          ...(linkIos ? { linkIos } : {}),
+          ...(linkAnd ? { linkAnd } : {})
+        }));
+        buttonPayload = JSON.stringify({ button: cleaned });
+      }
+      formData.append('button_1', buttonPayload);
     }
 
     // SMS fallback 설정
