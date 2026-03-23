@@ -139,7 +139,6 @@ const createContractRequest = async (req, res) => {
       checkOutTime: room.checkOutTime,
       ezService: room.ezService ? {
         cleaningService: room.ezService.cleaningService,
-        autoPasswordChange: room.ezService.autoPasswordChange,
       } : null,
       capturedAt: new Date().toISOString()
     };

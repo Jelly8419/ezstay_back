@@ -228,7 +228,6 @@ async function seedDummyData() {
         beddingService: randomBoolean(),
         amenityKit: randomBoolean(),
         towelSetRental: randomBoolean(),
-        autoPasswordChange: randomBoolean(),
         roomPassword: String(randomInt(1000, 9999))
       }, { transaction });
 

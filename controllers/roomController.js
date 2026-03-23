@@ -109,7 +109,7 @@ const getRoomById = async (req, res) => {
           model: EzService,
           as: 'ezService',
           attributes: [
-            'cleaningService', 'autoPasswordChange'
+            'cleaningService'
             // ⚠️ roomPassword 제외 (보안)
           ],
           required: false

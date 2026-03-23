@@ -16,9 +16,8 @@ const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process
  * - 렌탈 아이템 관련 컬럼 제거 (플랫폼 직접 판매로 전환)
  *
  * 제공 서비스:
- * - cleaningService: 무료 청소 서비스
- * - autoPasswordChange: 자동 비밀번호 변경
- * - roomPassword: 방 출입 비밀번호
+ * - cleaningService: 청소 서비스 사용 여부
+ * - roomPassword: 도어락 비밀번호 (청소서비스 사용 시 필수)
  */
 const EzService = sequelize.define('EzService', {
   roomId: {
@@ -31,18 +30,12 @@ const EzService = sequelize.define('EzService', {
     type: DataTypes.BOOLEAN,
     allowNull: false,
     defaultValue: false,
-    comment: '무료 청소 서비스 제공 여부'
-  },
-  autoPasswordChange: {
-    type: DataTypes.BOOLEAN,
-    allowNull: false,
-    defaultValue: false,
-    comment: '자동 비밀번호 변경 여부'
+    comment: '청소 서비스 사용 여부 (체크 시 cleaningFee=0, roomPassword 필수)'
   },
   roomPassword: {
     type: DataTypes.STRING(100),
     allowNull: true,
-    comment: '방 출입 비밀번호 (자동 변경 기능과 연동)'
+    comment: '도어락 비밀번호 (청소서비스 사용 시 필수)'
   }
 }, {
   tableName: 'ez_services',
@@ -52,10 +45,6 @@ const EzService = sequelize.define('EzService', {
     {
       fields: ['cleaning_service'],
       name: 'idx_cleaning_service'
-    },
-    {
-      fields: ['auto_password_change'],
-      name: 'idx_auto_password_change'
     }
   ],
   comment: '이지서비스 (호스트 제공 무료 부가 서비스)'

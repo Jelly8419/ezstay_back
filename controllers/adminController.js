@@ -757,10 +757,9 @@ const getPropertyDetail = async (req, res) => {
         petsAllowed: room.amenity.petsAllowed
       } : null,
 
-      // 이지서비스 (호스트 제공 무료 부가서비스)
+      // 이지서비스 (청소서비스 + 도어락)
       ezService: room.ezService ? {
         cleaningService: room.ezService.cleaningService,
-        autoPasswordChange: room.ezService.autoPasswordChange,
         roomPassword: room.ezService.roomPassword
       } : null,
 
