@@ -312,7 +312,7 @@ const getRefundAccount = async (req, res) => {
     });
 
     if (!account) {
-      return error(res, ErrorCodes.REFUND_ACCOUNT_NOT_FOUND, 404);
+      return success(res, { account: null }, '등록된 환급 계좌가 없습니다.');
     }
 
     return success(res, {

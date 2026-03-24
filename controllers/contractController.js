@@ -1150,34 +1150,37 @@ const approveContract = async (req, res) => {
         isActive: true
       }, { transaction });
 
-      // Firestore에 채팅방 메타데이터 저장 (비동기, 실패해도 계약 승인은 유지)
-      createChatRoomMetadata(firebaseChatRoomId, {
-        contractId: contract.id,
-        hostId: contract.hostId,
-        guestId: contract.guestId,
-        roomId: contract.roomId,
-        roomInfo: {
-          name: room.roomName,
-          address: room.address
-        },
-        hostInfo: {
-          id: host.id,
-          name: host.name,
-          nickname: host.nickname,
-          profileImageUrl: toAbsoluteUrl(host.profileImageUrl)
-        },
-        guestInfo: {
-          id: guest.id,
-          name: guest.name,
-          nickname: guest.nickname,
-          profileImageUrl: toAbsoluteUrl(guest.profileImageUrl)
-        },
-        checkInDate: contract.checkInDate,
-        checkOutDate: contract.checkOutDate,
-        isActive: true
-      }).catch(err => {
-        console.error('Firestore 채팅방 메타데이터 생성 실패 (계약 승인은 완료됨):', err);
-      });
+      // Firestore에 채팅방 메타데이터 저장 (await로 완료 대기 - 시스템 메시지 발송 전 필요)
+      // 실패해도 계약 승인은 유지
+      try {
+        await createChatRoomMetadata(firebaseChatRoomId, {
+          contractId: contract.id,
+          hostId: contract.hostId,
+          guestId: contract.guestId,
+          roomId: contract.roomId,
+          roomInfo: {
+            name: room.roomName,
+            address: room.address
+          },
+          hostInfo: {
+            id: host.id,
+            name: host.name,
+            nickname: host.nickname,
+            profileImageUrl: toAbsoluteUrl(host.profileImageUrl)
+          },
+          guestInfo: {
+            id: guest.id,
+            name: guest.name,
+            nickname: guest.nickname,
+            profileImageUrl: toAbsoluteUrl(guest.profileImageUrl)
+          },
+          checkInDate: contract.checkInDate,
+          checkOutDate: contract.checkOutDate,
+          isActive: true
+        });
+      } catch (firestoreErr) {
+        console.error('Firestore 채팅방 메타데이터 생성 실패 (계약 승인은 완료됨):', firestoreErr);
+      }
 
       console.log(`✅ 채팅방 생성 완료: ${firebaseChatRoomId}`);
 
@@ -1192,7 +1195,7 @@ const approveContract = async (req, res) => {
         hour12: false
       });
 
-      // 시스템 메시지 발송 (채팅방 생성 성공 시)
+      // 시스템 메시지 발송 (Firestore 채팅방 생성 완료 후)
       sendSystemMessage(
         firebaseChatRoomId,
         getSystemMessageTemplate(SystemMessageTypes.CONTRACT_APPROVED, {
