@@ -269,7 +269,7 @@ function mapContractPaymentMethod(paytagPayType) {
 function getTestAmount(payType) {
   const testAmount = process.env.PAYMENT_TEST_AMOUNT;
   if (!testAmount) return null;
-  if (process.env.NODE_ENV === 'production') return null;
+  //if (process.env.NODE_ENV === 'production') return null;
   // 가상계좌/링크결제는 최소금액 제한이 있어 실제 금액으로 결제
   if (['VBANK', 'TAGLINK'].includes(payType)) return null;
   return parseInt(testAmount, 10);
