@@ -347,16 +347,26 @@ const getProfile = async (req, res) => {
 };
 
 /**
- * 개발 환경 전용 로그인 우회 (테스트 목적)
- * 프로덕션 환경에서는 절대 사용 불가
+ * 로그인 우회 (테스트 목적)
+ * - 개발 환경: 항상 허용
+ * - 운영 환경: ALLOW_DEV_BYPASS=true + 헤더 x-bypass-key === DEV_BYPASS_KEY 필요
  */
 const devBypassLogin = async (req, res) => {
-  // 프로덕션 환경 차단
-  if (process.env.NODE_ENV === 'production') {
-    return error(res, {
-      code: 2001,
-      message: 'This endpoint is only available in development environment'
-    }, 403);
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (isProduction) {
+    if (process.env.ALLOW_DEV_BYPASS !== 'true') {
+      return error(res, {
+        code: 2001,
+        message: 'This endpoint is not available'
+      }, 403);
+    }
+    const bypassKey = req.query.key || req.headers['x-bypass-key'];
+    if (!process.env.DEV_BYPASS_KEY || bypassKey !== process.env.DEV_BYPASS_KEY) {
+      return error(res, {
+        code: 2002,
+        message: 'Invalid bypass key'
+      }, 403);
+    }
   }
 
   try {
