@@ -188,7 +188,7 @@ const createContractRequest = async (req, res) => {
       );
     }
 
-    // 4-1. 날짜 중복 계약 체크
+    // 4-1. 날짜 중복 계약 체크 (방 기준 - 결제 완료 이후 상태)
     const overlappingContract = await Contract.findOne({
       attributes: ['id'],
       where: {
@@ -202,6 +202,23 @@ const createContractRequest = async (req, res) => {
     if (overlappingContract) {
       await transaction.rollback();
       return error(res, { code: 4305, message: '해당 기간에 이미 계약이 존재합니다' }, 409);
+    }
+
+    // 4-2. 동일 게스트 중복 신청 체크 (승인 대기 / 결제 대기 상태)
+    const myDuplicateContract = await Contract.findOne({
+      attributes: ['id'],
+      where: {
+        roomId,
+        guestId,
+        status: { [Op.in]: ['PENDING_APPROVAL', 'APPROVED'] },
+        checkInDate: { [Op.lt]: checkOutDate },
+        checkOutDate: { [Op.gt]: checkInDate }
+      },
+      transaction
+    });
+    if (myDuplicateContract) {
+      await transaction.rollback();
+      return error(res, { code: 4306, message: '이미 계약을 요청한 방입니다.' }, 409);
     }
 
     // 총 일수 재확인
