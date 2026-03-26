@@ -155,13 +155,18 @@ const createChatRoom = async (req, res) => {
  * 내 채팅방 목록 조회
  * GET /api/chats/rooms
  * Query params:
+ *   - userMode: 'guest' | 'host' (필수)
  *   - status: 계약 상태 필터 (APPROVED, PAYMENT_COMPLETED, IN_PROGRESS, COMPLETED, CANCELLED, REJECTED 등)
  *             CANCELLED는 모든 취소 상태를 포함 (CANCELLED_BY_GUEST, CANCELLED_BY_HOST, PAYMENT_EXPIRED 등)
  */
 const getMyChatRooms = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { status } = req.query;
+    const { status, userMode } = req.query;
+
+    if (!userMode || !['guest', 'host'].includes(userMode)) {
+      return error(res, { code: 4000, message: 'userMode는 guest 또는 host여야 합니다.' }, 400);
+    }
 
     // 계약 상태 필터 조건 생성
     let contractWhereClause = {};
@@ -185,12 +190,7 @@ const getMyChatRooms = async (req, res) => {
 
     // MySQL에서 채팅방 목록 조회
     const chatRooms = await ChatRoom.findAll({
-      where: {
-        [Op.or]: [
-          { hostId: userId },
-          { guestId: userId }
-        ]
-      },
+      where: userMode === 'host' ? { hostId: userId } : { guestId: userId },
       include: [
         {
           model: Contract,
@@ -234,7 +234,7 @@ const getMyChatRooms = async (req, res) => {
             ...chatRoom.toJSON(),
             lastMessage: metadata?.lastMessageText || null,
             lastMessageAt: metadata?.lastMessageAt || null,
-            unreadCount: metadata?.unreadCount?.[userId] || 0,
+            unreadCount: metadata?.unreadCount?.[String(userId)] || 0,
             isReadOnly
           };
         } catch (err) {

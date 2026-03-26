@@ -49,6 +49,7 @@ const {
 } = require('../../models');
 
 const { Op } = require('sequelize');
+const { createChatRoomMetadata } = require('../../config/firebaseAdmin');
 
 // =====================================================
 // 상수 & 유틸리티
@@ -311,7 +312,8 @@ async function createStatusLog(contractId, fromStatus, toStatus, changedBy, chan
  */
 async function createChatRoom(contractId, hostId, guestId, roomId, createdAt, isActive, transaction) {
   const firebaseChatRoomId = `contract_${contractId}`;
-  return await ChatRoom.create({
+
+  await ChatRoom.create({
     contractId,
     firebaseChatRoomId,
     hostId,
@@ -321,6 +323,28 @@ async function createChatRoom(contractId, hostId, guestId, roomId, createdAt, is
     lastMessageAt: createdAt,
     createdAt,
   }, { transaction });
+
+  // Firestore 메타데이터 생성 (트랜잭션 외부에서 실행)
+  try {
+    const [host, guest, room] = await Promise.all([
+      User.findByPk(hostId, { attributes: ['id', 'name', 'nickname', 'profileImageUrl'] }),
+      User.findByPk(guestId, { attributes: ['id', 'name', 'nickname', 'profileImageUrl'] }),
+      Room.findByPk(roomId, { attributes: ['roomName', 'address'] }),
+    ]);
+
+    await createChatRoomMetadata(firebaseChatRoomId, {
+      contractId,
+      hostId,
+      guestId,
+      roomId,
+      roomInfo: { name: room?.roomName || '', address: room?.address || '' },
+      hostInfo: { id: host?.id, name: host?.name, nickname: host?.nickname, profileImageUrl: host?.profileImageUrl || null },
+      guestInfo: { id: guest?.id, name: guest?.name, nickname: guest?.nickname, profileImageUrl: guest?.profileImageUrl || null },
+      isActive,
+    });
+  } catch (err) {
+    console.warn(`⚠️ Firestore 채팅방 메타데이터 생성 실패 (contract_${contractId}):`, err.message);
+  }
 }
 
 /**
