@@ -176,10 +176,10 @@ const getUserAccount = async (req, res) => {
 const saveAccount = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { bank_code, account_num, account_holder_name } = req.body;
+    const { bank_code, account_num } = req.body;
 
     // 필수 필드 검증
-    if (!bank_code || !account_num || !account_holder_name) {
+    if (!bank_code || !account_num) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
@@ -192,6 +192,12 @@ const saveAccount = async (req, res) => {
       return error(res, { code: 4301, message: '지원하지 않는 은행입니다.' }, 400);
     }
 
+    // 아임포트 실명 확인
+    const verificationResult = await verifyAccountWithIamport(bankCode, cleanAccountNum);
+    if (!verificationResult.success) {
+      return error(res, { code: 4302, message: verificationResult.error || '계좌 확인에 실패했습니다.' }, 400);
+    }
+
     // 기존 계좌 확인
     const existingAccount = await UserBankAccount.findOne({
       where: { userId }
@@ -201,7 +207,7 @@ const saveAccount = async (req, res) => {
       userId,
       bankName: bank_code,
       accountNumber: cleanAccountNum,
-      accountHolder: account_holder_name,
+      accountHolder: verificationResult.accountHolderName,
       isVerified: true,
       verifiedAt: new Date(),
       isPrimary: true
@@ -268,7 +274,7 @@ const verifyRefundAccount = async (req, res) => {
   try {
     const { bank_code, account_num, account_holder_name } = req.body;
 
-    if (!bank_code || !account_num || !account_holder_name) {
+    if (!bank_code || !account_num) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
@@ -286,14 +292,16 @@ const verifyRefundAccount = async (req, res) => {
       return error(res, ErrorCodes.REFUND_ACCOUNT_VERIFY_FAILED, 400);
     }
 
-    const verified = verificationResult.accountHolderName === account_holder_name;
+    const verified = account_holder_name
+      ? verificationResult.accountHolderName === account_holder_name
+      : true;
 
     return success(res, {
       verified,
       accountHolderName: verificationResult.accountHolderName,
       bankName: getBankNameByCode(bankCode),
-      inputName: account_holder_name
-    }, verified ? '예금주 확인이 완료되었습니다.' : '예금주 정보가 일치하지 않습니다.');
+      ...(account_holder_name && { inputName: account_holder_name })
+    }, '예금주 확인이 완료되었습니다.');
 
   } catch (err) {
     console.error('환급 계좌 예금주 확인 오류:', err);
@@ -333,9 +341,9 @@ const getRefundAccount = async (req, res) => {
 const saveRefundAccount = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { bank_code, account_num, account_holder_name } = req.body;
+    const { bank_code, account_num } = req.body;
 
-    if (!bank_code || !account_num || !account_holder_name) {
+    if (!bank_code || !account_num) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
@@ -345,6 +353,12 @@ const saveRefundAccount = async (req, res) => {
     const bankCode = BANK_CODES[bank_code] || bank_code;
     if (!bankCode || bankCode.length !== 3) {
       return error(res, ErrorCodes.UNSUPPORTED_BANK, 400);
+    }
+
+    // 아임포트 실명 확인
+    const verificationResult = await verifyAccountWithIamport(bankCode, cleanAccountNum);
+    if (!verificationResult.success) {
+      return error(res, ErrorCodes.REFUND_ACCOUNT_VERIFY_FAILED, 400);
     }
 
     const bankName = getBankNameByCode(bankCode);
@@ -358,9 +372,9 @@ const saveRefundAccount = async (req, res) => {
       bankCode,
       bankName,
       accountNumber: cleanAccountNum,
-      accountHolder: account_holder_name,
-      isVerified: false,
-      verifiedAt: null
+      accountHolder: verificationResult.accountHolderName,
+      isVerified: true,
+      verifiedAt: new Date()
     };
 
     let account;
