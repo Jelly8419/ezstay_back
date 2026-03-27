@@ -1,15 +1,13 @@
 const { verifyToken } = require('../utils/auth');
 const { User, Admin } = require('../models');
+const { error: errorResponse, ErrorCodes } = require('../utils/responseHelper');
 
 const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
-    return res.status(401).json({
-      success: false,
-      message: '액세스 토큰이 필요합니다.'
-    });
+    return errorResponse(res, ErrorCodes.UNAUTHORIZED, 401);
   }
 
   try {
@@ -19,19 +17,16 @@ const authenticateToken = async (req, res, next) => {
     });
 
     if (!user || user.accountStatus !== 'active') {
-      return res.status(401).json({
-        success: false,
-        message: '유효하지 않은 사용자입니다.'
-      });
+      return errorResponse(res, ErrorCodes.INVALID_TOKEN, 401);
     }
 
     req.user = user;
     next();
-  } catch (error) {
-    return res.status(403).json({
-      success: false,
-      message: '유효하지 않은 토큰입니다.'
-    });
+  } catch (err) {
+    if (err.message === 'Token expired') {
+      return errorResponse(res, ErrorCodes.TOKEN_EXPIRED, 401);
+    }
+    return errorResponse(res, ErrorCodes.INVALID_TOKEN, 401);
   }
 };
 
@@ -66,10 +61,7 @@ const authenticateAdmin = async (req, res, next) => {
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
-    return res.status(401).json({
-      success: false,
-      message: '액세스 토큰이 필요합니다.'
-    });
+    return errorResponse(res, ErrorCodes.UNAUTHORIZED, 401);
   }
 
   try {
@@ -81,19 +73,16 @@ const authenticateAdmin = async (req, res, next) => {
     });
 
     if (!admin || !admin.isActive) {
-      return res.status(401).json({
-        success: false,
-        message: '유효하지 않은 관리자 계정입니다.'
-      });
+      return errorResponse(res, ErrorCodes.INVALID_TOKEN, 401);
     }
 
     req.admin = admin; // req.admin으로 저장
     next();
-  } catch (error) {
-    return res.status(403).json({
-      success: false,
-      message: '유효하지 않은 토큰입니다.'
-    });
+  } catch (err) {
+    if (err.message === 'Token expired') {
+      return errorResponse(res, ErrorCodes.TOKEN_EXPIRED, 401);
+    }
+    return errorResponse(res, ErrorCodes.INVALID_TOKEN, 401);
   }
 };
 
@@ -104,17 +93,11 @@ const authenticateAdmin = async (req, res, next) => {
 const requireAdminRole = (roles = []) => {
   return (req, res, next) => {
     if (!req.admin) {
-      return res.status(401).json({
-        success: false,
-        message: '관리자 인증이 필요합니다.'
-      });
+      return errorResponse(res, ErrorCodes.UNAUTHORIZED, 401);
     }
 
     if (roles.length > 0 && !roles.includes(req.admin.role)) {
-      return res.status(403).json({
-        success: false,
-        message: '해당 작업을 수행할 권한이 없습니다.'
-      });
+      return errorResponse(res, ErrorCodes.FORBIDDEN, 403);
     }
 
     next();
