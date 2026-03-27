@@ -4,6 +4,9 @@
  */
 
 const NotificationService = require('../services/notificationService');
+const { getChatRoomMetadata } = require('../config/firebaseAdmin');
+const { ChatRoom } = require('../models');
+const { Op } = require('sequelize');
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
 
 /**
@@ -69,10 +72,10 @@ const markAllAsRead = async (req, res) => {
 
 /**
  * 읽지 않은 알림 수 조회
- * GET /api/notifications/unread-count
+ * GET /api/gnb/badge-status
  * Query: userMode (optional)
  */
-const getUnreadCount = async (req, res) => {
+const getBadgeStatus = async (req, res) => {
   try {
     const userId = req.user.id;
     const { userMode } = req.query;
@@ -85,23 +88,40 @@ const getUnreadCount = async (req, res) => {
       });
     }
 
+    // MySQL 기준으로 채팅방 조회 (Firestore 고아 데이터 제외)
+    const whereClause = userMode
+      ? (userMode === 'host' ? { hostId: userId } : { guestId: userId })
+      : { [Op.or]: [{ hostId: userId }, { guestId: userId }] };
+
+    const chatRooms = await ChatRoom.findAll({ where: whereClause, attributes: ['firebaseChatRoomId', 'hostId', 'guestId'] });
+
+    const userIdStr = String(userId);
+
+    const metadataList = await Promise.all(
+      chatRooms.map(room => getChatRoomMetadata(room.firebaseChatRoomId).catch(() => null))
+    );
+
     let unreadCount;
+    let hasUnreadChat;
 
     if (userMode) {
-      // 특정 모드의 읽지 않은 알림 수
       unreadCount = await NotificationService.getUnreadCount(userId, userMode);
+      hasUnreadChat = metadataList.some(meta => (meta?.unreadCount?.[userIdStr] || 0) > 0);
     } else {
-      // 게스트, 호스트 모두 조회
       const guestCount = await NotificationService.getUnreadCount(userId, 'guest');
       const hostCount = await NotificationService.getUnreadCount(userId, 'host');
-      unreadCount = {
-        guest: guestCount,
-        host: hostCount,
-        total: guestCount + hostCount
+      unreadCount = { guest: guestCount, host: hostCount, total: guestCount + hostCount };
+
+      const guestRoomIds = new Set(chatRooms.filter(r => r.guestId === userId).map(r => r.firebaseChatRoomId));
+      const hostRoomIds = new Set(chatRooms.filter(r => r.hostId === userId).map(r => r.firebaseChatRoomId));
+
+      hasUnreadChat = {
+        guest: metadataList.filter(m => m && guestRoomIds.has(m.id)).some(m => (m.unreadCount?.[userIdStr] || 0) > 0),
+        host: metadataList.filter(m => m && hostRoomIds.has(m.id)).some(m => (m.unreadCount?.[userIdStr] || 0) > 0)
       };
     }
 
-    return success(res, { unreadCount }, '읽지 않은 알림 수 조회 성공');
+    return success(res, { unreadCount, hasUnreadChat }, 'GNB 배지 상태 조회 성공');
   } catch (err) {
     console.error('알림 수 조회 에러:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
@@ -111,5 +131,5 @@ const getUnreadCount = async (req, res) => {
 module.exports = {
   getNotifications,
   markAllAsRead,
-  getUnreadCount
+  getBadgeStatus
 };

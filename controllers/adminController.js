@@ -559,6 +559,9 @@ const getPendingReviews = async (req, res) => {
 const approveProperty = async (req, res) => {
   try {
     const { roomId } = req.params;
+    const adminId = req.admin.id;
+    const ipAddress = req.ip || req.connection.remoteAddress;
+    const userAgent = req.get('User-Agent');
 
     const room = await Room.findByPk(roomId);
     if (!room) {
@@ -572,11 +575,32 @@ const approveProperty = async (req, res) => {
       }, 400);
     }
 
-    room.status = 'published';
-    room.approvedAt = new Date();
-    room.publishedAt = new Date();
-    room.isActive = true;
-    await room.save();
+    const transaction = await sequelize.transaction();
+    try {
+      const previousStatus = room.status;
+      room.status = 'published';
+      room.approvedAt = new Date();
+      room.publishedAt = new Date();
+      room.isActive = true;
+      await room.save({ transaction });
+
+      // 심사 승인 이력 저장
+      await RoomStatusHistory.create({
+        roomId,
+        adminId,
+        previousStatus,
+        newStatus: 'published',
+        reason: '심사 승인',
+        ipAddress,
+        userAgent,
+        changedAt: new Date()
+      }, { transaction });
+
+      await transaction.commit();
+    } catch (txErr) {
+      await transaction.rollback();
+      throw txErr;
+    }
 
     // 캐시 무효화 (ETag 버전 증가)
     await invalidateRoomCache();
@@ -606,6 +630,9 @@ const rejectProperty = async (req, res) => {
   try {
     const { roomId } = req.params;
     const { rejectionReason } = req.body;
+    const adminId = req.admin.id;
+    const ipAddress = req.ip || req.connection.remoteAddress;
+    const userAgent = req.get('User-Agent');
 
     if (!rejectionReason) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
@@ -623,9 +650,30 @@ const rejectProperty = async (req, res) => {
       }, 400);
     }
 
-    room.status = 'rejected';
-    room.rejectionReason = rejectionReason;
-    await room.save();
+    const transaction = await sequelize.transaction();
+    try {
+      const previousStatus = room.status;
+      room.status = 'rejected';
+      room.rejectionReason = rejectionReason;
+      await room.save({ transaction });
+
+      // 심사 반려 이력 저장
+      await RoomStatusHistory.create({
+        roomId,
+        adminId,
+        previousStatus,
+        newStatus: 'rejected',
+        reason: rejectionReason,
+        ipAddress,
+        userAgent,
+        changedAt: new Date()
+      }, { transaction });
+
+      await transaction.commit();
+    } catch (txErr) {
+      await transaction.rollback();
+      throw txErr;
+    }
 
     // 캐시 무효화 (ETag 버전 증가)
     await invalidateRoomCache();

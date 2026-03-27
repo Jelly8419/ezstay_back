@@ -26,12 +26,5 @@ router.get('/', authenticateToken, notificationController.getNotifications);
  */
 router.patch('/mark-all-read', authenticateToken, notificationController.markAllAsRead);
 
-/**
- * @route   GET /api/notifications/unread-count
- * @desc    읽지 않은 알림 수 조회
- * @access  Private
- * @query   userMode (optional): 'guest' | 'host' (없으면 둘 다 조회)
- */
-router.get('/unread-count', authenticateToken, notificationController.getUnreadCount);
 
 module.exports = router;

@@ -91,12 +91,14 @@ const getAutoMessageTemplate = async (req, res) => {
 /**
  * 자동메시지 템플릿 생성
  * POST /api/host/auto-messages
+ * roomIds: 단일 숫자 또는 배열 모두 허용
  */
 const createAutoMessageTemplate = async (req, res) => {
   try {
     const hostId = req.user.id;
     const {
       roomId,
+      roomIds,
       triggerType,
       triggerDays,
       triggerTime,
@@ -104,10 +106,17 @@ const createAutoMessageTemplate = async (req, res) => {
       messageContent
     } = req.body;
 
+    // roomId(단일) 또는 roomIds(배열) 정규화
+    const targetRoomIds = roomIds
+      ? (Array.isArray(roomIds) ? roomIds : [roomIds])
+      : roomId
+        ? [roomId]
+        : [];
+
     // 필수 필드 검증
-    if (!roomId || !triggerType || !title || !messageContent) {
+    if (!targetRoomIds.length || !triggerType || !title || !messageContent) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, {
-        required: ['roomId', 'triggerType', 'title', 'messageContent']
+        required: ['roomId 또는 roomIds', 'triggerType', 'title', 'messageContent']
       });
     }
 
@@ -121,18 +130,6 @@ const createAutoMessageTemplate = async (req, res) => {
       }, 400);
     }
 
-    // 방 소유권 확인
-    const room = await Room.findOne({
-      where: { id: roomId, hostId }
-    });
-
-    if (!room) {
-      return error(res, {
-        code: 3011,
-        message: '해당 방을 찾을 수 없거나 권한이 없습니다.'
-      }, 404);
-    }
-
     // 시간 형식 검증 (HH:mm)
     const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
     if (triggerTime && !timeRegex.test(triggerTime)) {
@@ -142,36 +139,52 @@ const createAutoMessageTemplate = async (req, res) => {
       }, 400);
     }
 
-    // triggerDays 검증 (CONTRACT_CONFIRMED일 때는 0이어야 함)
-    let finalTriggerDays = triggerDays || 0;
-    if (triggerType === 'CONTRACT_CONFIRMED') {
-      finalTriggerDays = 0; // 계약 확정 시에는 즉시 발송
+    // 방 소유권 일괄 확인
+    const rooms = await Room.findAll({
+      where: { id: targetRoomIds, hostId },
+      attributes: ['id', 'roomName', 'address']
+    });
+
+    if (rooms.length !== targetRoomIds.length) {
+      const foundIds = rooms.map(r => r.id);
+      const notFound = targetRoomIds.filter(id => !foundIds.includes(Number(id)));
+      return error(res, {
+        code: 3011,
+        message: '해당 방을 찾을 수 없거나 권한이 없습니다.',
+        notFoundRoomIds: notFound
+      }, 404);
     }
 
-    const template = await AutoMessageTemplate.create({
-      hostId,
-      roomId,
-      triggerType,
-      triggerDays: finalTriggerDays,
-      triggerTime: triggerTime || '09:00',
-      title,
-      messageContent,
-      isActive: true
-    });
+    const finalTriggerDays = triggerType === 'CONTRACT_CONFIRMED' ? 0 : (triggerDays || 0);
+    const finalTriggerTime = triggerTime || '09:00';
+
+    // 방별 템플릿 일괄 생성
+    const createdTemplates = await AutoMessageTemplate.bulkCreate(
+      targetRoomIds.map(rid => ({
+        hostId,
+        roomId: rid,
+        triggerType,
+        triggerDays: finalTriggerDays,
+        triggerTime: finalTriggerTime,
+        title,
+        messageContent,
+        isActive: true
+      }))
+    );
 
     // 생성된 템플릿을 방 정보와 함께 반환
-    const createdTemplate = await AutoMessageTemplate.findOne({
-      where: { id: template.id },
-      include: [
-        {
-          model: Room,
-          as: 'room',
-          attributes: ['id', 'roomName', 'address']
-        }
-      ]
+    const resultTemplates = await AutoMessageTemplate.findAll({
+      where: { id: createdTemplates.map(t => t.id) },
+      include: [{ model: Room, as: 'room', attributes: ['id', 'roomName', 'address'] }],
+      order: [['roomId', 'ASC']]
     });
 
-    return created(res, { template: createdTemplate }, '자동메시지 템플릿 생성 성공');
+    const isBulk = targetRoomIds.length > 1;
+    return created(
+      res,
+      isBulk ? { templates: resultTemplates, total: resultTemplates.length } : { template: resultTemplates[0] },
+      isBulk ? `자동메시지 템플릿 ${resultTemplates.length}개 생성 성공` : '자동메시지 템플릿 생성 성공'
+    );
   } catch (err) {
     console.error('자동메시지 템플릿 생성 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
