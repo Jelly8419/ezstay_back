@@ -296,11 +296,11 @@ const confirmRentalPayment = async (req, res) => {
 
   try {
     const { rentalOrderId } = req.params;
-    const { paymentKey, orderId, amount } = req.body;
+    const { recvPayparam, payType, orderId, amount } = req.body;
     const userId = req.user.id;
 
     // 입력 검증
-    if (!paymentKey || !orderId || !amount) {
+    if (!recvPayparam || !orderId || !amount) {
       await transaction.rollback();
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
@@ -325,6 +325,12 @@ const confirmRentalPayment = async (req, res) => {
       return error(res, ErrorCodes.RENTAL_NOT_GUEST, 403);
     }
 
+    // 결제 가능 상태 확인
+    if (rentalOrder.status !== 'PENDING') {
+      await transaction.rollback();
+      return error(res, ErrorCodes.RENTAL_ORDER_NOT_PAYABLE, 400);
+    }
+
     // 주문번호 확인
     if (rentalOrder.orderId !== orderId) {
       await transaction.rollback();
@@ -332,7 +338,7 @@ const confirmRentalPayment = async (req, res) => {
     }
 
     // 금액 확인 (클라이언트 변조 방지)
-    const testAmount = paytagClient.getTestAmount(req.body.payType);
+    const testAmount = paytagClient.getTestAmount(payType);
     const realRentalAmount = rentalOrder.totalAmount;
 
     if (realRentalAmount !== parseInt(amount, 10)) {
@@ -344,18 +350,12 @@ const confirmRentalPayment = async (req, res) => {
       console.log(`🧪 렌탈 테스트 결제 모드: PG 결제 ${testAmount}원 → DB 저장 ${realRentalAmount}원`);
     }
 
-    // 결제 가능 상태 확인
-    if (rentalOrder.status !== 'PENDING') {
-      await transaction.rollback();
-      return error(res, ErrorCodes.RENTAL_ORDER_NOT_PAYABLE, 400);
-    }
-
     // PayTag 결제 승인 API 호출
     let paytagResponse;
     try {
       paytagResponse = await paytagClient.confirmPayment({
-        recvPayparam: paymentKey, // 프론트에서 recv_payparam을 paymentKey로 전달
-        payType: req.body.payType || 'CARD'
+        recvPayparam,
+        payType: payType || 'CARD'
       });
     } catch (paytagError) {
       await transaction.rollback();
@@ -367,7 +367,7 @@ const confirmRentalPayment = async (req, res) => {
         orderId,
         failureCode: paytagError.paytagErrorCode || 'UNKNOWN',
         failureMessage: paytagError.paytagErrorMessage || paytagError.message,
-        requestData: { paymentKey: '(encrypted)', payType: req.body.payType, orderId, amount },
+        requestData: { recvPayparam: '(encrypted)', payType, orderId, amount },
         responseData: paytagError.paytagResponse || null,
         userAgent: req.headers['user-agent'],
         ipAddress: req.ip || req.connection.remoteAddress
@@ -381,7 +381,7 @@ const confirmRentalPayment = async (req, res) => {
     }
 
     const now = new Date();
-    const mappedMethod = paytagClient.mapPaymentMethod(req.body.payType || 'CARD');
+    const mappedMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
     const pgPaymentKey = paytagResponse.tran_key || paytagResponse.recv_orderno || orderId;
 
     console.log('🔍 PayTag 결제 응답:', JSON.stringify(paytagResponse, null, 2));
@@ -449,9 +449,7 @@ const confirmRentalPayment = async (req, res) => {
   } catch (err) {
     await transaction.rollback();
     console.error('렌탈 주문 결제 승인 오류:', err);
-    return error(res, ErrorCodes.PAYMENT_CONFIRMATION_FAILED, 500, {
-      details: err.message
-    });
+    return error(res, ErrorCodes.PAYMENT_CONFIRMATION_FAILED, 500);
   }
 };
 
