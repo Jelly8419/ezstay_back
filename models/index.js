@@ -43,6 +43,7 @@ const GuestRefundAccount = require('./GuestRefundAccount');
 const AlimtalkLog = require('./AlimtalkLog');
 const { ReceiptSetting } = require('./ReceiptSetting');
 const Receipt = require('./Receipt');
+const UserSessionModel = require('./UserSession');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -67,6 +68,9 @@ const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process
   // false: 로그 끄기 | console.log: 모든 쿼리 | 커스텀 함수: 필터링
   logging: false  // 강제로 모든 쿼리 로그 비활성화 (개발 중 필요시 true로 변경)
 });
+
+// 세션 모델 초기화
+const UserSession = UserSessionModel(sequelize);
 
 // Admin 모델 초기화
 const Admin = AdminModel(sequelize);
@@ -95,6 +99,18 @@ const RoomStatusHistoryModel = require('./RoomStatusHistory');
 const RoomMemoInstance = RoomMemoModel(sequelize);
 const RoomPasswordHistoryInstance = RoomPasswordHistoryModel(sequelize);
 const RoomStatusHistoryInstance = RoomStatusHistoryModel(sequelize);
+
+// UserSession 관계 설정 (User/Admin 공용, constraints: false로 다형성 처리)
+User.hasMany(UserSession, {
+  foreignKey: 'userId',
+  as: 'sessions',
+  constraints: false
+});
+UserSession.belongsTo(User, {
+  foreignKey: 'userId',
+  as: 'user',
+  constraints: false
+});
 
 // 모델 관계 설정
 User.hasOne(LocalUser, {
@@ -968,5 +984,6 @@ module.exports = {
   GuestRefundAccount,
   AlimtalkLog,
   ReceiptSetting,
-  Receipt
+  Receipt,
+  UserSession
 };
