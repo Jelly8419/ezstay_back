@@ -1,4 +1,4 @@
-const { User, UserBankAccount, LocalUser, sequelize } = require('../models');
+const { User, UserBankAccount, LocalUser, UserSession, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 const bcrypt = require('bcryptjs');
@@ -442,10 +442,15 @@ const deleteAccount = async (req, res) => {
     // 사용자 계정 비활성화 (Soft Delete)
     const [updated] = await User.update({
       isActive: false,
-      accountStatus: 'withdrawn',
-      refreshToken: null // 리프레시 토큰 삭제
+      accountStatus: 'withdrawn'
     }, {
       where: { id: userId },
+      transaction
+    });
+
+    // 모든 세션 삭제
+    await UserSession.destroy({
+      where: { userId, userType: 'user' },
       transaction
     });
 
