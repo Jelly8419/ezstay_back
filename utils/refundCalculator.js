@@ -118,6 +118,7 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
     const cleaningFee = contract.cleaningFee || 0;
     const deposit = contract.deposit || 0;
     const platformFee = contract.platformFee || 0;
+    const rentalItemsFee = contract.rentalItemsFee || 0;
 
     // 6. 이용료 계산 (환불율 적용 기준 = 임대료만)
     // 관리비, 청소비는 항상 100% 환불이므로 이용료에 포함하지 않음
@@ -150,35 +151,35 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
       hostPenaltyAmount = penaltyAmount - hostPenaltyFee;
 
       // 게스트 환불 총액 = 결제 전액
-      totalRefundAmount = deposit + usageFee + cleaningFee + maintenanceFee + platformFee;
+      totalRefundAmount = deposit + usageFee + cleaningFee + maintenanceFee + platformFee + rentalItemsFee;
     } else {
       // ─── 게스트 귀책 ───
       depositRefundAmount = deposit; // 보증금 항상 100%
 
       if (refundRate === 100) {
-        // 100% 환불: 전액 (보증금 + 임대료 + 관리비 + 청소비 + 수수료)
+        // 100% 환불: 전액 (보증금 + 임대료 + 관리비 + 청소비 + 수수료 + 옵션상품)
         usageFeeRefundAmount = usageFee;
         guestServiceFeeRefunded = true;
         penaltyAmount = 0;
         hostPenaltyFee = 0;
         hostPenaltyAmount = 0;
-        totalRefundAmount = deposit + usageFee + cleaningFee + maintenanceFee + platformFee;
+        totalRefundAmount = deposit + usageFee + cleaningFee + maintenanceFee + platformFee + rentalItemsFee;
       } else if (refundRate > 0) {
-        // 부분 환불: 보증금 + 임대료×환불율 + 관리비 + 청소비, 수수료 비환불
+        // 부분 환불: 보증금 + 임대료×환불율 + 관리비 + 청소비 + 옵션상품, 수수료 비환불
         usageFeeRefundAmount = Math.floor(usageFee * (refundRate / 100));
         guestServiceFeeRefunded = false;
         penaltyAmount = Math.floor(usageFee * ((100 - refundRate) / 100));
         hostPenaltyFee = Math.floor(penaltyAmount * HOST_PLATFORM_FEE_RATE);
         hostPenaltyAmount = penaltyAmount - hostPenaltyFee;
-        totalRefundAmount = deposit + usageFeeRefundAmount + cleaningFee + maintenanceFee;
+        totalRefundAmount = deposit + usageFeeRefundAmount + cleaningFee + maintenanceFee + rentalItemsFee;
       } else {
-        // 0% 환불: 보증금 + 관리비 + 청소비만 환불 (임대료 환불 없음)
+        // 0% 환불: 보증금 + 관리비 + 청소비 + 옵션상품만 환불 (임대료 환불 없음)
         usageFeeRefundAmount = 0;
         guestServiceFeeRefunded = false;
         penaltyAmount = usageFee; // 임대료 전액이 위약금
         hostPenaltyFee = Math.floor(penaltyAmount * HOST_PLATFORM_FEE_RATE);
         hostPenaltyAmount = penaltyAmount - hostPenaltyFee;
-        totalRefundAmount = deposit + cleaningFee + maintenanceFee;
+        totalRefundAmount = deposit + cleaningFee + maintenanceFee + rentalItemsFee;
       }
     }
 
@@ -212,6 +213,7 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
         originalMaintenanceFee: maintenanceFee,
         originalDeposit: deposit,
         originalPlatformFee: platformFee,
+        originalRentalItemsFee: rentalItemsFee,
         originalTotalAmount: contract.finalTotalAmount,
 
         // 이용료 기반 환불 계산 (신규)
@@ -224,6 +226,7 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
         rentalFeeRefundAmount,
         cleaningFeeRefundAmount,
         maintenanceFeeRefundAmount,
+        rentalItemsFeeRefundAmount: rentalItemsFee,
         totalRefundAmount,
 
         // 위약금 분배
@@ -240,7 +243,8 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
         message: generateRefundMessage(
           daysBeforeCheckin,
           refundRate,
-          faultType
+          faultType,
+          rentalItemsFee > 0
         )
       }
     };
@@ -304,21 +308,23 @@ function findApplicableRule(rules, daysBeforeCheckin) {
  * @param {Boolean} hasEzCleaning - EZ클리닝 사용 여부
  * @returns {String} 안내 메시지
  */
-function generateRefundMessage(daysBeforeCheckin, refundRate, faultType) {
+function generateRefundMessage(daysBeforeCheckin, refundRate, faultType, hasRentalItems = false) {
+  const rentalItemsText = hasRentalItems ? ', 옵션상품' : '';
+
   if (faultType === 'HOST') {
     return '호스트 귀책 취소로 결제 금액 전액이 환불됩니다.';
   }
 
   if (daysBeforeCheckin < 0) {
-    return '입주일이 지나 임대료 환불이 불가능합니다. 보증금, 관리비, 청소비는 100% 환불됩니다.';
+    return `입주일이 지나 임대료 환불이 불가능합니다. 보증금, 관리비, 청소비${rentalItemsText}는 100% 환불됩니다.`;
   }
 
   if (refundRate === 100) {
     return `입주일 ${daysBeforeCheckin}일 전 취소로 결제 금액 전액이 환불됩니다.`;
   } else if (refundRate > 0) {
-    return `입주일 ${daysBeforeCheckin}일 전 취소로 임대료의 ${refundRate}%가 환불됩니다. 보증금, 관리비, 청소비는 100% 환불됩니다. 게스트 서비스 수수료는 환불되지 않습니다.`;
+    return `입주일 ${daysBeforeCheckin}일 전 취소로 임대료의 ${refundRate}%가 환불됩니다. 보증금, 관리비, 청소비${rentalItemsText}는 100% 환불됩니다. 게스트 서비스 수수료는 환불되지 않습니다.`;
   } else {
-    return `입주일 ${daysBeforeCheckin}일 전 취소로 임대료는 환불되지 않습니다. 보증금, 관리비, 청소비는 100% 환불됩니다.`;
+    return `입주일 ${daysBeforeCheckin}일 전 취소로 임대료는 환불되지 않습니다. 보증금, 관리비, 청소비${rentalItemsText}는 100% 환불됩니다.`;
   }
 }
 
