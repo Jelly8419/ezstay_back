@@ -56,10 +56,6 @@ const User = sequelize.define('User', {
     allowNull: false,
     comment: 'local: 일반 회원, social: 소셜 회원'
   },
-  refreshToken: {
-    type: DataTypes.TEXT,
-    allowNull: true
-  },
   isActive: {
     type: DataTypes.BOOLEAN,
     allowNull: false,

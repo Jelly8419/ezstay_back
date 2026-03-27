@@ -50,11 +50,6 @@ const Admin = (sequelize) => sequelize.define('Admin', {
     allowNull: true,
     comment: '마지막 로그인 시간'
   },
-  refreshToken: {
-    type: DataTypes.TEXT,
-    allowNull: true,
-    comment: 'JWT Refresh Token'
-  }
 }, {
   tableName: 'admins',
   timestamps: true,
