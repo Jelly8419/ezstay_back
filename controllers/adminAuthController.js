@@ -1,7 +1,20 @@
 const bcrypt = require('bcryptjs');
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
-const { Admin } = require('../models');
+const { Admin, UserSession } = require('../models');
 const { generateTokens } = require('../utils/auth');
+
+// refreshToken 만료 시각 계산
+const getRefreshExpiresAt = () => {
+  const expiresIn = process.env.JWT_REFRESH_EXPIRES_IN || '14d';
+  const match = expiresIn.match(/^(\d+)([dhm])$/);
+  if (!match) return new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+  const value = parseInt(match[1]);
+  const unit = match[2];
+  const ms = unit === 'd' ? value * 24 * 60 * 60 * 1000
+            : unit === 'h' ? value * 60 * 60 * 1000
+            : value * 60 * 1000;
+  return new Date(Date.now() + ms);
+};
 
 /**
  * 관리자 로그인
@@ -47,8 +60,16 @@ const login = async (req, res) => {
     // JWT 토큰 생성
     const { accessToken, refreshToken } = generateTokens({ userId: admin.id });
 
-    // Refresh Token DB 저장
-    admin.refreshToken = refreshToken;
+    // 세션 테이블에 새 세션 생성
+    await UserSession.create({
+      userId: admin.id,
+      refreshToken,
+      userType: 'admin',
+      deviceInfo: req.headers['user-agent']?.substring(0, 255) || null,
+      ipAddress: req.ip || null,
+      expiresAt: getRefreshExpiresAt()
+    });
+
     admin.lastLoginAt = new Date();
     await admin.save();
 
@@ -77,9 +98,13 @@ const logout = async (req, res) => {
   try {
     const admin = req.admin;
 
-    // Refresh Token 삭제
-    admin.refreshToken = null;
-    await admin.save();
+    // 해당 관리자 세션 전체 삭제
+    await UserSession.destroy({
+      where: {
+        userId: admin.id,
+        userType: 'admin'
+      }
+    });
 
     return success(res, null, '로그아웃 성공');
   } catch (err) {

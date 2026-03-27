@@ -1,5 +1,18 @@
-const { User, SocialUser, UserBankAccount, sequelize } = require('../models');
+const { User, SocialUser, UserBankAccount, UserSession, sequelize } = require('../models');
 const { generateTokens } = require('../utils/auth');
+
+// refreshToken 만료 시각 계산 (authController와 동일 로직)
+const getRefreshExpiresAt = () => {
+  const expiresIn = process.env.JWT_REFRESH_EXPIRES_IN || '14d';
+  const match = expiresIn.match(/^(\d+)([dhm])$/);
+  if (!match) return new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+  const value = parseInt(match[1]);
+  const unit = match[2];
+  const ms = unit === 'd' ? value * 24 * 60 * 60 * 1000
+            : unit === 'h' ? value * 60 * 60 * 1000
+            : value * 60 * 1000;
+  return new Date(Date.now() + ms);
+};
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
 const axios = require('axios');
 
@@ -156,10 +169,16 @@ const kakaoLogin = async (req, res) => {
       email: user.email
     });
 
-    await user.update({
+    await UserSession.create({
+      userId: user.id,
       refreshToken,
-      lastLoginAt: new Date()
+      userType: 'user',
+      deviceInfo: req.headers['user-agent']?.substring(0, 255) || null,
+      ipAddress: req.ip || null,
+      expiresAt: getRefreshExpiresAt()
     }, { transaction });
+
+    await user.update({ lastLoginAt: new Date() }, { transaction });
 
     await transaction.commit();
 

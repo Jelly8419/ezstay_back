@@ -177,6 +177,10 @@ cleanupActionLogs();
 const cleanupIncompleteRegistrations = require('./schedulers/cleanupIncompleteRegistrations');
 cleanupIncompleteRegistrations();
 
+// 만료 세션 자동 정리 스케줄러 시작 (매일 03:00)
+const cleanupExpiredSessions = require('./schedulers/cleanupExpiredSessions');
+cleanupExpiredSessions();
+
 // 렌탈 주문 만료 스케줄러 시작 (15분 미결제 자동 취소)
 const { startRentalOrderScheduler } = require('./schedulers/rentalOrderScheduler');
 startRentalOrderScheduler();

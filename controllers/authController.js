@@ -1,9 +1,22 @@
-const { User, LocalUser, SocialUser, UserBankAccount, EmailVerificationCode, sequelize } = require('../models');
+const { User, LocalUser, SocialUser, UserBankAccount, EmailVerificationCode, UserSession, sequelize } = require('../models');
 const { generateTokens, hashPassword, comparePassword, verifyToken } = require('../utils/auth');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
 const { validateEmail, validatePassword } = require('../utils/validator');
 const { withTransaction } = require('../utils/transactionHelper');
 const { Op } = require('sequelize');
+
+// refreshToken 만료 기간 (환경변수 기반, 기본 14일)
+const getRefreshExpiresAt = () => {
+  const expiresIn = process.env.JWT_REFRESH_EXPIRES_IN || '14d';
+  const match = expiresIn.match(/^(\d+)([dhm])$/);
+  if (!match) return new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+  const value = parseInt(match[1]);
+  const unit = match[2];
+  const ms = unit === 'd' ? value * 24 * 60 * 60 * 1000
+            : unit === 'h' ? value * 60 * 60 * 1000
+            : value * 60 * 1000;
+  return new Date(Date.now() + ms);
+};
 
 /**
  * 회원가입 (이메일)
@@ -107,7 +120,14 @@ const register = async (req, res) => {
       hasBank: false
     });
 
-    await newUser.update({ refreshToken }, { transaction });
+    await UserSession.create({
+      userId: newUser.id,
+      refreshToken,
+      userType: 'user',
+      deviceInfo: req.headers['user-agent']?.substring(0, 255) || null,
+      ipAddress: req.ip || null,
+      expiresAt: getRefreshExpiresAt()
+    }, { transaction });
 
     return {
       user: {
@@ -226,10 +246,17 @@ const login = async (req, res) => {
       email: user.email
     });
 
-    await user.update({
+    // 세션 테이블에 새 세션 생성
+    await UserSession.create({
+      userId: user.id,
       refreshToken,
-      lastLoginAt: new Date()
+      userType: 'user',
+      deviceInfo: req.headers['user-agent']?.substring(0, 255) || null,
+      ipAddress: req.ip || null,
+      expiresAt: getRefreshExpiresAt()
     }, { transaction });
+
+    await user.update({ lastLoginAt: new Date() }, { transaction });
 
     await transaction.commit();
 
@@ -273,11 +300,23 @@ const refreshToken = async (req, res) => {
       return error(res, ErrorCodes.INVALID_TOKEN, 401);
     }
 
-    // DB에서 사용자 및 토큰 일치 확인
+    // 세션 테이블에서 토큰 일치 확인
+    const session = await UserSession.findOne({
+      where: {
+        userId: decoded.userId,
+        refreshToken: token,
+        userType: 'user'
+      }
+    });
+
+    if (!session || session.expiresAt < new Date()) {
+      return error(res, ErrorCodes.INVALID_TOKEN, 403);
+    }
+
+    // 사용자 상태 확인
     const user = await User.findOne({
       where: {
         id: decoded.userId,
-        refreshToken: token,
         accountStatus: 'active'
       }
     });
@@ -297,7 +336,12 @@ const refreshToken = async (req, res) => {
       email: user.email
     });
 
-    await user.update({ refreshToken: newRefreshToken });
+    // 세션 업데이트 (토큰 교체 + 만료 갱신 + lastUsedAt 갱신)
+    await session.update({
+      refreshToken: newRefreshToken,
+      lastUsedAt: new Date(),
+      expiresAt: getRefreshExpiresAt()
+    });
 
     return success(res, {
       accessToken,
@@ -310,9 +354,27 @@ const refreshToken = async (req, res) => {
 
 const logout = async (req, res) => {
   try {
+    const { refreshToken: token } = req.body;
     const user = req.user;
 
-    await user.update({ refreshToken: null });
+    if (token) {
+      // 특정 세션만 삭제 (refreshToken 기준)
+      await UserSession.destroy({
+        where: {
+          userId: user.id,
+          refreshToken: token,
+          userType: 'user'
+        }
+      });
+    } else {
+      // refreshToken 미제공 시 해당 유저의 모든 세션 삭제 (전체 로그아웃)
+      await UserSession.destroy({
+        where: {
+          userId: user.id,
+          userType: 'user'
+        }
+      });
+    }
 
     return success(res, null, '로그아웃이 완료되었습니다.');
   } catch (err) {
@@ -413,11 +475,17 @@ const devBypassLogin = async (req, res) => {
       email: user.email
     });
 
-    // refreshToken 저장
-    await user.update({
+    // 세션 테이블에 새 세션 생성
+    await UserSession.create({
+      userId: user.id,
       refreshToken,
-      lastLoginAt: new Date()
+      userType: 'user',
+      deviceInfo: req.headers['user-agent']?.substring(0, 255) || null,
+      ipAddress: req.ip || null,
+      expiresAt: getRefreshExpiresAt()
     });
+
+    await user.update({ lastLoginAt: new Date() });
 
     return success(res, {
       user: {
