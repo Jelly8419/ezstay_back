@@ -1,5 +1,5 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -1900,19 +1900,58 @@ const approveRefund = async (req, res) => {
       );
     }
 
-    // 환불 승인 처리
-    await refund.update(
-      {
-        refundStatus: 'APPROVED',
-        adminNotes: admin_notes || null,
-        approvedAt: new Date()
-      },
-      { transaction }
-    );
+    if (refund.finalRefundAmount > 0) {
+      const payment = await Payment.findOne({
+        where: {
+          contractId: refund.contractId,
+          status: { [Op.in]: ['DONE', 'PARTIAL_CANCELED'] }
+        },
+        transaction
+      });
 
-    // TODO: PayTag 환불 API 문서 수령 후 구현 필요
-    // paytagClient.cancelPayment()로 실제 PG 환불 처리
-    // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
+      if (payment) {
+        const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+        const cancelamt = refund.finalRefundAmount;
+        const newBalance = payment.balanceAmount - cancelamt;
+        const canceltype = newBalance === 0 ? '0' : '1';
+
+        // DB 업데이트 먼저
+        await payment.update({
+          balanceAmount: newBalance,
+          status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+        }, { transaction });
+
+        await refund.update({
+          refundStatus: 'COMPLETED',
+          adminNotes: admin_notes || null,
+          approvedAt: new Date(),
+          completedAt: new Date()
+        }, { transaction });
+
+        // PG 취소 — 실패 시 transaction rollback으로 DB 원복
+        try {
+          await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, cancelamt, canceltype });
+        } catch (pgErr) {
+          await transaction.rollback();
+          console.error('[approveRefund] PayTag 취소 실패:', pgErr.message);
+          return error(res, {
+            code: 4900,
+            message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
+            pgErrorCode: pgErr.paytagErrorCode
+          }, 502);
+        }
+
+        console.log(`[approveRefund] PayTag 취소 완료: refundId=${refund.id}, cancelamt=${cancelamt}`);
+      }
+    } else {
+      // 환불금액 0인 경우 PG 없이 바로 COMPLETED
+      await refund.update({
+        refundStatus: 'COMPLETED',
+        adminNotes: admin_notes || null,
+        approvedAt: new Date(),
+        completedAt: new Date()
+      }, { transaction });
+    }
 
     await transaction.commit();
 
@@ -1920,11 +1959,12 @@ const approveRefund = async (req, res) => {
       res,
       {
         refundId: refund.id,
-        refundStatus: refund.refundStatus,
+        refundStatus: 'COMPLETED',
         approvedAt: refund.approvedAt,
+        completedAt: refund.completedAt,
         finalRefundAmount: refund.finalRefundAmount
       },
-      '환불이 승인되었습니다. 실제 환불 처리는 수동으로 진행해주세요.'
+      '환불이 승인되어 PG 취소가 완료되었습니다.'
     );
   } catch (err) {
     await transaction.rollback();
@@ -2439,10 +2479,6 @@ const adminCancelRentalOrder = async (req, res) => {
       ? parseFloat(refundAmount)
       : orderTotal;
 
-    // TODO: PayTag 환불 API 문서 수령 후 구현 필요
-    // paytagClient.cancelPayment()로 렌탈 PG 환불 처리
-    // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
-
     // 전체 아이템 취소 처리
     const cancelledItemNames = [];
     for (const item of activeItems) {
@@ -2488,6 +2524,44 @@ const adminCancelRentalOrder = async (req, res) => {
       },
       transaction
     });
+
+    // PG 실제 취소 처리
+    if (finalRefundAmount > 0) {
+      const rentalPayment = await RentalPayment.findOne({
+        where: {
+          rentalOrderId: order.id,
+          status: { [Op.in]: ['DONE', 'PARTIAL_CANCELED'] }
+        },
+        transaction
+      });
+
+      if (rentalPayment) {
+        const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(rentalPayment);
+        const newBalance = rentalPayment.balanceAmount - finalRefundAmount;
+        const canceltype = newBalance === 0 ? '0' : '1';
+
+        // DB 업데이트 먼저
+        await rentalPayment.update({
+          balanceAmount: newBalance,
+          status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+        }, { transaction });
+
+        // PG 취소 — 실패 시 transaction rollback으로 DB 원복
+        try {
+          await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, cancelamt: finalRefundAmount, canceltype });
+        } catch (pgErr) {
+          await transaction.rollback();
+          console.error('[adminCancelRentalOrder] PayTag 취소 실패:', pgErr.message);
+          return error(res, {
+            code: 4900,
+            message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
+            pgErrorCode: pgErr.paytagErrorCode
+          }, 502);
+        }
+
+        console.log(`[adminCancelRentalOrder] PayTag 취소 완료: rentalOrderId=${order.rentalOrderId}, cancelamt=${finalRefundAmount}`);
+      }
+    }
 
     await transaction.commit();
 
@@ -2753,6 +2827,47 @@ const adminForceCancel = async (req, res) => {
           requestedAt: cancellationDate,
           approvedAt: cancellationDate
         }, { transaction });
+      }
+    }
+
+    // PG 실제 취소 처리 (BEFORE_PAYMENT는 실결제 없으므로 스킵)
+    if (refund && refund.finalRefundAmount > 0 && cancellationType !== 'BEFORE_PAYMENT') {
+      const payment = await Payment.findOne({
+        where: {
+          contractId: contract.id,
+          status: { [Op.in]: ['DONE', 'PARTIAL_CANCELED'] }
+        },
+        transaction
+      });
+
+      if (payment) {
+        const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+        const cancelamt = refund.finalRefundAmount;
+        const newBalance = payment.balanceAmount - cancelamt;
+        const canceltype = newBalance === 0 ? '0' : '1';
+
+        // DB 업데이트 먼저
+        await payment.update({
+          balanceAmount: newBalance,
+          status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+        }, { transaction });
+
+        await refund.update({ refundStatus: 'COMPLETED', completedAt: new Date() }, { transaction });
+
+        // PG 취소 — 실패 시 transaction rollback으로 DB 원복
+        try {
+          await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, cancelamt, canceltype });
+        } catch (pgErr) {
+          await transaction.rollback();
+          console.error('[adminForceCancel] PayTag 취소 실패:', pgErr.message);
+          return error(res, {
+            code: 4900,
+            message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
+            pgErrorCode: pgErr.paytagErrorCode
+          }, 502);
+        }
+
+        console.log(`[adminForceCancel] PayTag 취소 완료: contractId=${contract.id}, cancelamt=${cancelamt}`);
       }
     }
 

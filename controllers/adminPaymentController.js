@@ -538,48 +538,11 @@ exports.processAdminRefund = async (req, res) => {
       });
     }
 
-    // PayTag PG 취소 호출
+    // DB 업데이트 먼저
     const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
     const newBalance = payment.balanceAmount - refundAmount;
-    const canceltype = newBalance === 0 ? '0' : '1'; // 전체취소 or 부분취소
-
-    let paytagCancelResponse;
-    try {
-      paytagCancelResponse = await paytagClient.cancelPayment({
-        orderno,
-        orgpaydate,
-        orgtranamt,
-        cancelamt: refundAmount,
-        canceltype
-      });
-    } catch (pgErr) {
-      await transaction.rollback();
-      // 1023: 기취소완료 → 이미 취소된 거래
-      if (pgErr.paytagErrorCode === '1023') {
-        return error(res, {
-          code: 4901,
-          message: '이미 취소 완료된 결제입니다.',
-          pgErrorCode: pgErr.paytagErrorCode
-        }, 400);
-      }
-      // 1021: 취소불가
-      if (pgErr.paytagErrorCode === '1021') {
-        return error(res, {
-          code: 4902,
-          message: 'PG사에서 취소를 거부했습니다. 수동 처리가 필요합니다.',
-          pgErrorCode: pgErr.paytagErrorCode
-        }, 400);
-      }
-      console.error('PayTag 취소 API 오류:', pgErr.message);
-      return error(res, {
-        code: 4900,
-        message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
-        pgErrorCode: pgErr.paytagErrorCode
-      }, 502);
-    }
-
-    // PG 취소 성공 → DB 업데이트
     const newStatus = newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED';
+    const canceltype = newBalance === 0 ? '0' : '1'; // 전체취소 or 부분취소
 
     await payment.update({
       balanceAmount: newBalance,
@@ -613,6 +576,40 @@ exports.processAdminRefund = async (req, res) => {
       approvedAt: new Date(),
       completedAt: new Date()
     }, { transaction });
+
+    // PG 취소 — 실패 시 transaction rollback으로 DB 원복
+    let paytagCancelResponse;
+    try {
+      paytagCancelResponse = await paytagClient.cancelPayment({
+        orderno,
+        orgpaydate,
+        orgtranamt,
+        cancelamt: refundAmount,
+        canceltype
+      });
+    } catch (pgErr) {
+      await transaction.rollback();
+      if (pgErr.paytagErrorCode === '1023') {
+        return error(res, {
+          code: 4901,
+          message: '이미 취소 완료된 결제입니다.',
+          pgErrorCode: pgErr.paytagErrorCode
+        }, 400);
+      }
+      if (pgErr.paytagErrorCode === '1021') {
+        return error(res, {
+          code: 4902,
+          message: 'PG사에서 취소를 거부했습니다.',
+          pgErrorCode: pgErr.paytagErrorCode
+        }, 400);
+      }
+      console.error('PayTag 취소 API 오류:', pgErr.message);
+      return error(res, {
+        code: 4900,
+        message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
+        pgErrorCode: pgErr.paytagErrorCode
+      }, 502);
+    }
 
     await transaction.commit();
 
