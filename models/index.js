@@ -44,6 +44,7 @@ const AlimtalkLog = require('./AlimtalkLog');
 const { ReceiptSetting } = require('./ReceiptSetting');
 const Receipt = require('./Receipt');
 const UserSessionModel = require('./UserSession');
+const AdminRefund = require('./AdminRefund');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -465,6 +466,33 @@ Contract.hasMany(Refund, {
 Refund.belongsTo(Contract, {
   foreignKey: 'contractId',
   as: 'contract'
+});
+
+// Contract와 AdminRefund 관계 설정
+Contract.hasMany(AdminRefund, {
+  foreignKey: 'contractId',
+  as: 'adminRefunds',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+AdminRefund.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+AdminRefund.belongsTo(Admin, {
+  foreignKey: 'adminId',
+  as: 'admin',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+Admin.hasMany(AdminRefund, {
+  foreignKey: 'adminId',
+  as: 'adminRefunds',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
 });
 
 // ContractStatusLog 관계 설정
@@ -985,5 +1013,6 @@ module.exports = {
   AlimtalkLog,
   ReceiptSetting,
   Receipt,
-  UserSession
+  UserSession,
+  AdminRefund
 };

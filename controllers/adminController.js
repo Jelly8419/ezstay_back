@@ -8,7 +8,6 @@ const { toAbsoluteUrl } = require('../utils/urlHelper');
 const { sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
-const { calculateRefund } = require('../utils/refundCalculator');
 const { getBankName } = require('../utils/bankCodes');
 const paytagClient = require('../utils/paytagClient');
 
@@ -2207,7 +2206,7 @@ const getRentalOrderDetail = async (req, res) => {
     const { rentalOrderId } = req.params;
 
     const order = await RentalOrder.findOne({
-      where: { rentalOrderId },
+      where: { orderId: rentalOrderId },
       include: [
         {
           model: Contract,
@@ -2237,7 +2236,7 @@ const getRentalOrderDetail = async (req, res) => {
           include: [{
             model: RentalItem,
             as: 'rentalItem',
-            attributes: ['id', 'name', 'category', 'price']
+            attributes: ['id', 'name', 'itemType', 'price']
           }]
         }
       ]
@@ -2284,7 +2283,7 @@ const getRentalOrderDetail = async (req, res) => {
           id: item.id,
           rentalItemId: item.rentalItemId,
           name: item.rentalItem?.name,
-          category: item.rentalItem?.category,
+          itemType: item.rentalItem?.itemType,
           quantity: item.quantity,
           pricePerItem: parseFloat(item.pricePerItem),
           totalPrice: parseFloat(item.totalPrice),
@@ -2417,13 +2416,11 @@ const getContractRentalHistory = async (req, res) => {
 };
 
 /**
- * 관리자 렌탈 주문 전체 취소 (강제 취소)
+ * [DEPRECATED] 관리자 렌탈 주문 전체 취소
  * POST /api/admin/rental-orders/:rentalOrderId/cancel
- *
- * @description 관리자가 렌탈 주문 전체를 취소합니다 (주문 단위)
- * @body { reason: string, refundAmount?: number }
- * - refundAmount 미지정 시 주문 전체 금액 환불
+ * → POST /api/admin/rental-payments/:rentalOrderId/refund 으로 대체됨
  */
+/* DEPRECATED_START: adminCancelRentalOrder
 const adminCancelRentalOrder = async (req, res) => {
   const transaction = await sequelize.transaction();
 
@@ -2582,6 +2579,7 @@ const adminCancelRentalOrder = async (req, res) => {
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
 };
+DEPRECATED_END */
 
 /**
  * 렌탈 주문 배송 상태 변경
@@ -2775,102 +2773,6 @@ const adminForceCancel = async (req, res) => {
       transaction
     });
 
-    // 환불 포함 취소인 경우 Refund 레코드 생성
-    let refund = null;
-    if (withRefund && cancellationType !== 'BEFORE_PAYMENT') {
-      const cancellationDate = new Date();
-      const refundResult = await calculateRefund(contract, cancellationDate);
-
-      if (refundResult.success) {
-        const refundData = refundResult.data;
-        refund = await Refund.create({
-          contractId: contract.id,
-          refundStatus: 'APPROVED',
-
-          policyTypeUsed: refundData.policyTypeUsed,
-          cancellationDate,
-          checkInDate: contract.checkInDate,
-          daysBeforeCheckin: refundData.daysBeforeCheckin,
-          isSameDayCancellation: refundData.isSameDayCancellation,
-          cancellationFaultType: refundData.cancellationFaultType,
-          hasEzCleaningService: refundData.hasEzCleaningService,
-
-          originalDeposit: refundData.originalDeposit,
-          originalPlatformFee: refundData.originalPlatformFee,
-          originalRentalFee: contract.rentalFee,
-          originalCleaningFee: contract.cleaningFee,
-          originalMaintenanceFee: contract.maintenanceFee,
-          originalTotalAmount: contract.finalTotalAmount,
-
-          usageFee: refundData.usageFee,
-          usageFeeRefundAmount: refundData.usageFeeRefundAmount,
-          depositRefundAmount: refundData.depositRefundAmount,
-
-          rentalFeeRefundRate: refundData.rentalFeeRefundRate,
-          rentalFeeRefundAmount: refundData.rentalFeeRefundAmount,
-          cleaningFeeRefundAmount: refundData.cleaningFeeRefundAmount,
-          maintenanceFeeRefundAmount: refundData.maintenanceFeeRefundAmount,
-          totalRefundAmount: refundData.totalRefundAmount,
-
-          penaltyAmount: refundData.penaltyAmount,
-          hostPenaltyAmount: refundData.hostPenaltyAmount,
-          hostPenaltyFee: refundData.hostPenaltyFee,
-
-          guestServiceFeeRefunded: refundData.guestServiceFeeRefunded,
-          platformFeeDeducted: refundData.platformFeeDeducted,
-          finalRefundAmount: refundData.finalRefundAmount,
-
-          refundMethod: 'ORIGINAL_PAYMENT',
-          cancellationReason: `[관리자 강제 취소] ${reason}`,
-          adminNotes: `관리자(ID:${adminId}) 강제 취소 처리`,
-
-          requestedAt: cancellationDate,
-          approvedAt: cancellationDate
-        }, { transaction });
-      }
-    }
-
-    // PG 실제 취소 처리 (BEFORE_PAYMENT는 실결제 없으므로 스킵)
-    if (refund && refund.finalRefundAmount > 0 && cancellationType !== 'BEFORE_PAYMENT') {
-      const payment = await Payment.findOne({
-        where: {
-          contractId: contract.id,
-          status: { [Op.in]: ['DONE', 'PARTIAL_CANCELED'] }
-        },
-        transaction
-      });
-
-      if (payment) {
-        const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
-        const cancelamt = refund.finalRefundAmount;
-        const newBalance = payment.balanceAmount - cancelamt;
-        const canceltype = newBalance === 0 ? '0' : '1';
-
-        // DB 업데이트 먼저
-        await payment.update({
-          balanceAmount: newBalance,
-          status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
-        }, { transaction });
-
-        await refund.update({ refundStatus: 'COMPLETED', completedAt: new Date() }, { transaction });
-
-        // PG 취소 — 실패 시 transaction rollback으로 DB 원복
-        try {
-          await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, cancelamt, canceltype });
-        } catch (pgErr) {
-          await transaction.rollback();
-          console.error('[adminForceCancel] PayTag 취소 실패:', pgErr.message);
-          return error(res, {
-            code: 4900,
-            message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
-            pgErrorCode: pgErr.paytagErrorCode
-          }, 502);
-        }
-
-        console.log(`[adminForceCancel] PayTag 취소 완료: contractId=${contract.id}, cancelamt=${cancelamt}`);
-      }
-    }
-
     await transaction.commit();
 
     // 채팅 시스템 메시지 (트랜잭션 외부)
@@ -2904,9 +2806,7 @@ const adminForceCancel = async (req, res) => {
       newStatus,
       withRefund,
       cancellationType,
-      reason,
-      refundId: refund ? refund.id : null,
-      totalRefundAmount: refund ? refund.totalRefundAmount : null
+      reason
     }, '계약이 강제 취소되었습니다.');
 
   } catch (err) {
@@ -3000,67 +2900,6 @@ const approveHostCancelRequest = async (req, res) => {
       transaction
     });
 
-    // 환불 포함인 경우 Refund 레코드 생성 (호스트 귀책)
-    let refund = null;
-    if (withRefund) {
-      const cancellationDate = new Date();
-      const refundResult = await calculateRefund(contract, cancellationDate, { faultType: 'HOST' });
-
-      if (refundResult.success) {
-        const refundData = refundResult.data;
-        refund = await Refund.create({
-          contractId: contract.id,
-          refundStatus: 'APPROVED',
-
-          policyTypeUsed: refundData.policyTypeUsed,
-          cancellationDate,
-          checkInDate: contract.checkInDate,
-          daysBeforeCheckin: refundData.daysBeforeCheckin,
-          isSameDayCancellation: refundData.isSameDayCancellation,
-          cancellationFaultType: 'HOST',
-          hasEzCleaningService: refundData.hasEzCleaningService,
-
-          originalDeposit: refundData.originalDeposit,
-          originalPlatformFee: refundData.originalPlatformFee,
-          originalRentalFee: contract.rentalFee,
-          originalCleaningFee: contract.cleaningFee,
-          originalMaintenanceFee: contract.maintenanceFee,
-          originalTotalAmount: contract.finalTotalAmount,
-
-          usageFee: refundData.usageFee,
-          usageFeeRefundAmount: refundData.usageFeeRefundAmount,
-          depositRefundAmount: refundData.depositRefundAmount,
-
-          rentalFeeRefundRate: refundData.rentalFeeRefundRate,
-          rentalFeeRefundAmount: refundData.rentalFeeRefundAmount,
-          cleaningFeeRefundAmount: refundData.cleaningFeeRefundAmount,
-          maintenanceFeeRefundAmount: refundData.maintenanceFeeRefundAmount,
-          totalRefundAmount: refundData.totalRefundAmount,
-
-          penaltyAmount: refundData.penaltyAmount,
-          hostPenaltyAmount: refundData.hostPenaltyAmount,
-          hostPenaltyFee: refundData.hostPenaltyFee,
-
-          guestServiceFeeRefunded: refundData.guestServiceFeeRefunded,
-          platformFeeDeducted: refundData.platformFeeDeducted,
-          finalRefundAmount: refundData.finalRefundAmount,
-
-          // 호스트 부담금 (위약금 + 게스트 서비스 수수료)
-          hostBurdenAmount: refundData.penaltyAmount + refundData.originalPlatformFee,
-          hostBurdenStatus: 'PENDING',
-          guestCompensationAmount: refundData.penaltyAmount,
-          guestCompensationStatus: refundData.penaltyAmount > 0 ? 'PENDING' : null,
-
-          refundMethod: 'ORIGINAL_PAYMENT',
-          cancellationReason: `호스트 취소 요청 승인`,
-          adminNotes: adminNote || null,
-
-          requestedAt: cancellationDate,
-          approvedAt: cancellationDate
-        }, { transaction });
-      }
-    }
-
     await transaction.commit();
 
     // 채팅 시스템 메시지
@@ -3109,10 +2948,7 @@ const approveHostCancelRequest = async (req, res) => {
       previousStatus,
       newStatus: 'CANCELLED_BY_HOST',
       withRefund,
-      adminNote,
-      refundId: refund ? refund.id : null,
-      totalRefundAmount: refund ? refund.totalRefundAmount : null,
-      hostBurdenAmount: refund ? refund.hostBurdenAmount : null
+      adminNote
     }, '호스트 취소 요청이 승인되었습니다.');
 
   } catch (err) {
@@ -4210,7 +4046,7 @@ module.exports = {
   getRentalOrders,
   getRentalOrderDetail,
   getContractRentalHistory,
-  adminCancelRentalOrder,
+  // adminCancelRentalOrder, // DEPRECATED: /rental-payments/:rentalOrderId/refund 로 대체
   updateRentalOrderDeliveryStatus,
 
   // 보증금 보류 관리

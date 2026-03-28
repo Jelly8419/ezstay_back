@@ -281,12 +281,12 @@ router.get('/rental-orders/:rentalOrderId', adminController.getRentalOrderDetail
 // 계약별 렌탈 이력 조회
 router.get('/contracts/:contractId/rental-history', adminController.getContractRentalHistory);
 
-// 관리자 렌탈 주문 전체 취소 (super_admin, admin만 가능)
-router.post(
-  '/rental-orders/:rentalOrderId/cancel',
-  requireAdminRole(['super_admin', 'admin']),
-  adminController.adminCancelRentalOrder
-);
+// 관리자 렌탈 주문 취소 (DEPRECATED: /rental-payments/:rentalOrderId/refund 로 대체)
+// router.post(
+//   '/rental-orders/:rentalOrderId/cancel',
+//   requireAdminRole(['super_admin', 'admin']),
+//   adminController.adminCancelRentalOrder
+// );
 
 // 렌탈 주문 배송 상태 변경 (super_admin, admin만 가능)
 router.patch(
@@ -349,11 +349,18 @@ router.get('/payments/logs', adminPaymentController.getPaymentLogs);
 // 결제 상세 조회 (주문번호 기준, ?type=contract|rental)
 router.get('/payments/:orderId', adminPaymentController.getPaymentDetail);
 
-// 관리자 환불 처리 (토스페이먼츠 연동, super_admin/admin만 가능)
+// 관리자 환불 처리 - 계약 결제 (INITIAL 렌탈 포함)
 router.post(
   '/payments/:contractId/refund',
   requireAdminRole(['super_admin', 'admin']),
   adminPaymentController.processAdminRefund
+);
+
+// 관리자 환불 처리 - 렌탈 추가결제 (ADDITIONAL 렌탈 전용)
+router.post(
+  '/rental-payments/:rentalOrderId/refund',
+  requireAdminRole(['super_admin', 'admin']),
+  adminPaymentController.processAdminRentalRefund
 );
 
 // ============================================

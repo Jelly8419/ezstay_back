@@ -55,7 +55,8 @@ const RentalOrderLog = sequelize.define('RentalOrderLog', {
       'ORDER_CANCELLED',      // 주문 전체 취소
       'ORDER_EXPIRED',        // 주문 자동 만료 (미결제/기한 초과)
       'DELIVERY_STARTED',     // 배송 시작
-      'DELIVERY_COMPLETED'    // 배송 완료
+      'DELIVERY_COMPLETED',   // 배송 완료
+      'ADMIN_REFUND'          // 관리자 직접 환불
     ),
     allowNull: false,
     comment: '액션 유형'

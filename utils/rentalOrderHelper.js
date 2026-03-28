@@ -756,6 +756,78 @@ async function cancelPaidRentalOrder(rentalOrder, reason, actorId, actor, req, t
 }
 
 /**
+ * 관리자 렌탈 주문 부분 환불 (금액 단위)
+ * - 관리자가 직접 환불 금액을 지정하는 방식
+ * - PG 취소는 호출부(adminPaymentController)에서 처리 (계약 PG와 통합 취소 가능)
+ * @param {RentalOrder} rentalOrder - 렌탈 주문 객체 (RentalPayment include 필요)
+ * @param {number} refundAmount - 환불 금액
+ * @param {string} reason - 환불 사유
+ * @param {number} actorId - 관리자 ID
+ * @param {Object} req - Request 객체
+ * @param {Transaction} transaction - Sequelize 트랜잭션
+ * @returns {Promise<{ newBalance: number, newStatus: string }>}
+ */
+async function partialRefundRentalOrder(rentalOrder, refundAmount, reason, actorId, req, transaction) {
+  if (!['PAID', 'PARTIAL_REFUND'].includes(rentalOrder.status)) {
+    throw new Error('결제된 주문만 환불할 수 있습니다');
+  }
+
+  const rentalPayment = await RentalPayment.findOne({
+    where: { rentalOrderId: rentalOrder.id },
+    transaction
+  });
+
+  if (!rentalPayment) {
+    throw new Error('렌탈 결제 정보를 찾을 수 없습니다');
+  }
+
+  const availableBalance = rentalPayment.balanceAmount;
+  if (refundAmount > availableBalance) {
+    throw new Error(`렌탈 환불 가능 금액 초과 (가능: ${availableBalance}원, 요청: ${refundAmount}원)`);
+  }
+
+  const newBalance = availableBalance - refundAmount;
+  const newPaymentStatus = newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED';
+
+  await rentalPayment.update({
+    balanceAmount: newBalance,
+    status: newPaymentStatus
+  }, { transaction });
+
+  const newRefundedAmount = parseFloat(rentalOrder.refundedAmount || 0) + refundAmount;
+  const newOrderStatus = newRefundedAmount >= parseFloat(rentalOrder.paidAmount)
+    ? 'FULLY_REFUNDED'
+    : 'PARTIAL_REFUND';
+
+  await rentalOrder.update({
+    refundedAmount: newRefundedAmount,
+    status: newOrderStatus
+  }, { transaction });
+
+  const summary = await getContractRentalSummary(rentalOrder.contractId, transaction);
+
+  await logRentalAction({
+    contractId: rentalOrder.contractId,
+    rentalOrderId: rentalOrder.id,
+    action: 'REFUND_COMPLETED',
+    actor: 'ADMIN',
+    actorId,
+    amountChange: -refundAmount,
+    balanceAfter: summary.netAmount,
+    metadata: { refundAmount, reason, newBalance, newOrderStatus },
+    description: `관리자 환불 처리: ${refundAmount}원 (${reason || '사유 없음'})`,
+    req
+  }, transaction);
+
+  return {
+    rentalPaymentId: rentalPayment.id,
+    newBalance,
+    newPaymentStatus,
+    newOrderStatus
+  };
+}
+
+/**
  * 미결제 렌탈 주문 취소
  * @param {RentalOrder} rentalOrder - 렌탈 주문 객체
  * @param {number} actorId - 행위자 ID
@@ -835,6 +907,7 @@ module.exports = {
   confirmRentalOrderPayment,
   cancelPaidRentalOrder,
   cancelPendingRentalOrder,
+  partialRefundRentalOrder,
 
   // 로깅 함수
   logRentalAction

@@ -1,7 +1,8 @@
-const { Payment, PaymentFailureLog, RentalPayment, RentalOrder, RentalOrderItem, RentalItem, Contract, User, Room, Refund, RentalOrderLog, sequelize } = require('../models');
+const { Payment, PaymentFailureLog, RentalPayment, RentalOrder, RentalOrderItem, RentalItem, Contract, User, Room, Refund, AdminRefund, RentalOrderLog, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const paytagClient = require('../utils/paytagClient');
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
+const { partialRefundRentalOrder, logRentalAction } = require('../utils/rentalOrderHelper');
 
 /**
  * 결제 목록 조회 (계약 결제 + 렌탈 결제 통합)
@@ -491,30 +492,45 @@ exports.getPaymentDetail = async (req, res) => {
  * 관리자 환불 처리 (PayTag 연동)
  * POST /api/admin/payments/:contractId/refund
  */
+/**
+ * 관리자 환불 처리 (PayTag 연동)
+ * POST /api/admin/payments/:contractId/refund
+ *
+ * Request Body:
+ * {
+ *   refundReason: string,           // 필수
+ *   items: {
+ *     rentalFee: number,            // 임대료 환불액
+ *     maintenanceFee: number,       // 관리비 환불액
+ *     cleaningFee: number,          // 청소비 환불액
+ *     platformFee: number,          // 서비스 수수료 환불액
+ *     deposit: number,              // 보증금 환불액
+ *     rentalItems: number           // 렌탈 아이템 환불액 (INITIAL 주문)
+ *   }
+ * }
+ */
 exports.processAdminRefund = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
     const { contractId } = req.params;
-    const { refundAmount, refundReason } = req.body;
+    const { refundType, refundReason, refundAmount: rawRefundAmount, items = {} } = req.body;
     const adminId = req.admin.id;
 
-    // 입력 검증
-    if (!refundAmount || refundAmount <= 0) {
-      await transaction.rollback();
-      return error(res, ErrorCodes.VALIDATION_ERROR, 400, { field: 'refundAmount' });
-    }
+    // 필수 입력 검증
     if (!refundReason) {
       await transaction.rollback();
       return error(res, ErrorCodes.VALIDATION_ERROR, 400, { field: 'refundReason' });
     }
+    if (!['FULL', 'PARTIAL_AMOUNT', 'PARTIAL_ITEMS'].includes(refundType)) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, { field: 'refundType', message: 'refundType은 FULL, PARTIAL_AMOUNT, PARTIAL_ITEMS 중 하나여야 합니다.' });
+    }
 
+    // 계약 결제 조회
     const payment = await Payment.findOne({
-      where: { contractId },
-      include: [{
-        model: Contract,
-        as: 'contract'
-      }],
+      where: { contractId, paymentType: 'CONTRACT' },
+      include: [{ model: Contract, as: 'contract' }],
       transaction
     });
 
@@ -523,103 +539,264 @@ exports.processAdminRefund = async (req, res) => {
       return error(res, ErrorCodes.PAYMENT_NOT_FOUND, 404);
     }
 
-    // 환불 가능 상태 확인
     if (!['DONE', 'PARTIAL_CANCELED'].includes(payment.status)) {
       await transaction.rollback();
       return error(res, ErrorCodes.PAYMENT_NOT_REFUNDABLE, 400);
     }
 
-    // 환불 금액 확인
-    if (refundAmount > payment.balanceAmount) {
-      await transaction.rollback();
-      return error(res, ErrorCodes.REFUND_EXCEEDS_BALANCE, 400, {
-        balanceAmount: payment.balanceAmount,
-        requestedAmount: refundAmount
+    const contract = payment.contract;
+    const now = new Date();
+
+    // ── refundType별 금액 산정 ──
+    // contractItems: 계약 상품(임대료/관리비 등) 항목별 환불액
+    // rentalItemsToCancel: INITIAL 렌탈 아이템별 환불 목록 [{ orderItem, refundAmount }]
+    let contractItems = { rentalFee: 0, maintenanceFee: 0, cleaningFee: 0, platformFee: 0, deposit: 0 };
+    let directRefundAmount = 0; // FULL / PARTIAL_AMOUNT 전용
+    let rentalItemsToCancel = []; // INITIAL 렌탈 아이템 취소 목록
+    let rentalItemsRefundAmount = 0; // INITIAL 렌탈 환불 합산액
+    let initialRentalOrder = null;
+
+    if (refundType === 'FULL') {
+      // 계약 결제 잔액 전액
+      directRefundAmount = payment.balanceAmount;
+
+      // INITIAL 렌탈 주문 전체 아이템 취소
+      initialRentalOrder = await RentalOrder.findOne({
+        where: { contractId, orderType: 'INITIAL', status: { [Op.in]: ['PAID', 'PARTIAL_REFUND'] } },
+        transaction
       });
+      if (initialRentalOrder) {
+        const activeItems = await RentalOrderItem.findAll({
+          where: { rentalOrderId: initialRentalOrder.id, status: { [Op.ne]: 'CANCELLED' } },
+          include: [{ model: RentalItem, as: 'rentalItem', attributes: ['id', 'name'] }],
+          transaction
+        });
+        rentalItemsToCancel = activeItems.map(i => ({ orderItem: i, refundAmount: parseFloat(i.totalPrice) }));
+        rentalItemsRefundAmount = rentalItemsToCancel.reduce((sum, i) => sum + i.refundAmount, 0);
+      }
+
+    } else if (refundType === 'PARTIAL_AMOUNT') {
+      // 관리자가 직접 입력한 금액 (계약 결제에서만 차감, 렌탈 아이템 변경 없음)
+      directRefundAmount = Math.max(0, parseInt(rawRefundAmount || 0, 10));
+      if (directRefundAmount <= 0) {
+        await transaction.rollback();
+        return error(res, ErrorCodes.VALIDATION_ERROR, 400, { field: 'refundAmount', message: '환불 금액은 0보다 커야 합니다.' });
+      }
+      if (directRefundAmount > payment.balanceAmount) {
+        await transaction.rollback();
+        return error(res, ErrorCodes.REFUND_EXCEEDS_BALANCE, 400, {
+          balanceAmount: payment.balanceAmount,
+          requestedAmount: directRefundAmount
+        });
+      }
+
+    } else {
+      // PARTIAL_ITEMS: 계약 상품별 금액 + INITIAL 렌탈 아이템 배열
+      contractItems = {
+        rentalFee:      Math.max(0, parseInt(items.rentalFee      || 0, 10)),
+        maintenanceFee: Math.max(0, parseInt(items.maintenanceFee || 0, 10)),
+        cleaningFee:    Math.max(0, parseInt(items.cleaningFee    || 0, 10)),
+        platformFee:    Math.max(0, parseInt(items.platformFee    || 0, 10)),
+        deposit:        Math.max(0, parseInt(items.deposit        || 0, 10))
+      };
+      const contractRefundTotal = Object.values(contractItems).reduce((s, v) => s + v, 0);
+
+      // INITIAL 렌탈 아이템 배열 처리
+      const rentalItemsInput = Array.isArray(items.rentalItems) ? items.rentalItems : [];
+      if (rentalItemsInput.length > 0) {
+        initialRentalOrder = await RentalOrder.findOne({
+          where: { contractId, orderType: 'INITIAL', status: { [Op.in]: ['PAID', 'PARTIAL_REFUND'] } },
+          transaction
+        });
+        if (!initialRentalOrder) {
+          await transaction.rollback();
+          return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+            field: 'items.rentalItems',
+            message: '환불 가능한 INITIAL 렌탈 주문이 없습니다.'
+          });
+        }
+
+        for (const ri of rentalItemsInput) {
+          const orderItem = await RentalOrderItem.findOne({
+            where: { id: ri.rentalOrderItemId, rentalOrderId: initialRentalOrder.id },
+            include: [{ model: RentalItem, as: 'rentalItem', attributes: ['id', 'name'] }],
+            transaction
+          });
+          if (!orderItem) {
+            await transaction.rollback();
+            return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+              field: 'items.rentalItems',
+              message: `rentalOrderItemId(${ri.rentalOrderItemId})를 찾을 수 없습니다.`
+            });
+          }
+          if (orderItem.status === 'CANCELLED') {
+            await transaction.rollback();
+            return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+              field: 'items.rentalItems',
+              message: `rentalOrderItemId(${ri.rentalOrderItemId})는 이미 취소된 아이템입니다.`
+            });
+          }
+          const itemAmt = Math.max(0, parseInt(ri.refundAmount || 0, 10));
+          if (itemAmt <= 0 || itemAmt > parseFloat(orderItem.totalPrice)) {
+            await transaction.rollback();
+            return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+              field: 'items.rentalItems',
+              message: `rentalOrderItemId(${ri.rentalOrderItemId}) 환불 금액(${itemAmt}원)이 유효하지 않습니다. (0 초과 ${orderItem.totalPrice}원 이하)`
+            });
+          }
+          rentalItemsToCancel.push({ orderItem, refundAmount: itemAmt });
+          rentalItemsRefundAmount += itemAmt;
+        }
+      }
+
+      if (contractRefundTotal + rentalItemsRefundAmount <= 0) {
+        await transaction.rollback();
+        return error(res, ErrorCodes.VALIDATION_ERROR, 400, { field: 'items', message: '환불 금액은 0보다 커야 합니다.' });
+      }
+
+      // 계약 항목별 원금 이하 검증
+      const itemValidations = [
+        { field: 'rentalFee',      value: contractItems.rentalFee,      max: contract.rentalFee      || 0 },
+        { field: 'maintenanceFee', value: contractItems.maintenanceFee,  max: contract.maintenanceFee || 0 },
+        { field: 'cleaningFee',    value: contractItems.cleaningFee,     max: contract.cleaningFee    || 0 },
+        { field: 'platformFee',    value: contractItems.platformFee,     max: contract.platformFee    || 0 },
+        { field: 'deposit',        value: contractItems.deposit,         max: contract.deposit        || 0 }
+      ];
+      for (const v of itemValidations) {
+        if (v.value > v.max) {
+          await transaction.rollback();
+          return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+            field: v.field,
+            message: `${v.field} 환불 금액(${v.value}원)이 원금(${v.max}원)을 초과합니다.`
+          });
+        }
+      }
+
+      if (contractRefundTotal > 0 && contractRefundTotal > payment.balanceAmount) {
+        await transaction.rollback();
+        return error(res, ErrorCodes.REFUND_EXCEEDS_BALANCE, 400, {
+          balanceAmount: payment.balanceAmount,
+          requestedAmount: contractRefundTotal
+        });
+      }
+
+      directRefundAmount = contractRefundTotal;
     }
 
-    // DB 업데이트 먼저
-    const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
-    const newBalance = payment.balanceAmount - refundAmount;
-    const newStatus = newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED';
-    const canceltype = newBalance === 0 ? '0' : '1'; // 전체취소 or 부분취소
+    // 계약 결제에서 차감할 총액 (계약 상품 + INITIAL 렌탈 — 같은 결제건)
+    const contractRefundAmount = (refundType === 'PARTIAL_ITEMS')
+      ? (Object.values(contractItems).reduce((s, v) => s + v, 0) + rentalItemsRefundAmount)
+      : directRefundAmount;
+
+    const totalRefundAmount = contractRefundAmount;
+
+    // ── DB 업데이트 ──
+
+    // 1) Payment 잔액 차감
+    const newContractBalance = payment.balanceAmount - contractRefundAmount;
+    const newContractStatus = newContractBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED';
 
     await payment.update({
-      balanceAmount: newBalance,
-      status: newStatus
+      balanceAmount: newContractBalance,
+      status: newContractStatus
     }, { transaction });
 
-    // Refund 레코드 생성
-    const refund = await Refund.create({
-      contractId: payment.contractId,
-      refundStatus: 'COMPLETED',
-      policyTypeUsed: 'ADMIN_REFUND',
-      cancellationDate: new Date(),
-      checkInDate: payment.contract?.checkInDate || new Date(),
-      daysBeforeCheckin: 0,
-      originalRentalFee: payment.contract?.rentalFee || 0,
-      originalCleaningFee: payment.contract?.cleaningFee || 0,
-      originalMaintenanceFee: payment.contract?.maintenanceFee || 0,
-      originalTotalAmount: payment.totalAmount,
-      rentalFeeRefundRate: 0,
-      rentalFeeRefundAmount: refundAmount,
-      cleaningFeeRefundAmount: 0,
-      maintenanceFeeRefundAmount: 0,
-      totalRefundAmount: refundAmount,
-      platformFeeDeducted: 0,
-      penaltyAmount: 0,
-      finalRefundAmount: refundAmount,
-      refundMethod: 'ORIGINAL_PAYMENT',
-      cancellationReason: refundReason,
-      adminNotes: `관리자(ID:${adminId}) 직접 환불 처리`,
-      requestedAt: new Date(),
-      approvedAt: new Date(),
-      completedAt: new Date()
+    // 2) AdminRefund 기록
+    const adminRefund = await AdminRefund.create({
+      contractId,
+      adminId,
+      refundType,
+      refundAmount:                directRefundAmount,
+      rentalFeeRefundAmount:       contractItems.rentalFee,
+      maintenanceFeeRefundAmount:  contractItems.maintenanceFee,
+      cleaningFeeRefundAmount:     contractItems.cleaningFee,
+      platformFeeRefundAmount:     contractItems.platformFee,
+      depositRefundAmount:         contractItems.deposit,
+      rentalItemsRefundAmount,
+      totalRefundAmount,
+      finalRefundAmount:           totalRefundAmount,
+      originalRentalFee:           contract.rentalFee      || 0,
+      originalMaintenanceFee:      contract.maintenanceFee || 0,
+      originalCleaningFee:         contract.cleaningFee    || 0,
+      originalPlatformFee:         contract.platformFee    || 0,
+      originalDeposit:             contract.deposit        || 0,
+      originalTotalAmount:         payment.totalAmount,
+      refundStatus:                'COMPLETED',
+      refundMethod:                'ORIGINAL_PAYMENT',
+      refundReason,
+      adminNotes:                  `관리자(ID:${adminId}) 직접 환불 처리`,
+      completedAt:                 now
     }, { transaction });
 
-    // PG 취소 — 실패 시 transaction rollback으로 DB 원복
-    let paytagCancelResponse;
+    // 3) INITIAL 렌탈 아이템 DB 반영 (PG 추가 호출 없음 — 계약 결제에 포함)
+    if (rentalItemsToCancel.length > 0 && initialRentalOrder) {
+      for (const { orderItem, refundAmount: itemAmt } of rentalItemsToCancel) {
+        await orderItem.update({
+          status: 'CANCELLED',
+          cancelledAt: now,
+          cancelReason: `[관리자] ${refundReason}`,
+          refundAmount: itemAmt
+        }, { transaction });
+      }
+
+      const newRentalRefunded = parseFloat(initialRentalOrder.refundedAmount || 0) + rentalItemsRefundAmount;
+      const newRentalStatus = newRentalRefunded >= parseFloat(initialRentalOrder.paidAmount)
+        ? 'FULLY_REFUNDED'
+        : 'PARTIAL_REFUND';
+
+      await initialRentalOrder.update({
+        refundedAmount: newRentalRefunded,
+        status: newRentalStatus
+      }, { transaction });
+    }
+
+    // 4) PG 취소 (계약 결제 한 번 — INITIAL 렌탈 금액 포함)
+    const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(payment);
+    const canceltype = newContractBalance === 0 ? '0' : '1';
+    let pgReceiptUrl = null;
+
     try {
-      paytagCancelResponse = await paytagClient.cancelPayment({
-        orderno,
-        orgpaydate,
-        orgtranamt,
-        cancelamt: refundAmount,
+      const pgResponse = await paytagClient.cancelPayment({
+        orderno, orgpaydate, orgtranamt, loginid,
+        cancelamt: contractRefundAmount,
         canceltype
       });
+      pgReceiptUrl = pgResponse?.receipt_url || null;
     } catch (pgErr) {
       await transaction.rollback();
       if (pgErr.paytagErrorCode === '1023') {
-        return error(res, {
-          code: 4901,
-          message: '이미 취소 완료된 결제입니다.',
-          pgErrorCode: pgErr.paytagErrorCode
-        }, 400);
+        return error(res, { code: 4901, message: '이미 취소 완료된 결제입니다.', pgErrorCode: pgErr.paytagErrorCode }, 400);
       }
       if (pgErr.paytagErrorCode === '1021') {
-        return error(res, {
-          code: 4902,
-          message: 'PG사에서 취소를 거부했습니다.',
-          pgErrorCode: pgErr.paytagErrorCode
-        }, 400);
+        return error(res, { code: 4902, message: 'PG사에서 취소를 거부했습니다.', pgErrorCode: pgErr.paytagErrorCode }, 400);
       }
-      console.error('PayTag 취소 API 오류:', pgErr.message);
-      return error(res, {
-        code: 4900,
-        message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
-        pgErrorCode: pgErr.paytagErrorCode
-      }, 502);
+      console.error('계약 PayTag 취소 오류:', pgErr.message);
+      return error(res, { code: 4900, message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`, pgErrorCode: pgErr.paytagErrorCode }, 502);
     }
 
     await transaction.commit();
 
+    // 환불 후 계약 상태가 활성이면 경고
+    const activeStatuses = ['PAYMENT_COMPLETED', 'IN_PROGRESS'];
+    const warning = activeStatuses.includes(contract.status)
+      ? '환불 처리 완료. 계약 상태가 아직 활성 상태입니다. 계약 관리에서 상태를 확인하세요.'
+      : null;
+
     return success(res, {
-      refundId: refund.id,
-      paymentId: payment.id,
-      refundAmount,
-      newBalance,
-      paymentStatus: newStatus,
-      pgReceiptUrl: paytagCancelResponse.receipt_url || null
+      adminRefundId: adminRefund.id,
+      refundType,
+      totalRefundAmount,
+      paymentStatus: newContractStatus,
+      pgReceiptUrl,
+      ...(refundType === 'PARTIAL_ITEMS' && { contractItems }),
+      ...(rentalItemsToCancel.length > 0 && {
+        cancelledRentalItems: rentalItemsToCancel.map(({ orderItem, refundAmount: a }) => ({
+          id: orderItem.id,
+          name: orderItem.rentalItem?.name,
+          refundAmount: a
+        }))
+      }),
+      ...(warning && { warning })
     }, '환불이 처리되었습니다.');
 
   } catch (err) {
@@ -860,7 +1037,6 @@ exports.getPaymentSummary = async (req, res) => {
       search = '',
       startDate,
       endDate,
-      transactionType = '',
       productType = '',
       sortOrder = 'DESC'
     } = req.query;
@@ -869,158 +1045,440 @@ exports.getPaymentSummary = async (req, res) => {
     const limitNum = parseInt(limit);
     const safeSortOrder = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
-    // 결제 완료된 계약 조회 (탭1과 동일 베이스)
-    const contractWhere = {
-      status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'CANCEL_REQUESTED', 'REFUNDED'] },
-      paidAt: { [Op.ne]: null }
+    const contractStatusLabels = {
+      PAYMENT_COMPLETED: '결제 완료',
+      IN_PROGRESS: '입주중',
+      COMPLETED: '계약 종료',
+      CANCELLED: '계약 취소',
+      CANCEL_REQUESTED: '취소 요청중',
+      REFUNDED: '환불 완료',
+      CANCELLED_BY_ADMIN_WITH_REFUND: '관리자 취소(환불)',
+      CANCELLED_BY_ADMIN_NO_REFUND: '관리자 취소',
+      CANCELLED_BY_HOST: '호스트 취소'
     };
 
-    // 날짜 필터 (최종 이벤트 발생일 기준 → paidAt 기준)
-    if (startDate || endDate) {
-      contractWhere.paidAt = {};
-      if (startDate) contractWhere.paidAt[Op.gte] = new Date(startDate);
+    // 날짜 필터 헬퍼
+    const buildDateRange = (field) => {
+      if (!startDate && !endDate) return {};
+      const filter = {};
+      if (startDate) filter[Op.gte] = new Date(startDate);
       if (endDate) {
         const end = new Date(endDate);
         end.setHours(23, 59, 59, 999);
-        contractWhere.paidAt[Op.lte] = end;
+        filter[Op.lte] = end;
       }
-    }
+      return { [field]: filter };
+    };
 
-    const includeOptions = [
-      {
-        model: User,
-        as: 'guest',
-        attributes: ['id', 'name']
-      },
-      {
-        model: User,
-        as: 'host',
-        attributes: ['id', 'name']
-      },
-      {
-        model: Room,
-        as: 'room',
-        attributes: ['id', 'roomName']
-      },
+    // ── 1) 계약 결제 행 ──
+    const contractWhere = {
+      status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED',
+        'CANCEL_REQUESTED', 'REFUNDED', 'CANCELLED_BY_ADMIN_WITH_REFUND',
+        'CANCELLED_BY_ADMIN_NO_REFUND', 'CANCELLED_BY_HOST'] },
+      paidAt: { [Op.ne]: null },
+      ...buildDateRange('paidAt')
+    };
+
+    const contractInclude = [
+      { model: User, as: 'guest', attributes: ['id', 'name'] },
+      { model: Room, as: 'room', attributes: ['id', 'roomName'] },
       {
         model: Payment,
         as: 'payment',
-        attributes: ['id', 'method', 'status', 'totalAmount', 'balanceAmount', 'paymentType'],
+        attributes: ['id', 'method', 'status', 'totalAmount', 'balanceAmount'],
         where: { paymentType: 'CONTRACT' },
         required: false
       },
       {
         model: Refund,
         as: 'refunds',
-        attributes: ['id', 'finalRefundAmount', 'refundStatus', 'completedAt'],
+        attributes: ['id', 'finalRefundAmount'],
         where: { refundStatus: 'COMPLETED' },
         required: false
       },
       {
-        model: RentalOrder,
-        as: 'rentalOrders',
-        attributes: ['id', 'orderId', 'orderType', 'status', 'paidAmount', 'refundedAmount'],
-        where: { orderType: { [Op.ne]: 'INITIAL' } },
+        model: AdminRefund,
+        as: 'adminRefunds',
+        attributes: ['id', 'totalRefundAmount'],
+        where: { refundStatus: 'COMPLETED' },
         required: false
       }
     ];
 
-    // 검색
+    // 검색 조건
     if (search) {
-      if (/^S?\d{8,}$/i.test(search)) {
+      if (/^S?\d{6,}/i.test(search)) {
         contractWhere.orderId = { [Op.like]: `%${search}%` };
-      } else if (/^[\d-]+$/.test(search) && search.length >= 10) {
-        includeOptions[0] = {
-          ...includeOptions[0],
+      } else if (/^[\d-]{10,}$/.test(search)) {
+        contractInclude[0] = {
+          ...contractInclude[0],
           where: { phoneNumber: { [Op.like]: `%${search.replace(/-/g, '')}%` } },
           required: true
         };
       } else {
-        includeOptions[0] = {
-          ...includeOptions[0],
+        contractInclude[0] = {
+          ...contractInclude[0],
           where: { name: { [Op.like]: `%${search}%` } },
           required: true
         };
       }
     }
 
-    const { count, rows: contracts } = await Contract.findAndCountAll({
+    const contracts = await Contract.findAll({
       where: contractWhere,
-      include: includeOptions,
-      order: [['paidAt', safeSortOrder]],
-      limit: limitNum,
-      offset: (pageNum - 1) * limitNum,
-      distinct: true
+      include: contractInclude,
+      order: [['paidAt', safeSortOrder]]
     });
 
-    // 계약 상태 한글 매핑
-    const statusLabelMap = {
-      PAYMENT_COMPLETED: '결제 완료',
-      IN_PROGRESS: '입주중',
-      COMPLETED: '계약 종료',
-      CANCELLED: '계약 취소',
-      CANCEL_REQUESTED: '취소 요청중',
-      REFUNDED: '환불 완료'
-    };
-
-    // 주문번호 기준 1행 - 결제 현황 요약
-    let payments = contracts.map(contract => {
-      const contractTotalAmount = contract.finalTotalAmount || 0;
-      const contractRefundTotal = (contract.refunds || [])
-        .reduce((sum, r) => sum + (r.finalRefundAmount || 0), 0);
-      const rentalPaidTotal = (contract.rentalOrders || [])
-        .reduce((sum, ro) => sum + (parseFloat(ro.paidAmount) || 0), 0);
-      const rentalRefundTotal = (contract.rentalOrders || [])
-        .reduce((sum, ro) => sum + (parseFloat(ro.refundedAmount) || 0), 0);
-
-      const totalPaidAmount = contractTotalAmount + rentalPaidTotal;
-      const totalRefundedAmount = contractRefundTotal + rentalRefundTotal;
-      const currentBalance = totalPaidAmount - totalRefundedAmount;
-
-      // 결제 수단
-      const paymentMethod = contract.payment?.method || contract.paymentMethod || null;
-
-      // 상품 구분
-      const hasContract = contractTotalAmount > 0;
-      const hasRental = rentalPaidTotal > 0;
-      let productTypeLabel = '계약';
-      if (hasContract && hasRental) productTypeLabel = '계약/렌탈';
-      else if (hasRental && !hasContract) productTypeLabel = '렌탈';
+    const contractRows = contracts.map(contract => {
+      const paidAmount = parseFloat(contract.finalTotalAmount) || 0;
+      const guestRefundTotal = (contract.refunds || [])
+        .reduce((sum, r) => sum + (parseFloat(r.finalRefundAmount) || 0), 0);
+      const adminRefundTotal = (contract.adminRefunds || [])
+        .reduce((sum, r) => sum + (parseFloat(r.totalRefundAmount) || 0), 0);
+      const refundedAmount = guestRefundTotal + adminRefundTotal;
 
       return {
+        rowType: 'CONTRACT',
         contractId: contract.id,
+        rentalOrderId: null,
         orderId: contract.orderId,
         paidAt: contract.paidAt,
-        productType: productTypeLabel,
+        productType: '계약',
         roomName: contract.room?.roomName || null,
         userName: contract.guest?.name || null,
-        userType: '게스트',
-        totalPaidAmount,
-        totalRefundedAmount,
-        currentBalance,
-        paymentMethod,
+        paymentMethod: contract.payment?.method || contract.paymentMethod || null,
+        paidAmount,
+        refundedAmount,
+        currentBalance: paidAmount - refundedAmount,
+        paymentStatus: contract.payment?.status || null,
         contractStatus: contract.status,
-        contractStatusLabel: statusLabelMap[contract.status] || contract.status
+        contractStatusLabel: contractStatusLabels[contract.status] || contract.status
       };
     });
 
+    // ── 2) ADDITIONAL 렌탈 결제 행 ──
+    const rentalWhere = {
+      orderType: 'ADDITIONAL',
+      status: { [Op.in]: ['PAID', 'PARTIAL_REFUND', 'FULLY_REFUNDED'] },
+      paidAt: { [Op.ne]: null },
+      ...buildDateRange('paidAt')
+    };
+
+    const rentalInclude = [
+      {
+        model: Contract,
+        as: 'contract',
+        attributes: ['id', 'orderId', 'status'],
+        include: [
+          { model: User, as: 'guest', attributes: ['id', 'name'] },
+          { model: Room, as: 'room', attributes: ['id', 'roomName'] }
+        ]
+      },
+      {
+        model: RentalPayment,
+        as: 'payment',
+        attributes: ['id', 'method', 'status', 'totalAmount', 'balanceAmount'],
+        required: false
+      }
+    ];
+
+    // 검색 — 렌탈 주문번호 또는 계약 게스트명
+    let rentalOrders = await RentalOrder.findAll({
+      where: rentalWhere,
+      include: rentalInclude,
+      order: [['paidAt', safeSortOrder]]
+    });
+
+    // 검색어 후처리 (게스트명/주문번호)
+    if (search) {
+      if (/^S?\d{6,}/i.test(search)) {
+        rentalOrders = rentalOrders.filter(ro =>
+          ro.orderId?.includes(search) || ro.contract?.orderId?.includes(search)
+        );
+      } else if (!/^[\d-]{10,}$/.test(search)) {
+        rentalOrders = rentalOrders.filter(ro =>
+          ro.contract?.guest?.name?.includes(search)
+        );
+      } else {
+        rentalOrders = [];
+      }
+    }
+
+    const rentalRows = rentalOrders.map(ro => {
+      const paidAmount = parseFloat(ro.paidAmount) || 0;
+      const refundedAmount = parseFloat(ro.refundedAmount) || 0;
+
+      return {
+        rowType: 'RENTAL',
+        contractId: ro.contractId,
+        rentalOrderId: ro.orderId,
+        orderId: ro.orderId,
+        paidAt: ro.paidAt,
+        productType: '렌탈',
+        roomName: ro.contract?.room?.roomName || null,
+        userName: ro.contract?.guest?.name || null,
+        paymentMethod: ro.payment?.method || ro.paymentMethod || null,
+        paidAmount,
+        refundedAmount,
+        currentBalance: paidAmount - refundedAmount,
+        paymentStatus: ro.payment?.status || null,
+        contractStatus: ro.contract?.status || null,
+        contractStatusLabel: contractStatusLabels[ro.contract?.status] || ro.contract?.status || null
+      };
+    });
+
+    // ── 3) 합산, 필터, 정렬, 페이지네이션 ──
+    let allRows = [...contractRows, ...rentalRows];
+
     // 상품 구분 필터
     if (productType) {
-      payments = payments.filter(p => p.productType === productType);
+      allRows = allRows.filter(r => r.productType === productType);
     }
+
+    // paidAt 정렬
+    allRows.sort((a, b) => {
+      const da = new Date(a.paidAt);
+      const db = new Date(b.paidAt);
+      return safeSortOrder === 'DESC' ? db - da : da - db;
+    });
+
+    const total = allRows.length;
+    const startIdx = (pageNum - 1) * limitNum;
+    const payments = allRows.slice(startIdx, startIdx + limitNum);
 
     return success(res, {
       payments,
       pagination: {
-        total: productType ? payments.length : count,
+        total,
         page: pageNum,
         limit: limitNum,
-        totalPages: Math.ceil((productType ? payments.length : count) / limitNum)
+        totalPages: Math.ceil(total / limitNum)
       }
     }, '주문별 결제 현황 조회 성공');
 
   } catch (err) {
     console.error('결제/취소 내역 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 관리자 렌탈 추가결제 환불 처리 (ADDITIONAL 렌탈 주문 전용)
+ * POST /api/admin/rental-payments/:rentalOrderId/refund
+ *
+ * Request Body:
+ * {
+ *   refundType: 'FULL' | 'PARTIAL_AMOUNT' | 'PARTIAL_ITEMS',
+ *   refundReason: string,
+ *   refundAmount: number,           // PARTIAL_AMOUNT 시 필수
+ *   items: [                        // PARTIAL_ITEMS 시 사용
+ *     { rentalOrderItemId: number, refundAmount: number }
+ *   ]
+ * }
+ */
+exports.processAdminRentalRefund = async (req, res) => {
+  try {
+    const { rentalOrderId } = req.params;
+    const { refundType, refundReason, refundAmount: rawRefundAmount, items = [] } = req.body;
+    const adminId = req.admin.id;
+
+    // 필수 입력 검증
+    if (!refundReason) {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, { field: 'refundReason' });
+    }
+    if (!['FULL', 'PARTIAL_AMOUNT', 'PARTIAL_ITEMS'].includes(refundType)) {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+        field: 'refundType',
+        message: 'refundType은 FULL, PARTIAL_AMOUNT, PARTIAL_ITEMS 중 하나여야 합니다.'
+      });
+    }
+
+    // ── 1단계: 트랜잭션 없이 조회 및 금액 산정 ──
+    const rentalOrder = await RentalOrder.findOne({ where: { orderId: rentalOrderId } });
+
+    if (!rentalOrder) {
+      return error(res, ErrorCodes.RENTAL_ORDER_NOT_FOUND, 404);
+    }
+    if (['FULLY_REFUNDED', 'CANCELLED'].includes(rentalOrder.status)) {
+      return error(res, ErrorCodes.RENTAL_ORDER_ALREADY_CANCELLED, 400);
+    }
+
+    const rentalPayment = await RentalPayment.findOne({
+      where: {
+        rentalOrderId: rentalOrder.id,
+        status: { [Op.in]: ['DONE', 'PARTIAL_CANCELED'] }
+      }
+    });
+
+    if (!rentalPayment) {
+      return error(res, ErrorCodes.PAYMENT_NOT_FOUND, 404);
+    }
+
+    const availableBalance = parseFloat(rentalPayment.balanceAmount);
+    let finalRefundAmount = 0;
+    let itemsToCancel = [];
+
+    if (refundType === 'FULL') {
+      finalRefundAmount = availableBalance;
+      const activeItems = await RentalOrderItem.findAll({
+        where: { rentalOrderId: rentalOrder.id, status: { [Op.ne]: 'CANCELLED' } },
+        include: [{ model: RentalItem, as: 'rentalItem', attributes: ['id', 'name'] }]
+      });
+      itemsToCancel = activeItems.map(i => ({ orderItem: i, refundAmount: parseFloat(i.totalPrice) }));
+
+    } else if (refundType === 'PARTIAL_AMOUNT') {
+      finalRefundAmount = Math.max(0, parseInt(rawRefundAmount || 0, 10));
+      if (finalRefundAmount <= 0) {
+        return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+          field: 'refundAmount', message: '환불 금액은 0보다 커야 합니다.'
+        });
+      }
+      if (finalRefundAmount > availableBalance) {
+        return error(res, ErrorCodes.REFUND_EXCEEDS_BALANCE, 400, {
+          balanceAmount: availableBalance, requestedAmount: finalRefundAmount
+        });
+      }
+
+    } else {
+      // PARTIAL_ITEMS
+      if (!Array.isArray(items) || items.length === 0) {
+        return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+          field: 'items', message: 'PARTIAL_ITEMS 유형은 items 배열이 필요합니다.'
+        });
+      }
+      for (const item of items) {
+        const orderItem = await RentalOrderItem.findOne({
+          where: { id: item.rentalOrderItemId, rentalOrderId: rentalOrder.id },
+          include: [{ model: RentalItem, as: 'rentalItem', attributes: ['id', 'name'] }]
+        });
+        if (!orderItem) {
+          return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+            field: 'items', message: `rentalOrderItemId(${item.rentalOrderItemId})를 찾을 수 없습니다.`
+          });
+        }
+        if (orderItem.status === 'CANCELLED') {
+          return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+            field: 'items', message: `rentalOrderItemId(${item.rentalOrderItemId})는 이미 취소된 아이템입니다.`
+          });
+        }
+        const itemRefundAmount = Math.max(0, parseInt(item.refundAmount || 0, 10));
+        if (itemRefundAmount <= 0) {
+          return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+            field: 'items', message: `rentalOrderItemId(${item.rentalOrderItemId}) 환불 금액은 0보다 커야 합니다.`
+          });
+        }
+        if (itemRefundAmount > parseFloat(orderItem.totalPrice)) {
+          return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+            field: 'items',
+            message: `rentalOrderItemId(${item.rentalOrderItemId}) 환불 금액(${itemRefundAmount}원)이 아이템 금액(${orderItem.totalPrice}원)을 초과합니다.`
+          });
+        }
+        finalRefundAmount += itemRefundAmount;
+        itemsToCancel.push({ orderItem, refundAmount: itemRefundAmount });
+      }
+      if (finalRefundAmount > availableBalance) {
+        return error(res, ErrorCodes.REFUND_EXCEEDS_BALANCE, 400, {
+          balanceAmount: availableBalance, requestedAmount: finalRefundAmount
+        });
+      }
+    }
+
+    const newBalance = availableBalance - finalRefundAmount;
+    const newPaymentStatus = newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED';
+    const newRefundedAmount = parseFloat(rentalOrder.refundedAmount || 0) + finalRefundAmount;
+    const newOrderStatus = newRefundedAmount >= parseFloat(rentalOrder.paidAmount)
+      ? 'FULLY_REFUNDED' : 'PARTIAL_REFUND';
+    const canceltype = newBalance === 0 ? '0' : '1';
+
+    // ── 2단계: PG 취소 먼저 (트랜잭션 밖) ──
+    const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(rentalPayment);
+    try {
+      await paytagClient.cancelPayment({
+        orderno, orgpaydate, orgtranamt, loginid,
+        cancelamt: finalRefundAmount,
+        canceltype
+      });
+    } catch (pgErr) {
+      if (pgErr.paytagErrorCode === '1023') {
+        return error(res, { code: 4901, message: '이미 취소 완료된 결제입니다.', pgErrorCode: pgErr.paytagErrorCode }, 400);
+      }
+      if (pgErr.paytagErrorCode === '1021') {
+        return error(res, { code: 4902, message: 'PG사에서 취소를 거부했습니다.', pgErrorCode: pgErr.paytagErrorCode }, 400);
+      }
+      console.error('렌탈 추가결제 PayTag 취소 오류:', pgErr.message);
+      return error(res, { code: 4900, message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`, pgErrorCode: pgErr.paytagErrorCode }, 502);
+    }
+
+    // ── 3단계: PG 성공 후 DB 업데이트 (짧은 트랜잭션) ──
+    const transaction = await sequelize.transaction();
+    try {
+      const now = new Date();
+
+      for (const { orderItem, refundAmount: itemAmt } of itemsToCancel) {
+        await orderItem.update({
+          status: 'CANCELLED',
+          cancelledAt: now,
+          cancelReason: `[관리자] ${refundReason}`,
+          refundAmount: itemAmt
+        }, { transaction });
+      }
+
+      await rentalOrder.update({
+        refundedAmount: newRefundedAmount,
+        status: newOrderStatus
+      }, { transaction });
+
+      await rentalPayment.update({
+        balanceAmount: newBalance,
+        status: newPaymentStatus
+      }, { transaction });
+
+      await logRentalAction({
+        contractId: rentalOrder.contractId,
+        rentalOrderId: rentalOrder.id,
+        action: 'ADMIN_REFUND',
+        actor: 'ADMIN',
+        actorId: adminId,
+        description: `관리자 환불 처리 (${refundType}): ${finalRefundAmount}원`,
+        metadata: {
+          refundType,
+          refundAmount: finalRefundAmount,
+          refundReason,
+          adminId,
+          cancelledItems: itemsToCancel.map(({ orderItem, refundAmount: itemAmt }) => ({
+            id: orderItem.id,
+            name: orderItem.rentalItem?.name,
+            refundAmount: itemAmt
+          }))
+        },
+        transaction
+      });
+
+      await transaction.commit();
+    } catch (dbErr) {
+      await transaction.rollback();
+      console.error('렌탈 환불 DB 업데이트 오류 (PG는 이미 취소됨):', dbErr);
+      return error(res, { code: 4903, message: 'PG 취소는 완료됐으나 DB 업데이트에 실패했습니다. 관리자에게 문의하세요.' }, 500);
+    }
+
+    return success(res, {
+      rentalOrderId,
+      refundType,
+      refundAmount: finalRefundAmount,
+      orderStatus: newOrderStatus,
+      paymentStatus: newPaymentStatus,
+      ...(itemsToCancel.length > 0 && {
+        cancelledItems: itemsToCancel.map(({ orderItem, refundAmount: itemAmt }) => ({
+          id: orderItem.id,
+          name: orderItem.rentalItem?.name,
+          refundAmount: itemAmt
+        }))
+      })
+    }, '렌탈 추가결제 환불이 처리되었습니다.');
+
+  } catch (err) {
+    console.error('관리자 렌탈 추가결제 환불 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
 };

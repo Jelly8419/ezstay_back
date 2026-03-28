@@ -642,35 +642,97 @@ const cancelPaidRentalOrderByGuest = async (req, res) => {
       });
     }
 
-    // 주문 전체 취소 + 환불 (배송 상태별 차감은 cancelPaidRentalOrder 내부에서 처리)
-    const result = await cancelPaidRentalOrder(
-      rentalOrder,
-      reason,
-      userId,
-      'GUEST',
-      req,
+    // 금액 산정 (PG 호출 전 미리 계산)
+    const activeItems = await RentalOrderItem.findAll({
+      where: { rentalOrderId: rentalOrder.id, status: 'ACTIVE' },
       transaction
-    );
-
-    await transaction.commit();
-
-    const responseData = {
-      rentalOrderId: rentalOrder.id,
-      orderId: result.orderId,
-      refundAmount: result.refundAmount,
-      cancelledItemCount: result.cancelledItemCount,
-      refundStatus: 'COMPLETED',
-      orderStatus: result.orderStatus
-    };
-    if (result.shippingDeduction > 0) {
-      responseData.shippingDeduction = result.shippingDeduction;
+    });
+    if (activeItems.length === 0) {
+      await transaction.rollback();
+      return error(res, { code: 4422, message: '취소할 활성 아이템이 없습니다.' }, 400);
     }
 
-    return success(res, responseData, result.shippingDeduction > 0
-      ? `주문이 취소되었습니다. 왕복배송비 ${result.shippingDeduction}원 차감 후 환불됩니다.`
-      : '주문이 취소되었습니다. 환불이 처리됩니다.');
-  } catch (err) {
+    const orderTotalPrice = activeItems.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
+    let refundAmount = orderTotalPrice;
+    let shippingDeduction = 0;
+
+    if (rentalOrder.deliveryStatus === 'IN_TRANSIT') {
+      shippingDeduction = 10000; // RENTAL_ROUND_TRIP_SHIPPING_COST
+      refundAmount = orderTotalPrice - shippingDeduction;
+      if (refundAmount <= 0) {
+        await transaction.rollback();
+        return error(res, { code: 4423, message: `환불 금액(${orderTotalPrice}원)이 왕복배송비(${shippingDeduction}원) 이하입니다.` }, 400);
+      }
+    }
+
+    const rentalPayment = await RentalPayment.findOne({
+      where: { rentalOrderId: rentalOrder.id },
+      transaction
+    });
+    if (!rentalPayment) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.PAYMENT_NOT_FOUND, 404);
+    }
+
     await transaction.rollback();
+
+    // ── PG 취소 먼저 (트랜잭션 밖) ──
+    const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(rentalPayment);
+    const newBalance = parseFloat(rentalPayment.balanceAmount) - refundAmount;
+    const canceltype = newBalance === 0 ? '0' : '1';
+
+    try {
+      await paytagClient.cancelPayment({
+        orderno, orgpaydate, orgtranamt, loginid,
+        cancelamt: refundAmount,
+        canceltype
+      });
+    } catch (pgErr) {
+      if (pgErr.paytagErrorCode === '1023') {
+        return error(res, { code: 4901, message: '이미 취소 완료된 결제입니다.', pgErrorCode: pgErr.paytagErrorCode }, 400);
+      }
+      if (pgErr.paytagErrorCode === '1021') {
+        return error(res, { code: 4902, message: 'PG사에서 취소를 거부했습니다.', pgErrorCode: pgErr.paytagErrorCode }, 400);
+      }
+      console.error('렌탈 취소 PayTag 오류:', pgErr.message);
+      return error(res, { code: 4900, message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}` }, 502);
+    }
+
+    // ── PG 성공 후 DB 업데이트 ──
+    const dbTransaction = await sequelize.transaction();
+    try {
+      const result = await cancelPaidRentalOrder(
+        rentalOrder,
+        reason,
+        userId,
+        'GUEST',
+        req,
+        dbTransaction
+      );
+      await dbTransaction.commit();
+
+      const responseData = {
+        rentalOrderId: rentalOrder.id,
+        orderId: result.orderId,
+        refundAmount: result.refundAmount,
+        cancelledItemCount: result.cancelledItemCount,
+        refundStatus: 'COMPLETED',
+        orderStatus: result.orderStatus
+      };
+      if (result.shippingDeduction > 0) {
+        responseData.shippingDeduction = result.shippingDeduction;
+      }
+
+      return success(res, responseData, result.shippingDeduction > 0
+        ? `주문이 취소되었습니다. 왕복배송비 ${result.shippingDeduction}원 차감 후 환불됩니다.`
+        : '주문이 취소되었습니다. 환불이 처리됩니다.');
+    } catch (dbErr) {
+      await dbTransaction.rollback();
+      console.error('렌탈 취소 DB 업데이트 오류 (PG는 이미 취소됨):', dbErr);
+      return error(res, { code: 4903, message: 'PG 취소는 완료됐으나 DB 업데이트에 실패했습니다. 관리자에게 문의하세요.' }, 500);
+    }
+
+  } catch (err) {
     console.error('렌탈 주문 취소 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
