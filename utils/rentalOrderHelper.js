@@ -644,10 +644,8 @@ async function cancelPaidRentalOrder(rentalOrder, reason, actorId, actor, req, t
   let refundAmount = orderTotalPrice;
   let shippingDeduction = 0;
 
-  if (rentalOrder.deliveryStatus === 'DELIVERED') {
-    throw new Error('배송 완료된 주문은 환불할 수 없습니다');
-  }
-
+  // DELIVERED/IN_TRANSIT 모두 즉시 환불 가능 (PAYMENT_COMPLETED 케이스)
+  // 입주중(IN_PROGRESS) 케이스는 이 함수를 거치지 않음 (RentalOrderRefundRequest로 관리)
   if (rentalOrder.deliveryStatus === 'IN_TRANSIT') {
     shippingDeduction = RENTAL_ROUND_TRIP_SHIPPING_COST;
     refundAmount = orderTotalPrice - shippingDeduction;

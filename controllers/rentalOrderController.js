@@ -6,6 +6,7 @@ const {
   RentalOrder,
   RentalOrderItem,
   RentalOrderLog,
+  RentalOrderRefundRequest,
   RentalItem,
   RentalItemReservation,
   RentalPayment,
@@ -597,6 +598,18 @@ const cancelPaidRentalOrderByGuest = async (req, res) => {
           cancelReason: reason || '입주 중 취소 요청'
         }, { transaction });
       }
+
+      // 환불 요청 레코드 생성 (관리자 조회/처리용)
+      const itemTotalAmount = activeItems.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
+      await RentalOrderRefundRequest.create({
+        rentalOrderId: rentalOrder.id,
+        contractId: rentalOrder.contractId,
+        requestedBy: userId,
+        status: 'PENDING',
+        cancelReason: reason || '입주 중 취소 요청',
+        deliveryStatusSnapshot: rentalOrder.deliveryStatus,
+        itemTotalAmount
+      }, { transaction });
 
       await logRentalAction({
         contractId: rentalOrder.contractId,

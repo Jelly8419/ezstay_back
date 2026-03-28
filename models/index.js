@@ -45,6 +45,7 @@ const { ReceiptSetting } = require('./ReceiptSetting');
 const Receipt = require('./Receipt');
 const UserSessionModel = require('./UserSession');
 const AdminRefund = require('./AdminRefund');
+const RentalOrderRefundRequest = require('./RentalOrderRefundRequest');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -657,6 +658,34 @@ RentalOrderLog.belongsTo(Contract, {
   onUpdate: 'CASCADE'
 });
 
+// RentalOrder ↔ RentalOrderRefundRequest
+RentalOrder.hasMany(RentalOrderRefundRequest, {
+  foreignKey: 'rentalOrderId',
+  as: 'refundRequests',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+RentalOrderRefundRequest.belongsTo(RentalOrder, {
+  foreignKey: 'rentalOrderId',
+  as: 'rentalOrder',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// Contract ↔ RentalOrderRefundRequest
+Contract.hasMany(RentalOrderRefundRequest, {
+  foreignKey: 'contractId',
+  as: 'rentalRefundRequests',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+RentalOrderRefundRequest.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
 // RentalItemReservation ↔ RentalOrder
 RentalItemReservation.belongsTo(RentalOrder, {
   foreignKey: 'rentalOrderId',
@@ -1014,5 +1043,6 @@ module.exports = {
   ReceiptSetting,
   Receipt,
   UserSession,
-  AdminRefund
+  AdminRefund,
+  RentalOrderRefundRequest
 };
