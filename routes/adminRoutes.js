@@ -364,6 +364,45 @@ router.post(
 );
 
 // ============================================
+// 옵션상품 환불 요청 관리 (입주중 취소 요청)
+// ============================================
+
+// 환불 요청 목록 조회
+router.get(
+  '/rental-refund-requests',
+  requireAdminRole(['super_admin', 'admin']),
+  adminPaymentController.getRentalRefundRequests
+);
+
+// 환불 요청 상세 조회
+router.get(
+  '/rental-refund-requests/:requestId',
+  requireAdminRole(['super_admin', 'admin']),
+  adminPaymentController.getRentalRefundRequestDetail
+);
+
+// 환불 요청 수락
+router.post(
+  '/rental-refund-requests/:requestId/approve',
+  requireAdminRole(['super_admin', 'admin']),
+  adminPaymentController.approveRentalRefundRequest
+);
+
+// 환불 요청 거절
+router.post(
+  '/rental-refund-requests/:requestId/reject',
+  requireAdminRole(['super_admin', 'admin']),
+  adminPaymentController.rejectRentalRefundRequest
+);
+
+// 수거 상태 업데이트
+router.patch(
+  '/rental-refund-requests/:requestId/retrieval',
+  requireAdminRole(['super_admin', 'admin']),
+  adminPaymentController.updateRentalRefundRetrieval
+);
+
+// ============================================
 // 정산 관리 (settlements 테이블 기반)
 // ============================================
 

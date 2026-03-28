@@ -35,17 +35,17 @@ const AdminRefund = sequelize.define('AdminRefund', {
     comment: '처리한 관리자 ID'
   },
   refundType: {
-    type: DataTypes.ENUM('FULL', 'PARTIAL_AMOUNT', 'PARTIAL_ITEMS'),
+    type: DataTypes.ENUM('FULL', 'PARTIAL_ITEMS'),
     allowNull: false,
     field: 'refund_type',
-    comment: '환불 유형: FULL=전체, PARTIAL_AMOUNT=금액 직접 입력, PARTIAL_ITEMS=상품별 선택'
+    comment: '환불 유형: FULL=전체, PARTIAL_ITEMS=상품별 선택'
   },
   refundAmount: {
     type: DataTypes.INTEGER,
     allowNull: false,
     defaultValue: 0,
     field: 'refund_amount',
-    comment: 'PARTIAL_AMOUNT 유형 시 관리자가 입력한 환불 금액'
+    comment: '환불 금액'
   },
   rentalFeeRefundAmount: {
     type: DataTypes.INTEGER,
