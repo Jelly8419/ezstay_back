@@ -111,7 +111,7 @@ async function confirmPayment({ recvPayparam, payType }) {
  */
 async function cancelPayment({ orderno, orgpaydate, orgtranamt, cancelamt, canceltype = '0', loginid }) {
   const resolvedLoginId = loginid || PAYTAG_LOGIN_ID;
-  if (!resolvedLoginId) throw new Error('loginid를 확인할 수 없습니다. paymentResponse 또는 PAYTAG_LOGIN_ID 환경변수를 확인하세요.');
+  if (!resolvedLoginId) throw new Error('loginid를 확인할 수 없습니다. paymentResponse, PAYTAG_LOGIN_ID 또는 PAYTAG_SERVICECODE 환경변수를 확인하세요.');
 
   // certval: PAYTAG|CARDCANCEL|shopcode|loginid||orderno|cancelamt
   const certval = generateCertval('CARDCANCEL', resolvedLoginId, '', orderno, String(cancelamt));
@@ -159,7 +159,7 @@ async function cancelPayment({ orderno, orgpaydate, orgtranamt, cancelamt, cance
  */
 async function cancelOrder({ orderno, loginid }) {
   const resolvedLoginId = loginid || PAYTAG_LOGIN_ID;
-  if (!resolvedLoginId) throw new Error('loginid를 확인할 수 없습니다. paymentResponse 또는 PAYTAG_LOGIN_ID 환경변수를 확인하세요.');
+  if (!resolvedLoginId) throw new Error('loginid를 확인할 수 없습니다. paymentResponse, PAYTAG_LOGIN_ID 또는 PAYTAG_SERVICECODE 환경변수를 확인하세요.');
 
   // certval: PAYTAG|CANCELORDER|shopcode|loginid||orderno
   const certval = generateCertval('CANCELORDER', resolvedLoginId, '', orderno);
@@ -203,7 +203,7 @@ function extractCancelParams(payment) {
     : (payment.paymentResponse || {});
 
   const orderno = resp.recv_orderno || resp.orderno || payment.orderId;
-  const loginid = resp.loginid || PAYTAG_LOGIN_ID;
+  const loginid = resp.loginid || PAYTAG_LOGIN_ID || PAYTAG_SERVICECODE;
 
   let orgpaydate = resp.trandate;
   if (!orgpaydate && payment.approvedAt) {
