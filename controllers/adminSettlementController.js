@@ -8,7 +8,7 @@
  * 정산 상태 흐름: PENDING → READY → PROCESSING → COMPLETED
  */
 
-const { sequelize, Settlement, Payout, Contract, Room, User, Refund, Payment, UserBankAccount } = require('../models');
+const { sequelize, Settlement, Payout, Contract, Room, User, Refund, Payment, UserBankAccount, RentalOrder, RentalOrderItem, RentalItem } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
 const { maskAccountNumber } = require('../services/settlementService');
@@ -121,7 +121,7 @@ exports.getAdminSettlementDetail = async (req, res) => {
         {
           model: Contract,
           as: 'contract',
-          attributes: ['id', 'checkInDate', 'checkOutDate', 'rentalFee', 'maintenanceFee', 'cleaningFee', 'finalTotalAmount', 'hostPlatformFee'],
+          attributes: ['id', 'checkInDate', 'checkOutDate', 'rentalFee', 'maintenanceFee', 'cleaningFee', 'platformFee', 'deposit', 'finalTotalAmount', 'hostPlatformFee'],
           include: [
             {
               model: Room,
@@ -145,6 +145,26 @@ exports.getAdminSettlementDetail = async (req, res) => {
               as: 'refunds',
               attributes: ['id', 'refundStatus', 'rentalFeeRefundAmount', 'maintenanceFeeRefundAmount', 'cleaningFeeRefundAmount', 'finalRefundAmount'],
               required: false
+            },
+            {
+              model: RentalOrder,
+              as: 'rentalOrders',
+              attributes: ['id', 'orderId', 'orderType', 'status', 'totalAmount', 'paidAmount', 'refundedAmount', 'paymentMethod', 'paidAt'],
+              required: false,
+              include: [
+                {
+                  model: RentalOrderItem,
+                  as: 'items',
+                  attributes: ['id', 'quantity', 'pricePerItem', 'totalPrice', 'status'],
+                  include: [
+                    {
+                      model: RentalItem,
+                      as: 'rentalItem',
+                      attributes: ['id', 'name', 'imageUrl']
+                    }
+                  ]
+                }
+              ]
             }
           ]
         },
@@ -395,19 +415,60 @@ function formatSettlementSummary(s) {
 }
 
 function formatSettlementDetail(s, bankAccount) {
+  const contract = s.contract;
+
+  // 옵션상품 포맷
+  const rentalOrders = (contract?.rentalOrders || []).map(ro => ({
+    id: ro.id,
+    orderId: ro.orderId,
+    orderType: ro.orderType,
+    orderTypeLabel: ro.orderType === 'INITIAL' ? '기본 옵션' : '추가 옵션',
+    status: ro.status,
+    totalAmount: parseFloat(ro.totalAmount) || 0,
+    paidAmount: parseFloat(ro.paidAmount) || 0,
+    refundedAmount: parseFloat(ro.refundedAmount) || 0,
+    paymentMethod: ro.paymentMethod,
+    paidAt: ro.paidAt,
+    items: (ro.items || []).map(item => ({
+      id: item.id,
+      name: item.rentalItem?.name || null,
+      imageUrl: item.rentalItem?.imageUrl || null,
+      quantity: item.quantity,
+      pricePerItem: parseFloat(item.pricePerItem) || 0,
+      totalPrice: parseFloat(item.totalPrice) || 0,
+      status: item.status
+    }))
+  }));
+
+  const rentalOrdersTotalPaid = rentalOrders.reduce((sum, ro) => sum + ro.paidAmount, 0);
+
   return {
     id: s.id,
     contractId: s.contractId,
     status: s.status,
     statusLabel: STATUS_LABELS[s.status] || s.status,
-    // 정산 금액 내역
-    rentalFee: s.rentalFee,
-    maintenanceFee: s.maintenanceFee,
-    cleaningFee: s.cleaningFee,
-    hostPlatformFee: s.hostPlatformFee,
-    refundDeduction: s.refundDeduction,
-    grossAmount: s.grossAmount,
-    netAmount: s.netAmount,
+    // 호스트 정산 내역 (얼마 받는가)
+    settlementBreakdown: {
+      rentalFee: s.rentalFee,
+      maintenanceFee: s.maintenanceFee,
+      cleaningFee: s.cleaningFee,
+      hostPlatformFee: s.hostPlatformFee,
+      refundDeduction: s.refundDeduction,
+      grossAmount: s.grossAmount,
+      netAmount: s.netAmount
+    },
+    // 게스트 결제 내역 (얼마 냈는가 — 역추적용)
+    contractPaymentDetail: contract ? {
+      rentalFee: parseFloat(contract.rentalFee) || 0,
+      maintenanceFee: parseFloat(contract.maintenanceFee) || 0,
+      cleaningFee: parseFloat(contract.cleaningFee) || 0,
+      deposit: parseFloat(contract.deposit) || 0,
+      platformFee: parseFloat(contract.platformFee) || 0,
+      finalTotalAmount: parseFloat(contract.finalTotalAmount) || 0
+    } : null,
+    // 옵션상품 결제 내역
+    rentalOrders,
+    rentalOrdersTotalPaid,
     // 일정
     expectedDate: s.expectedDate,
     payoutAvailableDate: s.payoutAvailableDate,
@@ -428,20 +489,16 @@ function formatSettlementDetail(s, bankAccount) {
       accountHolder: bankAccount.accountHolder
     } : null,
     // 연관 계약
-    contract: s.contract ? {
-      id: s.contract.id,
-      checkInDate: s.contract.checkInDate,
-      checkOutDate: s.contract.checkOutDate,
-      rentalFee: s.contract.rentalFee,
-      maintenanceFee: s.contract.maintenanceFee,
-      cleaningFee: s.contract.cleaningFee,
-      finalTotalAmount: s.contract.finalTotalAmount,
-      room: s.contract.room || null,
-      guest: s.contract.guest || null,
-      payment: s.contract.payment || null,
-      refunds: s.contract.refunds || []
+    contract: contract ? {
+      id: contract.id,
+      checkInDate: contract.checkInDate,
+      checkOutDate: contract.checkOutDate,
+      room: contract.room || null,
+      guest: contract.guest || null,
+      payment: contract.payment || null,
+      refunds: contract.refunds || []
     } : null,
-    // 연결된 Payout (지급 건, CONTRACT_SETTLEMENT 타입)
+    // 연결된 Payout
     payout: s.payouts?.[0] ? {
       id: s.payouts[0].id,
       status: s.payouts[0].status,

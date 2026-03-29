@@ -1,5 +1,5 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -1952,6 +1952,16 @@ const approveRefund = async (req, res) => {
       }, { transaction });
     }
 
+    // 계약 취소 확정 시 기존 CONTRACT_SETTLEMENT Payout/Settlement 취소
+    await Payout.update(
+      { status: 'CANCELLED', note: '계약 취소 승인으로 인한 자동 취소' },
+      { where: { contractId: refund.contractId, payoutType: 'CONTRACT_SETTLEMENT', status: { [Op.in]: ['PENDING', 'PAYABLE'] } }, transaction }
+    );
+    await Settlement.update(
+      { status: 'ON_HOLD', note: '계약 취소 승인으로 인한 정산 보류' },
+      { where: { contractId: refund.contractId, status: 'PENDING' }, transaction }
+    );
+
     await transaction.commit();
 
     return updated(
@@ -2881,6 +2891,16 @@ const approveHostCancelRequest = async (req, res) => {
     // TODO: 호스트 취소 위약금 중 플랫폼 귀속 금액이 있을 경우 영수증 발급 대기 목록 생성
     // const { createCancelFeeReceipt } = require('../services/receiptService');
     // await createCancelFeeReceipt({ contractId: contract.id, hostId: contract.hostId, targetType: 'HOST_CANCEL_FEE', platformFeeAmount, date: new Date().toISOString().split('T')[0] }, transaction);
+
+    // 호스트 취소 승인 시 기존 CONTRACT_SETTLEMENT Payout/Settlement 취소
+    await Payout.update(
+      { status: 'CANCELLED', note: '호스트 취소 승인으로 인한 자동 취소' },
+      { where: { contractId: contract.id, payoutType: 'CONTRACT_SETTLEMENT', status: { [Op.in]: ['PENDING', 'PAYABLE'] } }, transaction }
+    );
+    await Settlement.update(
+      { status: 'ON_HOLD', note: '호스트 취소 승인으로 인한 정산 보류' },
+      { where: { contractId: contract.id, status: 'PENDING' }, transaction }
+    );
 
     // 상태 변경 로그
     await ContractStatusLog.createLog({
