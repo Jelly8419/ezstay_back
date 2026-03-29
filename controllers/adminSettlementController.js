@@ -121,7 +121,7 @@ exports.getAdminSettlementDetail = async (req, res) => {
         {
           model: Contract,
           as: 'contract',
-          attributes: ['id', 'checkInDate', 'checkOutDate', 'rentalFee', 'maintenanceFee', 'cleaningFee', 'platformFee', 'deposit', 'finalTotalAmount', 'hostPlatformFee'],
+          attributes: ['id', 'checkInDate', 'checkOutDate', 'rentalFee', 'maintenanceFee', 'cleaningFee', 'platformFee', 'deposit', 'rentalItemsFee', 'finalTotalAmount', 'hostPlatformFee'],
           include: [
             {
               model: Room,
@@ -418,7 +418,7 @@ function formatSettlementDetail(s, bankAccount) {
   const contract = s.contract;
 
   // 옵션상품 포맷
-  const rentalOrders = (contract?.rentalOrders || []).map(ro => ({
+  const rentalOrders = (contract?.rentalOrders || []).filter(ro => ro.status !== 'CANCELLED').map(ro => ({
     id: ro.id,
     orderId: ro.orderId,
     orderType: ro.orderType,
@@ -458,10 +458,12 @@ function formatSettlementDetail(s, bankAccount) {
       netAmount: s.netAmount
     },
     // 게스트 결제 내역 (얼마 냈는가 — 역추적용)
+    // finalTotalAmount = rentalFee + maintenanceFee + cleaningFee + rentalItemsFee(계약 시 초기옵션) + deposit + platformFee
     contractPaymentDetail: contract ? {
       rentalFee: parseFloat(contract.rentalFee) || 0,
       maintenanceFee: parseFloat(contract.maintenanceFee) || 0,
       cleaningFee: parseFloat(contract.cleaningFee) || 0,
+      rentalItemsFee: parseFloat(contract.rentalItemsFee) || 0,
       deposit: parseFloat(contract.deposit) || 0,
       platformFee: parseFloat(contract.platformFee) || 0,
       finalTotalAmount: parseFloat(contract.finalTotalAmount) || 0
