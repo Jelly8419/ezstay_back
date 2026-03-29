@@ -1844,6 +1844,16 @@ const requestRefund = async (req, res) => {
 
           console.log(`[requestRefund] PayTag 취소 완료: contractId=${contractId}, cancelamt=${cancelamt}, restamt=${cancelResp.restamt}`);
 
+          // 계약 취소 시 기존 CONTRACT_SETTLEMENT Payout/Settlement 취소
+          await Payout.update(
+            { status: 'CANCELLED', note: '계약 취소로 인한 자동 취소' },
+            { where: { contractId: contract.id, payoutType: 'CONTRACT_SETTLEMENT', status: { [Op.in]: ['PENDING', 'PAYABLE'] } }, transaction }
+          );
+          await Settlement.update(
+            { status: 'ON_HOLD', note: '계약 취소로 인한 정산 보류' },
+            { where: { contractId: contract.id, status: 'PENDING' }, transaction }
+          );
+
           // 위약금이 있으면 호스트에게 GUEST_PENALTY Payout 생성
           if (refundData.penaltyAmount > 0) {
             const penaltyPayoutAvailableDate = calculatePayoutAvailableDate(payment.approvedAt);
@@ -2345,7 +2355,12 @@ const confirmPayment = async (req, res) => {
     }
 
     // Settlement + Payout 생성 (CONTRACT_SETTLEMENT)
-    const payoutAvailableDate = calculatePayoutAvailableDate(now);
+    // 지급 가능일: 결제일+3영업일 vs 입주일 다음날 중 더 늦은 날짜 (PRD 정책)
+    const pgAvailableDate = calculatePayoutAvailableDate(now);
+    const checkInNextDay = new Date(contract.checkInDate);
+    checkInNextDay.setDate(checkInNextDay.getDate() + 1);
+    checkInNextDay.setHours(0, 0, 0, 0);
+    const payoutAvailableDate = pgAvailableDate > checkInNextDay ? pgAvailableDate : checkInNextDay;
     const settlementExpectedDate = calculateSettlementDate(contract.checkInDate);
     const settlementAmounts = calculateSettlementAmount(contract);
 
@@ -2989,6 +3004,16 @@ const cancelContractByHost = async (req, res) => {
 
     // HOST_CANCELLATION_COMPENSATION Payout은 호스트가 부담금을 PG 결제 완료한 시점에 생성
     // POST /api/contracts/:contractId/host-burden-payment 참고
+
+    // 호스트 취소 확정 시 기존 CONTRACT_SETTLEMENT Payout/Settlement 취소
+    await Payout.update(
+      { status: 'CANCELLED', note: '호스트 취소로 인한 자동 취소' },
+      { where: { contractId: contract.id, payoutType: 'CONTRACT_SETTLEMENT', status: { [Op.in]: ['PENDING', 'PAYABLE'] } }, transaction }
+    );
+    await Settlement.update(
+      { status: 'ON_HOLD', note: '호스트 취소로 인한 정산 보류' },
+      { where: { contractId: contract.id, status: 'PENDING' }, transaction }
+    );
 
     await transaction.commit();
 

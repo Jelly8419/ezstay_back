@@ -7,7 +7,7 @@
  *                                          ↘ CANCELLED
  */
 
-const { sequelize, Payout, Contract, Settlement, Refund, User, Admin, UserBankAccount, GuestRefundAccount } = require('../models');
+const { sequelize, Payout, PayoutLog, Contract, Settlement, Refund, User, Admin, UserBankAccount, GuestRefundAccount } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
 const { maskAccountNumber } = require('../services/settlementService');
@@ -100,7 +100,15 @@ exports.getPayoutDetail = async (req, res) => {
         { model: Settlement, as: 'settlement', attributes: ['id', 'status', 'netAmount', 'expectedDate', 'payoutAvailableDate'] },
         { model: Refund, as: 'refund', attributes: ['id', 'penaltyAmount', 'cancellationFaultType', 'cancellationDate'] },
         { model: User, as: 'recipient', attributes: ['id', 'name', 'nickname', 'phoneNumber'] },
-        { model: Admin, as: 'processedByAdmin', attributes: ['id', 'name', 'username'] }
+        { model: Admin, as: 'processedByAdmin', attributes: ['id', 'name', 'username'] },
+        {
+          model: PayoutLog,
+          as: 'logs',
+          attributes: ['id', 'fromStatus', 'toStatus', 'adminId', 'note', 'changedBy', 'createdAt'],
+          include: [{ model: Admin, as: 'admin', attributes: ['id', 'name'] }],
+          required: false,
+          order: [['createdAt', 'ASC']]
+        }
       ]
     });
 
@@ -145,12 +153,23 @@ exports.executePayout = async (req, res) => {
       }, 400);
     }
 
+    const prevStatus = payout.status;
+
     // PROCESSING → COMPLETED 즉시 전환 (수동 이체 후 완료 처리)
     await payout.update({
       status: 'COMPLETED',
       adminId,
       processedAt: new Date(),
       note: note || payout.note
+    }, { transaction });
+
+    await PayoutLog.create({
+      payoutId: payout.id,
+      fromStatus: prevStatus,
+      toStatus: 'COMPLETED',
+      adminId,
+      note: note || null,
+      changedBy: 'ADMIN'
     }, { transaction });
 
     // CONTRACT_SETTLEMENT 타입이면 Settlement도 COMPLETED로 업데이트
@@ -204,11 +223,22 @@ exports.failPayout = async (req, res) => {
       }, 400);
     }
 
+    const prevStatus = payout.status;
+
     await payout.update({
       status: 'FAILED',
       adminId,
       failureReason,
       processedAt: new Date()
+    }, { transaction });
+
+    await PayoutLog.create({
+      payoutId: payout.id,
+      fromStatus: prevStatus,
+      toStatus: 'FAILED',
+      adminId,
+      note: failureReason,
+      changedBy: 'ADMIN'
     }, { transaction });
 
     await transaction.commit();
@@ -249,11 +279,22 @@ exports.cancelPayout = async (req, res) => {
       }, 400);
     }
 
+    const prevStatus = payout.status;
+
     await payout.update({
       status: 'CANCELLED',
       adminId,
       note: note || null,
       processedAt: new Date()
+    }, { transaction });
+
+    await PayoutLog.create({
+      payoutId: payout.id,
+      fromStatus: prevStatus,
+      toStatus: 'CANCELLED',
+      adminId,
+      note: note || null,
+      changedBy: 'ADMIN'
     }, { transaction });
 
     await transaction.commit();
@@ -321,12 +362,101 @@ exports.retryPayout = async (req, res) => {
       ...accountSnapshot
     }, { transaction });
 
+    await PayoutLog.create({
+      payoutId: payout.id,
+      fromStatus: 'FAILED',
+      toStatus: 'PAYABLE',
+      adminId,
+      note: '계좌 재스냅샷 후 재시도',
+      changedBy: 'ADMIN'
+    }, { transaction });
+
     await transaction.commit();
 
     return updated(res, { payoutId: payout.id, status: 'PAYABLE' }, '지급 재시도 대기 상태로 변경되었습니다.');
   } catch (err) {
     await transaction.rollback();
     console.error('지급 재시도 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 지급 목록 CSV 다운로드
+ * GET /api/admin/payouts/export
+ *
+ * Query: status, payoutType, recipientType, startDate, endDate, search
+ */
+exports.exportPayouts = async (req, res) => {
+  try {
+    const { status, payoutType, recipientType, startDate, endDate, search } = req.query;
+
+    const where = {};
+    if (status) where.status = status;
+    if (payoutType) where.payoutType = payoutType;
+    if (recipientType) where.recipientType = recipientType;
+
+    if (startDate || endDate) {
+      where.payableAfter = {};
+      if (startDate) where.payableAfter[Op.gte] = startDate;
+      if (endDate) where.payableAfter[Op.lte] = endDate;
+    }
+
+    const include = [
+      {
+        model: Contract,
+        as: 'contract',
+        attributes: ['id', 'checkInDate', 'checkOutDate']
+      },
+      {
+        model: User,
+        as: 'recipient',
+        attributes: ['id', 'name', 'nickname', 'phoneNumber'],
+        ...(search ? {
+          where: {
+            [Op.or]: [
+              { name: { [Op.like]: `%${search}%` } },
+              { nickname: { [Op.like]: `%${search}%` } }
+            ]
+          }
+        } : {})
+      }
+    ];
+
+    const payouts = await Payout.findAll({
+      where,
+      include,
+      order: [['createdAt', 'DESC']]
+    });
+
+    // CSV 생성
+    const headers = ['지급ID', '대상구분', '이름', '계좌은행', '계좌번호', '지급금액', '지급사유', '발생일시', '상태'];
+
+    const rows = payouts.map(p => [
+      p.id,
+      p.recipientType === 'HOST' ? '호스트' : '게스트',
+      p.recipient?.name || p.recipient?.nickname || '',
+      p.bankName || '',
+      p.accountNumber || '',
+      p.amount,
+      Payout.TYPE_LABELS[p.payoutType] || p.payoutType,
+      p.createdAt ? new Date(p.createdAt).toISOString().replace('T', ' ').substring(0, 19) : '',
+      Payout.STATUS_LABELS[p.status] || p.status
+    ]);
+
+    const csvContent = [headers, ...rows]
+      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+
+    const filename = `payouts_${new Date().toISOString().split('T')[0]}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    // BOM 추가 (Excel 한글 깨짐 방지)
+    return res.send('\uFEFF' + csvContent);
+
+  } catch (err) {
+    console.error('지급 CSV 다운로드 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
 };
@@ -378,6 +508,13 @@ function formatPayoutSummary(p) {
   };
 }
 
+const PAYOUT_TYPE_DESCRIPTIONS = {
+  CONTRACT_SETTLEMENT: '정상 계약 이행 후 호스트 이용료 정산',
+  GUEST_PENALTY: '게스트 귀책 취소로 인한 호스트 위약금 지급',
+  DEPOSIT_DEDUCTION: '보증금 차감 합의 후 호스트 지급',
+  HOST_CANCELLATION_COMPENSATION: '호스트 귀책 취소로 인한 게스트 보상 지급'
+};
+
 function formatPayoutDetail(p) {
   return {
     id: p.id,
@@ -386,6 +523,7 @@ function formatPayoutDetail(p) {
     refundId: p.refundId,
     payoutType: p.payoutType,
     payoutTypeLabel: Payout.TYPE_LABELS[p.payoutType],
+    payoutTypeDescription: PAYOUT_TYPE_DESCRIPTIONS[p.payoutType] || null,
     recipientType: p.recipientType,
     recipient: p.recipient ? {
       id: p.recipient.id,
@@ -412,6 +550,16 @@ function formatPayoutDetail(p) {
     settlement: p.settlement,
     refund: p.refund,
     createdAt: p.createdAt,
-    updatedAt: p.updatedAt
+    updatedAt: p.updatedAt,
+    // 상태 변경 이력
+    statusHistory: (p.logs || []).map(log => ({
+      id: log.id,
+      fromStatus: log.fromStatus,
+      toStatus: log.toStatus,
+      changedBy: log.changedBy,
+      adminName: log.admin?.name || null,
+      note: log.note,
+      createdAt: log.createdAt
+    }))
   };
 }

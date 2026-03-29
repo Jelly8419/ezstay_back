@@ -447,6 +447,9 @@ router.patch(
 // 지급 목록 조회
 router.get('/payouts', adminPayoutController.getPayouts);
 
+// 지급 CSV 다운로드 (⚠️ /:payoutId 보다 먼저 등록)
+router.get('/payouts/export', adminPayoutController.exportPayouts);
+
 // 지급 상세 조회 (⚠️ action 라우트보다 먼저)
 router.get('/payouts/:payoutId', adminPayoutController.getPayoutDetail);
 
