@@ -251,10 +251,10 @@ function buildContractData(orderId, hostId, guestId, roomId, baseDate, overrides
   const platformFee = 50000;      // 수수료
   const discountAmount = 0;
 
-  const subtotal = rentalFee + maintenanceFee + cleaningFee + rentalItemsFee;
-  const totalUsageFee = subtotal - discountAmount + platformFee;
+  // subtotal, totalUsageFee는 Contract 모델 VIRTUAL getter가 자동 계산
   const deposit = 500000;
-  const finalTotalAmount = totalUsageFee + deposit;
+  const finalTotalAmount =
+    (rentalFee + maintenanceFee + cleaningFee + rentalItemsFee) - discountAmount + platformFee + deposit;
 
   return {
     orderId,
@@ -272,8 +272,6 @@ function buildContractData(orderId, hostId, guestId, roomId, baseDate, overrides
     platformFee,
     discountAmount,
     discountType: 'NONE',
-    subtotal,
-    totalUsageFee,
     deposit,
     finalTotalAmount,
     paymentMethod: 'CREDIT_CARD',
@@ -651,10 +649,11 @@ const SCENARIOS = {
         rentalItemsFee,
         rentalItems: JSON.stringify(selectedItems.map(i => ({ id: i.id, name: i.name, price: Number(i.price), quantity: 1 }))),
       });
-      // subtotal/totalUsageFee/finalTotalAmount 재계산
-      contractData.subtotal = contractData.rentalFee + contractData.maintenanceFee + contractData.cleaningFee + rentalItemsFee;
-      contractData.totalUsageFee = contractData.subtotal - contractData.discountAmount + contractData.platformFee;
-      contractData.finalTotalAmount = contractData.totalUsageFee + contractData.deposit;
+      // finalTotalAmount 재계산 (subtotal/totalUsageFee는 VIRTUAL)
+      contractData.rentalItemsFee = rentalItemsFee;
+      contractData.finalTotalAmount =
+        (contractData.rentalFee + contractData.maintenanceFee + contractData.cleaningFee + rentalItemsFee)
+        - contractData.discountAmount + contractData.platformFee + contractData.deposit;
 
       const contract = await Contract.create(contractData, { transaction });
 
@@ -811,9 +810,11 @@ const SCENARIOS = {
         checkedOutAt,
         rentalItemsFee: totalRentalFee,
       });
-      contractData.subtotal = contractData.rentalFee + contractData.maintenanceFee + contractData.cleaningFee + totalRentalFee;
-      contractData.totalUsageFee = contractData.subtotal - contractData.discountAmount + contractData.platformFee;
-      contractData.finalTotalAmount = contractData.totalUsageFee + contractData.deposit;
+      // finalTotalAmount 재계산 (subtotal/totalUsageFee는 VIRTUAL)
+      contractData.rentalItemsFee = totalRentalFee;
+      contractData.finalTotalAmount =
+        (contractData.rentalFee + contractData.maintenanceFee + contractData.cleaningFee + totalRentalFee)
+        - contractData.discountAmount + contractData.platformFee + contractData.deposit;
 
       const contract = await Contract.create(contractData, { transaction });
 

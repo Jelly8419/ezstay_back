@@ -270,7 +270,12 @@ const getChatRoomDetail = async (req, res) => {
         {
           model: Contract,
           as: 'contract',
-          attributes: ['id', 'status', 'checkInDate', 'checkOutDate', 'totalUsageFee']
+          // totalUsageFee는 VIRTUAL 필드이므로 의존 컬럼을 함께 포함해야 계산됨
+          attributes: [
+            'id', 'status', 'checkInDate', 'checkOutDate',
+            'rentalFee', 'maintenanceFee', 'cleaningFee',
+            'rentalItemsFee', 'discountAmount', 'platformFee'
+          ]
         },
         {
           model: Room,
