@@ -349,6 +349,28 @@ function validateDates(checkInDate, checkOutDate) {
   };
 }
 
+/**
+ * 렌탈 아이템 변경 시 계약 금액 재계산
+ *
+ * subtotal, totalUsageFee는 Contract 모델의 VIRTUAL getter가 자동 계산하므로
+ * DB에 저장이 필요한 rentalItemsFee와 finalTotalAmount만 반환한다.
+ *
+ * finalTotalAmount = (rentalFee + maintenanceFee + cleaningFee + newRentalItemsFee)
+ *                  - discountAmount + platformFee + deposit
+ *
+ * @param {Object} contract - 현재 계약 인스턴스
+ * @param {number} newRentalItemsFee - 새로운 렌탈 아이템 요금
+ * @returns {{ rentalItemsFee, finalTotalAmount }}
+ */
+function recalcRentalItemsAmounts(contract, newRentalItemsFee) {
+  const subtotal = (contract.rentalFee || 0) + (contract.maintenanceFee || 0)
+                 + (contract.cleaningFee || 0) + newRentalItemsFee;
+  const totalUsageFee = subtotal - (contract.discountAmount || 0) + (contract.platformFee || 0);
+  const finalTotalAmount = totalUsageFee + (contract.deposit || 0);
+
+  return { rentalItemsFee: newRentalItemsFee, finalTotalAmount };
+}
+
 module.exports = {
   calculateRentalItemsFee,
   calculateDiscount,
@@ -356,5 +378,6 @@ module.exports = {
   validateRentalItemsStock,
   reserveRentalItems,
   cancelRentalItemReservations,
-  validateDates
+  validateDates,
+  recalcRentalItemsAmounts
 };

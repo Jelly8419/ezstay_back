@@ -158,24 +158,21 @@ const Contract = sequelize.define('Contract', {
     field: 'discount_type',
     comment: '할인 유형'
   },
-  // 계산된 금액
+  // 계산된 금액 (VIRTUAL: DB 저장 없이 항상 실시간 계산)
   subtotal: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    field: 'subtotal',
-    comment: '소계 (할인 전)',
-    validate: {
-      min: 0
-    }
+    type: DataTypes.VIRTUAL,
+    get() {
+      return (this.rentalFee || 0) + (this.maintenanceFee || 0)
+           + (this.cleaningFee || 0) + (this.rentalItemsFee || 0);
+    },
+    comment: '소계 (할인 전) - rentalFee + maintenanceFee + cleaningFee + rentalItemsFee'
   },
   totalUsageFee: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    field: 'total_usage_fee',
-    comment: '실이용 금액 (할인 적용 후, 수수료 포함)',
-    validate: {
-      min: 0
-    }
+    type: DataTypes.VIRTUAL,
+    get() {
+      return (this.subtotal || 0) - (this.discountAmount || 0) + (this.platformFee || 0);
+    },
+    comment: '실이용 금액 (할인 적용 후, 수수료 포함) - subtotal - discountAmount + platformFee'
   },
   deposit: {
     type: DataTypes.INTEGER,
@@ -658,5 +655,29 @@ Contract.DISCOUNT_TYPE_LABELS = {
   QUICK_MOVE_IN: '빠른 입주 할인',
   BOTH: '빠른 입주 + 장기 할인'
 };
+
+/**
+ * 결제 완료 후 finalTotalAmount 변경 차단
+ * - previousStatus: 이미 잠긴 상태의 계약에 변경 시도 차단
+ * - currentStatus: 잠금 상태로 전환하면서 동시에 금액도 바꾸는 시도 차단
+ */
+const LOCKED_STATUSES = [
+  'PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED',
+  'CANCELLED_BY_GUEST', 'CANCELLED_BY_HOST',
+  'CANCELLED_BY_ADMIN_WITH_REFUND', 'CANCELLED_BY_ADMIN_NO_REFUND',
+  'REFUNDED', 'APPROVAL_EXPIRED', 'PAYMENT_EXPIRED', 'CANCEL_REQUESTED'
+];
+
+Contract.beforeUpdate((contract) => {
+  if (contract.changed('finalTotalAmount')) {
+    const previousStatus = contract.previous('status');
+    const currentStatus = contract.status;
+    if (LOCKED_STATUSES.includes(previousStatus) || LOCKED_STATUSES.includes(currentStatus)) {
+      throw new Error(
+        `[Contract] finalTotalAmount 변경 불가: 결제 완료 이후 상태 (previous=${previousStatus}, current=${currentStatus})`
+      );
+    }
+  }
+});
 
 module.exports = Contract;

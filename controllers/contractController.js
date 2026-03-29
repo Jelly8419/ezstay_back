@@ -9,7 +9,8 @@ const {
   validateRentalItemsStock,
   reserveRentalItems,
   cancelRentalItemReservations,
-  validateDates
+  validateDates,
+  recalcRentalItemsAmounts
 } = require('../utils/contractHelper');
 const { createChatRoomMetadata, sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
@@ -413,8 +414,6 @@ const createContractRequest = async (req, res) => {
         hostPlatformFee: serverCalculated.hostPlatformFee,  // 호스트 수수료 (3.3%)
         discountAmount: discountAmountServer,
         discountType: discountTypeServer,
-        subtotal: subtotalServer,
-        totalUsageFee: serverCalculated.totalUsageFee,
         deposit: serverCalculated.deposit,
         finalTotalAmount: serverCalculated.finalTotal,
 
@@ -2544,15 +2543,11 @@ const updatePendingRentalItems = async (req, res) => {
 
     // 5. 렌탈 아이템이 비어있으면 null로 저장
     if (!rentalItems || !Array.isArray(rentalItems) || rentalItems.length === 0) {
-      const prevRentalItemsFee = contract.rentalItemsFee || 0;
-      const newSubtotal = (contract.subtotal || 0) - prevRentalItemsFee;
-      const newFinalTotalAmount = (contract.finalTotalAmount || 0) - prevRentalItemsFee;
+      const amounts = recalcRentalItemsAmounts(contract, 0);
 
       await contract.update({
         rentalItems: null,
-        rentalItemsFee: 0,
-        subtotal: newSubtotal,
-        finalTotalAmount: newFinalTotalAmount
+        ...amounts
       }, { transaction });
 
       await transaction.commit();
@@ -2560,9 +2555,7 @@ const updatePendingRentalItems = async (req, res) => {
       return success(res, {
         contractId: contract.id,
         rentalItems: null,
-        rentalItemsFee: 0,
-        subtotal: newSubtotal,
-        finalTotalAmount: newFinalTotalAmount
+        ...amounts
       }, '렌탈 아이템이 모두 삭제되었습니다');
     }
 
@@ -2622,19 +2615,12 @@ const updatePendingRentalItems = async (req, res) => {
       });
     }
 
-    // 8. 계약 업데이트 (rentalItems, rentalItemsFee, finalTotalAmount 재계산)
-    const newFinalTotal =
-      (contract.subtotal || 0) -
-      (contract.discountAmount || 0) +
-      (contract.platformFee || 0) +
-      (contract.deposit || 0) -
-      (contract.rentalItemsFee || 0) +  // 기존 렌탈비 제거
-      totalRentalFee;  // 새 렌탈비 추가
+    // 8. 계약 업데이트 (rentalItems, rentalItemsFee, subtotal, totalUsageFee, finalTotalAmount 재계산)
+    const amounts = recalcRentalItemsAmounts(contract, totalRentalFee);
 
     await contract.update({
       rentalItems: itemDetails,
-      rentalItemsFee: totalRentalFee,
-      finalTotalAmount: newFinalTotal
+      ...amounts
     }, { transaction });
 
     await transaction.commit();
@@ -2642,8 +2628,7 @@ const updatePendingRentalItems = async (req, res) => {
     return success(res, {
       contractId: contract.id,
       rentalItems: itemDetails,
-      rentalItemsFee: totalRentalFee,
-      finalTotalAmount: newFinalTotal,
+      ...amounts,
       itemCount: itemDetails.length,
       totalQuantity: itemDetails.reduce((sum, item) => sum + item.quantity, 0)
     }, '렌탈 아이템이 업데이트되었습니다');
