@@ -2544,9 +2544,15 @@ const updatePendingRentalItems = async (req, res) => {
 
     // 5. 렌탈 아이템이 비어있으면 null로 저장
     if (!rentalItems || !Array.isArray(rentalItems) || rentalItems.length === 0) {
+      const prevRentalItemsFee = contract.rentalItemsFee || 0;
+      const newSubtotal = (contract.subtotal || 0) - prevRentalItemsFee;
+      const newFinalTotalAmount = (contract.finalTotalAmount || 0) - prevRentalItemsFee;
+
       await contract.update({
         rentalItems: null,
-        rentalItemsFee: 0
+        rentalItemsFee: 0,
+        subtotal: newSubtotal,
+        finalTotalAmount: newFinalTotalAmount
       }, { transaction });
 
       await transaction.commit();
@@ -2554,7 +2560,9 @@ const updatePendingRentalItems = async (req, res) => {
       return success(res, {
         contractId: contract.id,
         rentalItems: null,
-        rentalItemsFee: 0
+        rentalItemsFee: 0,
+        subtotal: newSubtotal,
+        finalTotalAmount: newFinalTotalAmount
       }, '렌탈 아이템이 모두 삭제되었습니다');
     }
 
