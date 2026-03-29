@@ -2355,7 +2355,12 @@ const confirmPayment = async (req, res) => {
     }
 
     // Settlement + Payout 생성 (CONTRACT_SETTLEMENT)
-    const payoutAvailableDate = calculatePayoutAvailableDate(now);
+    // 지급 가능일: 결제일+3영업일 vs 입주일 다음날 중 더 늦은 날짜 (PRD 정책)
+    const pgAvailableDate = calculatePayoutAvailableDate(now);
+    const checkInNextDay = new Date(contract.checkInDate);
+    checkInNextDay.setDate(checkInNextDay.getDate() + 1);
+    checkInNextDay.setHours(0, 0, 0, 0);
+    const payoutAvailableDate = pgAvailableDate > checkInNextDay ? pgAvailableDate : checkInNextDay;
     const settlementExpectedDate = calculateSettlementDate(contract.checkInDate);
     const settlementAmounts = calculateSettlementAmount(contract);
 

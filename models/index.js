@@ -38,6 +38,7 @@ const RentalPaymentModel = require('./RentalPayment');
 const RentalPaymentFailureLogModel = require('./RentalPaymentFailureLog');
 const Settlement = require('./Settlement');
 const PayoutModel = require('./Payout');
+const PayoutLogModel = require('./PayoutLog');
 const DepositAgreement = require('./DepositAgreement');
 const GuestRefundAccount = require('./GuestRefundAccount');
 const AlimtalkLog = require('./AlimtalkLog');
@@ -91,6 +92,7 @@ const ContractSequence = ContractSequenceModel(sequelize);
 const Payment = PaymentModel(sequelize);
 const PaymentFailureLog = PaymentFailureLogModel(sequelize);
 const Payout = PayoutModel(sequelize);
+const PayoutLog = PayoutLogModel(sequelize);
 const RentalPayment = RentalPaymentModel(sequelize);
 const RentalPaymentFailureLog = RentalPaymentFailureLogModel(sequelize);
 
@@ -857,6 +859,22 @@ Payout.belongsTo(Admin, {
   onUpdate: 'CASCADE'
 });
 
+// PayoutLog 관계 설정
+Payout.hasMany(PayoutLog, {
+  foreignKey: 'payoutId',
+  as: 'logs',
+  onDelete: 'CASCADE'
+});
+PayoutLog.belongsTo(Payout, {
+  foreignKey: 'payoutId',
+  as: 'payout'
+});
+PayoutLog.belongsTo(Admin, {
+  foreignKey: 'adminId',
+  as: 'admin',
+  onDelete: 'SET NULL'
+});
+
 // =====================================================
 // DepositAgreement 관계 설정 (보증금 합의)
 // =====================================================
@@ -1037,6 +1055,7 @@ module.exports = {
   RentalPaymentFailureLog,
   Settlement,
   Payout,
+  PayoutLog,
   DepositAgreement,
   GuestRefundAccount,
   AlimtalkLog,
