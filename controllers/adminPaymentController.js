@@ -1908,6 +1908,13 @@ exports.rejectRentalRefundRequest = async (req, res) => {
         }, { transaction });
       }
 
+      // rental_orders.delivery_status → 요청 시점 스냅샷으로 복원
+      if (refundRequest.rentalOrder) {
+        await refundRequest.rentalOrder.update({
+          deliveryStatus: refundRequest.deliveryStatusSnapshot
+        }, { transaction });
+      }
+
       await refundRequest.update({
         status: 'REJECTED',
         rejectReason,

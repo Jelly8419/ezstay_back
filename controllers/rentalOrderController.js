@@ -25,6 +25,7 @@ const {
   cancelPaidRentalOrder,
   cancelPendingRentalOrder,
   logRentalAction,
+  groupItemsByOrder,
   RENTAL_CANCEL_REQUEST_DAYS
 } = require('../utils/rentalOrderHelper');
 const NotificationService = require('../services/notificationService');
@@ -585,6 +586,16 @@ const cancelPaidRentalOrderByGuest = async (req, res) => {
         });
       }
 
+      // 중복 반품 요청 차단
+      const pendingRequestCount = await RentalOrderRefundRequest.count({
+        where: { rentalOrderId: rentalOrder.id, status: 'PENDING' },
+        transaction
+      });
+      if (pendingRequestCount > 0) {
+        await transaction.rollback();
+        return error(res, { code: 4424, message: '이미 처리 중인 반품 요청이 있습니다.' }, 400);
+      }
+
       // 주문 내 모든 활성 아이템을 CANCEL_REQUESTED로 전환
       const activeItems = await RentalOrderItem.findAll({
         where: { rentalOrderId: rentalOrder.id, status: 'ACTIVE' },
@@ -653,6 +664,12 @@ const cancelPaidRentalOrderByGuest = async (req, res) => {
       return error(res, ErrorCodes.RENTAL_MODIFICATION_EXPIRED, 400, {
         details: `현재 계약 상태(${contract.status})에서는 옵션 취소가 불가합니다`
       });
+    }
+
+    // 배송 전 상태만 즉시 결제취소 가능
+    if (rentalOrder.deliveryStatus !== 'PENDING') {
+      await transaction.rollback();
+      return error(res, { code: 4425, message: '배송이 시작된 상품은 결제취소가 불가합니다. 반품 신청을 이용하세요.' }, 400);
     }
 
     // 금액 산정 (PG 호출 전 미리 계산)
@@ -835,6 +852,409 @@ const getAvailableRentalItems = async (req, res) => {
   }
 };
 
+/**
+ * 아이템 단위 즉시환불 (배송전 전용)
+ * POST /api/contracts/:contractId/rental-items/cancel
+ *
+ * @access 게스트
+ * @body { itemIds: number[], reason?: string }
+ * @description 배송전(PENDING) 상태 아이템 복수 선택 즉시환불.
+ *              여러 주문건 혼합 가능. 주문별 독립 PG 처리 (부분 성공 허용).
+ */
+const cancelRentalItemsByGuest = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const { itemIds, reason } = req.body;
+    const userId = req.user.id;
+
+    if (!Array.isArray(itemIds) || itemIds.length === 0) {
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { details: '취소할 아이템을 선택해주세요.' });
+    }
+
+    // 계약 조회 + 권한 확인
+    const contract = await Contract.findByPk(contractId);
+    if (!contract) return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    if (contract.guestId !== userId) return error(res, ErrorCodes.RENTAL_NOT_GUEST, 403);
+
+    // 계약 상태 확인
+    if (contract.status !== 'PAYMENT_COMPLETED') {
+      return error(res, ErrorCodes.RENTAL_MODIFICATION_EXPIRED, 400, {
+        details: `현재 계약 상태(${contract.status})에서는 즉시환불이 불가합니다.`
+      });
+    }
+
+    // 아이템 그룹핑 + 유효성 검증
+    let groups;
+    try {
+      groups = await groupItemsByOrder(itemIds, parseInt(contractId), null);
+    } catch (validErr) {
+      return error(res, { code: validErr.code || 4460, message: validErr.message }, validErr.status || 400);
+    }
+
+    // 배송전 상태 이중 검증
+    for (const { rentalOrder } of groups.values()) {
+      if (rentalOrder.deliveryStatus !== 'PENDING') {
+        return error(res, { code: 4425, message: `주문(${rentalOrder.orderId})은 배송이 시작되어 즉시환불이 불가합니다. 반품 신청을 이용하세요.` }, 400);
+      }
+    }
+
+    const succeeded = [];
+    const failed = [];
+    let totalRefunded = 0;
+    const now = new Date();
+
+    // 주문별 독립 PG + DB 처리
+    for (const [, { rentalOrder, rentalPayment, items }] of groups) {
+      if (!rentalPayment) {
+        failed.push({ orderId: rentalOrder.orderId, reason: '결제 정보를 찾을 수 없습니다.' });
+        continue;
+      }
+
+      const refundAmount = items.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
+      const availableBalance = parseFloat(rentalPayment.balanceAmount);
+
+      if (refundAmount > availableBalance) {
+        failed.push({ orderId: rentalOrder.orderId, reason: `환불 가능 금액 부족 (가능: ${availableBalance}원, 요청: ${refundAmount}원)` });
+        continue;
+      }
+
+      // PG 취소 (트랜잭션 밖)
+      const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(rentalPayment);
+      const newBalance = availableBalance - refundAmount;
+      const canceltype = newBalance === 0 ? '0' : '1';
+
+      try {
+        await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, loginid, cancelamt: refundAmount, canceltype });
+      } catch (pgErr) {
+        failed.push({ orderId: rentalOrder.orderId, reason: pgErr.paytagErrorMessage || pgErr.message });
+        continue;
+      }
+
+      // DB 업데이트 (짧은 트랜잭션)
+      const dbTx = await sequelize.transaction();
+      try {
+        for (const item of items) {
+          await item.update({
+            status: 'CANCELLED',
+            cancelledAt: now,
+            cancelReason: reason || '게스트 취소',
+            refundAmount: parseFloat(item.totalPrice)
+          }, { transaction: dbTx });
+        }
+
+        await rentalPayment.update({
+          balanceAmount: newBalance,
+          status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+        }, { transaction: dbTx });
+
+        const newRefundedAmount = parseFloat(rentalOrder.refundedAmount || 0) + refundAmount;
+        const remainingActive = await RentalOrderItem.count({
+          where: { rentalOrderId: rentalOrder.id, status: 'ACTIVE' },
+          transaction: dbTx
+        });
+        await rentalOrder.update({
+          refundedAmount: newRefundedAmount,
+          status: remainingActive === 0 ? 'FULLY_REFUNDED' : 'PARTIAL_REFUND'
+        }, { transaction: dbTx });
+
+        await logRentalAction({
+          contractId: parseInt(contractId),
+          rentalOrderId: rentalOrder.id,
+          action: 'ORDER_CANCELLED',
+          actor: 'GUEST',
+          actorId: userId,
+          amountChange: -refundAmount,
+          balanceAfter: newBalance,
+          metadata: {
+            orderId: rentalOrder.orderId,
+            cancelledItemIds: items.map(i => i.id),
+            refundAmount,
+            reason: reason || '게스트 취소'
+          },
+          description: `아이템 선택 즉시환불: ${refundAmount}원`,
+          req
+        }, dbTx);
+
+        await dbTx.commit();
+
+        succeeded.push({
+          orderId: rentalOrder.orderId,
+          refundAmount,
+          cancelledItems: items.map(i => ({ id: i.id, name: i.rentalItem?.name, quantity: i.quantity }))
+        });
+        totalRefunded += refundAmount;
+      } catch (dbErr) {
+        await dbTx.rollback();
+        console.error(`즉시환불 DB 오류 (PG 취소 완료됨) orderId=${rentalOrder.orderId}:`, dbErr);
+        failed.push({ orderId: rentalOrder.orderId, reason: 'PG 취소는 완료됐으나 DB 업데이트에 실패했습니다. 관리자에게 문의하세요.' });
+      }
+    }
+
+    const message = failed.length === 0
+      ? '선택한 상품이 모두 취소되었습니다.'
+      : `${succeeded.length}건 취소 완료, ${failed.length}건 처리 실패.`;
+
+    return success(res, { succeeded, failed, totalRefunded }, message);
+  } catch (err) {
+    console.error('아이템 즉시환불 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 아이템 단위 반품 신청 (배송중/배송완료 전용)
+ * POST /api/contracts/:contractId/rental-items/return-request
+ *
+ * @access 게스트
+ * @body { itemIds: number[], reason: string }
+ * @description 배송중/배송완료 상태 아이템 복수 선택 반품 신청.
+ *              여러 주문건 혼합 가능. 주문별 RentalOrderRefundRequest 생성.
+ *              단일 트랜잭션으로 전체 처리 (PG 호출 없음).
+ */
+const requestRentalItemsReturn = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { contractId } = req.params;
+    const { itemIds, reason } = req.body;
+    const userId = req.user.id;
+
+    if (!Array.isArray(itemIds) || itemIds.length === 0) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { details: '반품 신청할 아이템을 선택해주세요.' });
+    }
+    if (!reason || !reason.trim()) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { details: '반품 사유를 입력해주세요.' });
+    }
+
+    // 계약 조회 + 권한 확인
+    const contract = await Contract.findByPk(contractId, { transaction });
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+    if (contract.guestId !== userId) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.RENTAL_NOT_GUEST, 403);
+    }
+
+    // 계약 상태 확인 (입주 전 배송 완료 케이스 포함)
+    if (!['PAYMENT_COMPLETED', 'IN_PROGRESS'].includes(contract.status)) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.RENTAL_MODIFICATION_EXPIRED, 400, {
+        details: `현재 계약 상태(${contract.status})에서는 반품 신청이 불가합니다.`
+      });
+    }
+
+    // 7일 기간 체크 (입주 중일 때만 적용)
+    const now = new Date();
+    if (contract.status === 'IN_PROGRESS') {
+      const stayStartedAt = contract.checkedInAt ? new Date(contract.checkedInAt) : new Date(contract.checkInDate);
+      const cancelRequestDeadline = new Date(stayStartedAt.getTime() + RENTAL_CANCEL_REQUEST_DAYS * 24 * 60 * 60 * 1000);
+      if (now > cancelRequestDeadline) {
+        await transaction.rollback();
+        return error(res, { code: 4421, message: `입주 시작 후 ${RENTAL_CANCEL_REQUEST_DAYS}일이 경과하여 반품 신청이 불가합니다.` }, 400, {
+          stayStartedAt: stayStartedAt.toISOString(),
+          cancelRequestDeadline: cancelRequestDeadline.toISOString()
+        });
+      }
+    }
+
+    // 아이템 그룹핑 + 유효성 검증
+    let groups;
+    try {
+      groups = await groupItemsByOrder(itemIds, parseInt(contractId), transaction);
+    } catch (validErr) {
+      await transaction.rollback();
+      return error(res, { code: validErr.code || 4460, message: validErr.message }, validErr.status || 400);
+    }
+
+    // 단일 주문 제약 (반품신청은 주문 1건 단위)
+    if (groups.size > 1) {
+      await transaction.rollback();
+      return error(res, { code: 4471, message: '반품 신청은 주문 1건 단위로만 가능합니다. 주문별로 각각 신청해주세요.' }, 400);
+    }
+
+    // 배송중/완료 상태 이중 검증 + 중복 요청 차단
+    for (const [, { rentalOrder }] of groups) {
+      if (!['IN_TRANSIT', 'DELIVERED'].includes(rentalOrder.deliveryStatus)) {
+        await transaction.rollback();
+        return error(res, { code: 4470, message: `주문(${rentalOrder.orderId})은 배송 전 상태로 반품 신청이 불가합니다. 결제취소를 이용하세요.` }, 400);
+      }
+
+      const pendingCount = await RentalOrderRefundRequest.count({
+        where: { rentalOrderId: rentalOrder.id, status: 'PENDING' },
+        transaction
+      });
+      if (pendingCount > 0) {
+        await transaction.rollback();
+        return error(res, { code: 4424, message: `주문(${rentalOrder.orderId})에 이미 처리 중인 반품 요청이 있습니다.` }, 400);
+      }
+    }
+
+    // 주문별 반품 신청 생성 (단일 트랜잭션)
+    const requestedOrders = [];
+    for (const [, { rentalOrder, items }] of groups) {
+      for (const item of items) {
+        await item.update({
+          status: 'CANCEL_REQUESTED',
+          cancelReason: reason
+        }, { transaction });
+      }
+
+      const itemTotalAmount = items.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
+
+      const refundRequest = await RentalOrderRefundRequest.create({
+        rentalOrderId: rentalOrder.id,
+        contractId: parseInt(contractId),
+        requestedBy: userId,
+        status: 'PENDING',
+        cancelReason: reason,
+        deliveryStatusSnapshot: rentalOrder.deliveryStatus,
+        itemTotalAmount
+      }, { transaction });
+
+      await logRentalAction({
+        contractId: parseInt(contractId),
+        rentalOrderId: rentalOrder.id,
+        action: 'CANCEL_REQUESTED',
+        actor: 'GUEST',
+        actorId: userId,
+        amountChange: 0,
+        balanceAfter: 0,
+        metadata: {
+          orderId: rentalOrder.orderId,
+          refundRequestId: refundRequest.id,
+          cancelledItemIds: items.map(i => i.id),
+          itemTotalAmount,
+          reason,
+          deliveryStatus: rentalOrder.deliveryStatus
+        },
+        description: `아이템 선택 반품 신청: ${reason}`,
+        req
+      }, transaction);
+
+      requestedOrders.push({
+        refundRequestId: refundRequest.id,
+        orderId: rentalOrder.orderId,
+        deliveryStatus: rentalOrder.deliveryStatus,
+        itemTotalAmount,
+        requestedItems: items.map(i => ({ id: i.id, name: i.rentalItem?.name, quantity: i.quantity }))
+      });
+    }
+
+    await transaction.commit();
+
+    return success(res, {
+      requestedOrders,
+      totalOrderCount: requestedOrders.length,
+      message: '관리자 확인 후 환불이 처리됩니다.'
+    }, '반품 신청이 접수되었습니다.');
+  } catch (err) {
+    await transaction.rollback();
+    console.error('반품 신청 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+const RETRIEVAL_SHIPPING_COST = 7000;
+
+/**
+ * 반품 신청 전 환불 예상 금액 조회
+ * GET /api/contracts/:contractId/rental-items/return-preview
+ *
+ * @description 선택한 아이템에 대한 환불 예정 금액 및 수거비 차감 여부 미리 확인.
+ *              관리자 승인 로직(approveRentalRefundRequest)과 동일한 기준으로 계산.
+ */
+const getReturnRefundPreview = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const itemIdsRaw = req.query.itemIds;
+    const userId = req.user.id;
+
+    if (!itemIdsRaw) {
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { details: 'itemIds 쿼리 파라미터가 필요합니다.' });
+    }
+
+    const itemIds = String(itemIdsRaw).split(',').map(Number).filter(Boolean);
+    if (itemIds.length === 0) {
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { details: '조회할 아이템을 선택해주세요.' });
+    }
+
+    // 계약 조회 + 권한 확인
+    const contract = await Contract.findByPk(contractId);
+    if (!contract) return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    if (contract.guestId !== userId) return error(res, ErrorCodes.RENTAL_NOT_GUEST, 403);
+
+    // 아이템 그룹핑 + 유효성 검증 (트랜잭션 없이 읽기 전용)
+    let groups;
+    try {
+      groups = await groupItemsByOrder(itemIds, parseInt(contractId), null);
+    } catch (validErr) {
+      return error(res, { code: validErr.code || 4460, message: validErr.message }, validErr.status || 400);
+    }
+
+    // 같은 계약 내 RETRIEVAL_PENDING 건 수 조회 (수거비 면제 판단)
+    const pendingRetrievalCount = await RentalOrderRefundRequest.count({
+      where: {
+        contractId: parseInt(contractId),
+        retrievalStatus: 'RETRIEVAL_PENDING'
+      }
+    });
+
+    const orderPreviews = [];
+    let totalItemAmount = 0;
+    let totalShippingDeduction = 0;
+
+    for (const [, { rentalOrder, items }] of groups) {
+      const itemTotalAmount = items.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
+      const needsRetrieval = ['IN_TRANSIT', 'DELIVERED'].includes(rentalOrder.deliveryStatus);
+
+      // 수거비 차감: 배송중/완료이고, 이미 수거 예정 건이 없을 때만 7000원 차감
+      const shippingDeduction = needsRetrieval && pendingRetrievalCount === 0
+        ? RETRIEVAL_SHIPPING_COST
+        : 0;
+
+      const refundAmount = itemTotalAmount - shippingDeduction;
+
+      orderPreviews.push({
+        orderId: rentalOrder.orderId,
+        rentalOrderId: rentalOrder.id,
+        deliveryStatus: rentalOrder.deliveryStatus,
+        itemTotalAmount,
+        shippingDeduction,
+        refundAmount,
+        shippingDeductionReason: shippingDeduction > 0
+          ? '배송 완료 상품 수거비'
+          : needsRetrieval
+            ? '다른 반품 건과 수거 통합으로 면제'
+            : '배송 전 (수거비 없음)',
+        items: items.map(i => ({
+          id: i.id,
+          name: i.rentalItem?.name,
+          quantity: i.quantity,
+          totalPrice: parseFloat(i.totalPrice)
+        }))
+      });
+
+      totalItemAmount += itemTotalAmount;
+      totalShippingDeduction += shippingDeduction;
+    }
+
+    return success(res, {
+      orderPreviews,
+      summary: {
+        totalItemAmount,
+        totalShippingDeduction,
+        totalRefundAmount: totalItemAmount - totalShippingDeduction
+      }
+    }, '환불 예상 금액 조회 성공');
+  } catch (err) {
+    console.error('환불 예상 금액 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   getRentalOrders,
   createRentalOrder,
@@ -842,5 +1262,8 @@ module.exports = {
   confirmRentalPayment,
   cancelRentalOrder,
   cancelPaidRentalOrderByGuest,
-  getAvailableRentalItems
+  getAvailableRentalItems,
+  cancelRentalItemsByGuest,
+  requestRentalItemsReturn,
+  getReturnRefundPreview
 };

@@ -879,6 +879,62 @@ async function cancelPendingRentalOrder(rentalOrder, actorId, req, transaction) 
   }, transaction);
 }
 
+/**
+ * 아이템 ID 배열을 rentalOrder 단위로 그룹핑 + 유효성 검증
+ *
+ * @param {number[]} itemIds - rental_order_items.id 배열
+ * @param {number} contractId - 소유권 확인용 계약 ID
+ * @param {Transaction} transaction
+ * @returns {Promise<Map<number, { rentalOrder, rentalPayment, items[] }>>}
+ *   key: rentalOrderId
+ *
+ * @throws 아이템 미존재 / 소유권 불일치 / ACTIVE 아닌 상태 시 Error
+ */
+async function groupItemsByOrder(itemIds, contractId, transaction) {
+  const options = transaction ? { transaction } : {};
+  const groups = new Map();
+
+  for (const itemId of itemIds) {
+    const item = await RentalOrderItem.findByPk(itemId, {
+      include: [{
+        model: RentalOrder,
+        as: 'order',
+        include: [{ model: RentalPayment, as: 'payment', required: false }]
+      }, {
+        model: RentalItem,
+        as: 'rentalItem',
+        attributes: ['id', 'name']
+      }],
+      ...options
+    });
+
+    if (!item) {
+      throw Object.assign(new Error(`아이템(${itemId})을 찾을 수 없습니다.`), { code: 4460, status: 404 });
+    }
+    if (item.order.contractId !== contractId) {
+      throw Object.assign(new Error(`아이템(${itemId})이 해당 계약에 속하지 않습니다.`), { code: 4461, status: 403 });
+    }
+    if (item.status !== 'ACTIVE') {
+      throw Object.assign(new Error(`아이템(${itemId})은 취소 가능한 상태가 아닙니다. (현재: ${item.status})`), { code: 4462, status: 400 });
+    }
+    if (!['PAID', 'PARTIAL_REFUND'].includes(item.order.status)) {
+      throw Object.assign(new Error(`주문(${item.order.orderId})이 환불 가능한 상태가 아닙니다.`), { code: 4463, status: 400 });
+    }
+
+    const orderId = item.order.id;
+    if (!groups.has(orderId)) {
+      groups.set(orderId, {
+        rentalOrder: item.order,
+        rentalPayment: item.order.payment,
+        items: []
+      });
+    }
+    groups.get(orderId).items.push(item);
+  }
+
+  return groups;
+}
+
 module.exports = {
   // 상수
   RENTAL_MODIFIABLE_DAYS_BEFORE,
@@ -908,5 +964,8 @@ module.exports = {
   partialRefundRentalOrder,
 
   // 로깅 함수
-  logRentalAction
+  logRentalAction,
+
+  // 아이템 그룹핑
+  groupItemsByOrder
 };
