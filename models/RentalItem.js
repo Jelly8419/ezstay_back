@@ -27,6 +27,13 @@ const RentalItem = sequelize.define('RentalItem', {
     field: 'item_type',
     comment: '물품 카테고리'
   },
+  salesType: {
+    type: DataTypes.ENUM('SALE', 'RENTAL'),
+    allowNull: false,
+    defaultValue: 'SALE',
+    field: 'sales_type',
+    comment: '판매 유형 (SALE: 판매형 - 반품 시 재고 미복구, RENTAL: 대여형 - 반품 시 재고 복구)'
+  },
   name: {
     type: DataTypes.STRING(100),
     allowNull: false,
@@ -115,6 +122,14 @@ const RentalItem = sequelize.define('RentalItem', {
     }
   ]
 });
+
+/**
+ * 판매 유형 한글명 매핑
+ */
+RentalItem.SALES_TYPE_LABELS = {
+  SALE: '판매형',
+  RENTAL: '대여형'
+};
 
 /**
  * 물품 카테고리 한글명 매핑

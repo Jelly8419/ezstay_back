@@ -2005,6 +2005,23 @@ exports.updateRentalRefundRetrieval = async (req, res) => {
 
     await refundRequest.update(updateData);
 
+    // 수거 완료(RETRIEVED) 시 대여형(RENTAL) 상품만 재고 복구
+    if (retrievalStatus === 'RETRIEVED') {
+      const cancelledItems = await RentalOrderItem.findAll({
+        where: {
+          rentalOrderId: refundRequest.rentalOrderId,
+          status: 'CANCEL_REQUESTED'
+        },
+        include: [{ model: RentalItem, as: 'rentalItem' }]
+      });
+
+      for (const orderItem of cancelledItems) {
+        if (orderItem.rentalItem && orderItem.rentalItem.salesType === 'RENTAL') {
+          await orderItem.rentalItem.increaseStock(orderItem.quantity);
+        }
+      }
+    }
+
     return success(res, {
       requestId: refundRequest.id,
       retrievalStatus,
