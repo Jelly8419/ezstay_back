@@ -9,6 +9,10 @@ on:
       - develop
     types: [closed]  # develop으로 PR 병합될 때 자동 배포
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   deploy:
     name: Deploy to Test Server
