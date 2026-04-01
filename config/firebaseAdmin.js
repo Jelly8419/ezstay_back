@@ -199,7 +199,7 @@ const deactivateChatRoom = async (chatRoomId) => {
 const setChatWritableUntil = async (chatRoomId, depositReturnedAt) => {
   try {
     const db = getFirestore();
-    const writableUntil = new Date(depositReturnedAt.getTime() + 24 * 60 * 60 * 1000);
+    const writableUntil = new Date(); // 로컬 테스트용: 즉시 종료 (원래: depositReturnedAt + 24H)
 
     // 문서 존재 여부 확인 — 없으면 스킵 (Firestore 미생성 채팅방)
     const doc = await db.collection('chatRooms').doc(chatRoomId).get();
