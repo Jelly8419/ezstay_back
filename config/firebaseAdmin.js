@@ -190,6 +190,26 @@ const deactivateChatRoom = async (chatRoomId) => {
 };
 
 /**
+ * 채팅 쓰기 마감 시각 설정 (보증금 반환 완료 시점 + 24H)
+ * @param {string} chatRoomId - 채팅방 ID
+ * @param {Date} depositReturnedAt - 보증금 반환 완료 시점
+ */
+const setChatWritableUntil = async (chatRoomId, depositReturnedAt) => {
+  try {
+    const db = getFirestore();
+    const writableUntil = new Date(depositReturnedAt.getTime() + 24 * 60 * 60 * 1000);
+    await db.collection('chatRooms').doc(chatRoomId).update({
+      chatWritableUntil: admin.firestore.Timestamp.fromDate(writableUntil),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    console.log(`✅ 채팅 쓰기 마감 시각 설정 완료: ${chatRoomId} → ${writableUntil.toISOString()}`);
+  } catch (error) {
+    console.error('Firestore 채팅 쓰기 마감 시각 설정 실패:', error);
+    throw error;
+  }
+};
+
+/**
  * 시스템 메시지 발송
  * @param {string} chatRoomId - 채팅방 ID (예: contract_123)
  * @param {string} text - 메시지 내용
@@ -255,5 +275,6 @@ module.exports = {
   getChatRoomMetadata,
   getUserChatRooms,
   deactivateChatRoom,
+  setChatWritableUntil,
   sendSystemMessage
 };

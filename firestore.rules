@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /chatRooms/{chatRoomId} {
+
+      // 채팅방 멤버(호스트/게스트)만 읽기 가능
+      allow read: if request.auth != null && isMember(resource.data);
+
+      // 메타데이터 쓰기는 Admin SDK만 (Rules 우회됨 — 클라이언트 직접 쓰기 차단)
+      allow write: if false;
+
+      match /messages/{messageId} {
+
+        // 읽기: 채팅방 멤버만
+        allow read: if request.auth != null &&
+          isMember(get(/databases/$(database)/documents/chatRooms/$(chatRoomId)).data);
+
+        // 쓰기: 멤버 + 쓰기 가능 시간 이내 + 본인 senderId
+        allow create: if request.auth != null &&
+          isMember(get(/databases/$(database)/documents/chatRooms/$(chatRoomId)).data) &&
+          isWritable(get(/databases/$(database)/documents/chatRooms/$(chatRoomId)).data) &&
+          request.resource.data.senderId == request.auth.uid;
+
+        // 수정/삭제 불가
+        allow update, delete: if false;
+      }
+    }
+  }
+
+  // 호스트 또는 게스트 여부 확인
+  // Custom Token uid는 백엔드 userId를 String으로 변환한 값
+  function isMember(chatRoomData) {
+    return request.auth.uid == string(chatRoomData.hostId) ||
+           request.auth.uid == string(chatRoomData.guestId);
+  }
+
+  // 쓰기 가능 여부: chatWritableUntil이 없거나(결제완료 후 미설정) 현재 시각 이전
+  // - chatWritableUntil 미설정: 보증금 아직 반환 안 됨 → 쓰기 허용
+  // - chatWritableUntil 설정됨: 반환완료+24H 이내면 쓰기 허용
+  function isWritable(chatRoomData) {
+    return !('chatWritableUntil' in chatRoomData) ||
+           request.time < chatRoomData.chatWritableUntil;
+  }
+}

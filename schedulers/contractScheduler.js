@@ -1,7 +1,7 @@
 const cron = require('node-cron');
 const { Contract, ChatRoom, Room, EzService, User, ContractStatusLog, Settlement, Payout, DepositAgreement, RentalOrder, RentalOrderItem, RentalItem, ServiceTask, sequelize } = require('../models');
 const { Op } = require('sequelize');
-const { sendSystemMessage } = require('../config/firebaseAdmin');
+const { sendSystemMessage, setChatWritableUntil } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
@@ -815,6 +815,16 @@ async function autoReturnDeposit() {
     }
 
     await transaction.commit();
+
+    // 보증금 반환 완료 시점 기준 채팅 쓰기 마감 시각 설정 (비동기, 트랜잭션 외부)
+    for (const contract of pendingDeposits) {
+      const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
+      if (chatRoom) {
+        setChatWritableUntil(chatRoom.firebaseChatRoomId, now).catch(err => {
+          console.error(`[스케줄러] 채팅 쓰기 마감 설정 실패 (계약 ${contract.id}):`, err);
+        });
+      }
+    }
 
     if (pendingDeposits.length > 0) {
       console.log(`[스케줄러] ${pendingDeposits.length}건의 보증금을 자동 반환 처리했습니다.`);
