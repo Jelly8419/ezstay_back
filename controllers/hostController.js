@@ -86,6 +86,9 @@ const createRoom = async (req, res) => {
   }
 };
 
+// 재심사 트리거 상태
+const REVIEW_TRIGGER_STATUSES = ['approved', 'published'];
+
 // 2. 기본 정보 수정
 const updateBasicInfo = async (req, res) => {
   const transaction = await sequelize.transaction();
@@ -130,6 +133,13 @@ const updateBasicInfo = async (req, res) => {
       }
     }
 
+    // 재심사 트리거 필드 변경 여부 확인
+    const REVIEW_FIELDS = ['address', 'buildingType', 'area', 'roomCount', 'bathroomCount'];
+    const needsReview = REVIEW_TRIGGER_STATUSES.includes(room.status) && REVIEW_FIELDS.some(field => {
+      const bodyVal = req.body[field];
+      return bodyVal !== undefined && bodyVal !== room[field];
+    });
+
     await room.update({
       roomName: roomName ?? room.roomName,
       address: address ?? room.address,
@@ -145,7 +155,8 @@ const updateBasicInfo = async (req, res) => {
       roomCount: roomCount ?? room.roomCount,
       bathroomCount: bathroomCount ?? room.bathroomCount,
       isDuplex: isDuplex ?? room.isDuplex,
-      entrancePassword: entrancePassword ?? room.entrancePassword
+      entrancePassword: entrancePassword ?? room.entrancePassword,
+      ...(needsReview && { status: 'pending_review', submittedAt: new Date() })
     }, { transaction });
 
     await transaction.commit();
@@ -155,8 +166,8 @@ const updateBasicInfo = async (req, res) => {
 
     return updated(res, {
       roomId: room.id,
-      status: room.status
-    }, '방 기본 정보가 수정되었습니다.');
+      status: needsReview ? 'pending_review' : room.status
+    }, needsReview ? '방 기본 정보가 수정되었습니다. 변경된 항목이 있어 재심사가 진행됩니다.' : '방 기본 정보가 수정되었습니다.');
   } catch (err) {
     await transaction.rollback();
     console.error('Basic info update error:', err);
@@ -191,7 +202,8 @@ const updatePricing = async (req, res) => {
     } = req.body;
 
     const room = await Room.findOne({
-      where: { id: roomId, hostId }
+      where: { id: roomId, hostId },
+      include: [{ model: EzService, as: 'ezService' }]
     });
 
     if (!room) {
@@ -201,6 +213,17 @@ const updatePricing = async (req, res) => {
 
     // cleaningService=true이면 cleaningFee를 0으로 강제
     const finalCleaningFee = cleaningService === true ? 0 : cleaningFee;
+
+    // 재심사 트리거 필드 변경 여부 확인
+    const pricingReviewFields = {
+      dailyRent,
+      dailyMaintenanceFee,
+      cleaningFee: finalCleaningFee
+    };
+    const needsReview = REVIEW_TRIGGER_STATUSES.includes(room.status) && (
+      Object.entries(pricingReviewFields).some(([field, val]) => val !== undefined && val !== room[field]) ||
+      (cleaningService !== undefined && cleaningService !== room.ezService?.cleaningService)
+    );
 
     await room.update({
       dailyRent,
@@ -216,7 +239,8 @@ const updatePricing = async (req, res) => {
       includeInternet: includeInternet || false,
       cleaningFee: finalCleaningFee,
       minContractDays,
-      refundPolicy
+      refundPolicy,
+      ...(needsReview && { status: 'pending_review', submittedAt: new Date() })
     }, { transaction });
 
     // 청소서비스 관련 EzService 저장
@@ -233,7 +257,10 @@ const updatePricing = async (req, res) => {
     // 지도 캐시 무효화
     await invalidateRoomCache();
 
-    return updated(res, { roomId: room.id }, '요금 정보가 저장되었습니다.');
+    return updated(res, {
+      roomId: room.id,
+      status: needsReview ? 'pending_review' : room.status
+    }, needsReview ? '요금 정보가 저장되었습니다. 변경된 항목이 있어 재심사가 진행됩니다.' : '요금 정보가 저장되었습니다.');
   } catch (err) {
     await transaction.rollback();
     console.error('Pricing update error:', err);
@@ -303,12 +330,21 @@ const uploadPhotos = async (req, res) => {
       });
     }
 
+    // 재심사 트리거: 사진 추가 시
+    const needsReview = REVIEW_TRIGGER_STATUSES.includes(room.status);
+    if (needsReview) {
+      await room.update({ status: 'pending_review', submittedAt: new Date() }, { transaction });
+    }
+
     await transaction.commit();
 
     // 지도 캐시 무효화 (thumbnail 변경)
     await invalidateRoomCache();
 
-    return success(res, { photoUrls }, '사진이 업로드되었습니다.');
+    return success(res, {
+      photoUrls,
+      status: needsReview ? 'pending_review' : room.status
+    }, needsReview ? '사진이 업로드되었습니다. 변경된 항목이 있어 재심사가 진행됩니다.' : '사진이 업로드되었습니다.');
   } catch (err) {
     await transaction.rollback();
     console.error('Photo upload error:', err);
@@ -393,13 +429,19 @@ const updateFreeServices = async (req, res) => {
     } = req.body;
 
     const room = await Room.findOne({
-      where: { id: roomId, hostId }
+      where: { id: roomId, hostId },
+      include: [{ model: EzService, as: 'ezService' }]
     });
 
     if (!room) {
       await transaction.rollback();
       return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
+
+    // 재심사 트리거: cleaningService 변경 여부 확인
+    const needsReview = REVIEW_TRIGGER_STATUSES.includes(room.status) &&
+      cleaningService !== undefined &&
+      cleaningService !== (room.ezService?.cleaningService ?? false);
 
     await EzService.upsert({
       roomId: room.id,
@@ -408,20 +450,19 @@ const updateFreeServices = async (req, res) => {
     }, { transaction });
 
     // cleaningService=true이면 cleaningFee를 0으로 설정
-    if (cleaningService === true) {
-      await room.update({
-        cleaningFee: 0
-      }, { transaction });
-    }
+    await room.update({
+      ...(cleaningService === true && { cleaningFee: 0 }),
+      ...(needsReview && { status: 'pending_review', submittedAt: new Date() })
+    }, { transaction });
 
     await transaction.commit();
 
-    // cleaningFee 변경 시 지도 캐시 무효화
-    if (cleaningService === true) {
-      await invalidateRoomCache();
-    }
+    await invalidateRoomCache();
 
-    return updated(res, { roomId: room.id }, '부가서비스 정보가 저장되었습니다.');
+    return updated(res, {
+      roomId: room.id,
+      status: needsReview ? 'pending_review' : room.status
+    }, needsReview ? '부가서비스 정보가 저장되었습니다. 변경된 항목이 있어 재심사가 진행됩니다.' : '부가서비스 정보가 저장되었습니다.');
   } catch (err) {
     await transaction.rollback();
     console.error('Free services update error:', err);
@@ -528,6 +569,15 @@ const submitReview = async (req, res) => {
       return error(res, ErrorCodes.ROOM_INFO_INCOMPLETE, 400);
     }
 
+    // approved/published/pending_review 상태: 수정 API에서 이미 재심사 처리됨 → 현재 status 유지
+    if (room.status !== 'draft' && room.status !== 'rejected') {
+      return success(res, {
+        roomId: room.id,
+        status: room.status
+      }, '방 정보가 저장되었습니다.');
+    }
+
+    // draft/rejected → 최초 심사 요청
     await room.update({
       status: 'pending_review',
       submittedAt: new Date()
@@ -614,12 +664,21 @@ const deletePhoto = async (req, res) => {
       return error(res, ErrorCodes.PHOTO_NOT_FOUND, 404);
     }
 
+    // 재심사 트리거: 사진 삭제 시
+    const needsReview = REVIEW_TRIGGER_STATUSES.includes(room.status);
+
     await photo.destroy();
+
+    if (needsReview) {
+      await room.update({ status: 'pending_review', submittedAt: new Date() });
+    }
 
     // 지도 캐시 무효화 (thumbnail 변경 가능)
     await invalidateRoomCache();
 
-    return success(res, null, '사진이 삭제되었습니다.');
+    return success(res, {
+      status: needsReview ? 'pending_review' : room.status
+    }, needsReview ? '사진이 삭제되었습니다. 변경된 항목이 있어 재심사가 진행됩니다.' : '사진이 삭제되었습니다.');
   } catch (err) {
     console.error('Photo delete error:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
