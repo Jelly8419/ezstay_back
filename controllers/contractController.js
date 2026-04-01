@@ -2794,12 +2794,14 @@ const confirmCheckout = async (req, res) => {
       }, 400);
     }
 
-    // 퇴실 확인 처리 - 정책 7.6.3: 퇴실확인 완료 시 보증금 반환 프로세스 트리거
-    // 호스트 직접 차감 불가, 항상 RETURN_PENDING으로 설정
+    const refundableDeposit = contract.deposit || 0;
+    const now = new Date();
+
+    // 퇴실 확인 처리
     await contract.update({
       hostCheckedOut: true,
-      hostCheckedOutAt: new Date(),
-      refundableDeposit: contract.deposit || 0,
+      hostCheckedOutAt: now,
+      refundableDeposit,
       depositStatus: 'RETURN_PENDING',
       checkoutStatus: 'HOST_CONFIRMED'
     });
@@ -2811,11 +2813,70 @@ const confirmCheckout = async (req, res) => {
       console.error('퇴실 완료 알림 전송 실패 (무시됨):', notifyErr);
     }
 
+    // 보증금 즉시 PG 환불 (보증금이 있는 경우)
+    if (refundableDeposit > 0) {
+      try {
+        const payment = await Payment.findOne({
+          where: { contractId: contract.id, paymentType: 'CONTRACT', status: 'DONE' },
+          order: [['createdAt', 'DESC']]
+        });
+
+        if (payment) {
+          const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+          const newBalance = payment.balanceAmount - refundableDeposit;
+          const canceltype = newBalance === 0 ? '0' : '1';
+
+          await paytagClient.cancelPayment({
+            orderno,
+            orgpaydate,
+            orgtranamt,
+            cancelamt: refundableDeposit,
+            canceltype
+          });
+
+          await payment.update({
+            balanceAmount: newBalance,
+            status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+          });
+
+          await contract.update({
+            depositStatus: 'RETURNED'
+          });
+
+          // 채팅 쓰기 마감 설정 (보증금 반환 완료 시점 + 24H)
+          const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
+          if (chatRoom) {
+            setChatWritableUntil(chatRoom.firebaseChatRoomId, now).catch(err => {
+              console.error('퇴실확인 채팅 쓰기 마감 설정 실패 (무시됨):', err);
+            });
+          }
+
+          console.log(`[confirmCheckout] 보증금 즉시 환불 완료: contractId=${contract.id}, amount=${refundableDeposit}`);
+        }
+      } catch (pgErr) {
+        console.error(`[confirmCheckout] 보증금 환불 PG 실패 (contractId=${contract.id}):`, pgErr.message);
+
+        await contract.update({ depositStatus: 'REFUND_FAILED' });
+
+        await PaymentFailureLog.create({
+          contractId: contract.id,
+          orderId: `DEPOSIT_REFUND_${contract.id}`,
+          failureCode: pgErr.paytagErrorCode || 'PG_CANCEL_FAILED',
+          failureMessage: pgErr.paytagErrorMessage || pgErr.message,
+          requestData: {
+            type: 'DEPOSIT_FULL_REFUND',
+            cancelamt: refundableDeposit
+          },
+          responseData: pgErr.paytagResponse || null
+        });
+      }
+    }
+
     return updated(res, {
       contractId: contract.id,
       deposit: contract.deposit,
-      refundableDeposit: contract.deposit || 0,
-      depositStatus: 'RETURN_PENDING',
+      refundableDeposit,
+      depositStatus: refundableDeposit > 0 ? 'RETURNED' : 'RETURN_PENDING',
       checkoutStatus: 'HOST_CONFIRMED'
     }, '퇴실이 확인되었습니다. 보증금 전액 반환 처리가 진행됩니다.');
 
