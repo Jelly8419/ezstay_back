@@ -198,6 +198,14 @@ const setChatWritableUntil = async (chatRoomId, depositReturnedAt) => {
   try {
     const db = getFirestore();
     const writableUntil = new Date(depositReturnedAt.getTime() + 24 * 60 * 60 * 1000);
+
+    // 문서 존재 여부 확인 — 없으면 스킵 (Firestore 미생성 채팅방)
+    const doc = await db.collection('chatRooms').doc(chatRoomId).get();
+    if (!doc.exists) {
+      console.warn(`⚠️ Firestore 채팅방 문서 없음, 스킵: ${chatRoomId}`);
+      return;
+    }
+
     await db.collection('chatRooms').doc(chatRoomId).update({
       chatWritableUntil: admin.firestore.Timestamp.fromDate(writableUntil),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
