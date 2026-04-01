@@ -2683,6 +2683,24 @@ const updateRentalOrderDeliveryStatus = async (req, res) => {
 
     await transaction.commit();
 
+    // 배송 완료 시 해당 계약의 BEDDING_DELIVERY 태스크 자동 COMPLETED 처리
+    if (deliveryStatus === 'DELIVERED') {
+      try {
+        await ServiceTask.update(
+          { status: 'COMPLETED' },
+          {
+            where: {
+              contractId: rentalOrder.contractId,
+              taskType: 'BEDDING_DELIVERY',
+              status: { [Op.in]: ['PENDING', 'RESERVED'] }
+            }
+          }
+        );
+      } catch (taskErr) {
+        console.error('배송완료 서비스 태스크 자동 완료 처리 실패 (무시됨):', taskErr);
+      }
+    }
+
     return updated(res, {
       rentalOrderId: rentalOrder.id,
       orderId: rentalOrder.orderId,
