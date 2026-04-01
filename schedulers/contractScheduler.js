@@ -1002,12 +1002,20 @@ async function updatePayoutPayable() {
   }
 }
 
+/** 계약 내 bedding_set ACTIVE 주문 수량 합산 */
+function calcBeddingQty(contract) {
+  return contract.rentalOrders?.reduce((total, order) => {
+    return total + (order.items?.reduce((sum, item) => {
+      return item.rentalItem ? sum + item.quantity : sum;
+    }, 0) ?? 0);
+  }, 0) ?? 0;
+}
+
 /**
  * 11. 서비스 태스크 자동 생성
- * - PAYMENT_COMPLETED / IN_PROGRESS 계약 중
- * - checkInDate 또는 checkOutDate가 오늘 ~ 오늘+7일 이내인 경우
- * - 청소 서비스: EzService.cleaningService === true → CLEANING 태스크 (기준일: checkOutDate)
- * - 침구류: bedding_set ACTIVE 주문 존재 → BEDDING_DELIVERY(기준일: checkInDate) + BEDDING_RETRIEVAL(기준일: checkOutDate)
+ * - 타입별로 기준일 조건을 분리하여 조회
+ *   - CLEANING / BEDDING_RETRIEVAL : checkOutDate가 오늘 ~ 오늘+7일 이내
+ *   - BEDDING_DELIVERY             : checkInDate가 오늘 ~ 오늘+7일 이내
  * - findOrCreate로 중복 생성 방지
  */
 async function generateServiceTasks() {
@@ -1018,102 +1026,94 @@ async function generateServiceTasks() {
     threshold.setDate(threshold.getDate() + 7);
     threshold.setHours(23, 59, 59, 999);
 
-    const contracts = await Contract.findAll({
+    const baseWhere = { status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS'] } };
+
+    const rentalOrderInclude = {
+      model: RentalOrder,
+      as: 'rentalOrders',
+      attributes: ['id'],
+      required: false,
+      include: [
+        {
+          model: RentalOrderItem,
+          as: 'items',
+          where: { status: 'ACTIVE' },
+          required: false,
+          attributes: ['id', 'quantity'],
+          include: [
+            {
+              model: RentalItem,
+              as: 'rentalItem',
+              where: { itemType: 'bedding_set' },
+              required: false,
+              attributes: ['id', 'itemType']
+            }
+          ]
+        }
+      ]
+    };
+
+    // ── 쿼리 A: 퇴실일 7일 이내 (CLEANING + BEDDING_RETRIEVAL 대상) ──
+    const checkoutContracts = await Contract.findAll({
       where: {
-        status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS'] },
-        [Op.or]: [
-          { checkInDate: { [Op.between]: [today, threshold] } },
-          { checkOutDate: { [Op.between]: [today, threshold] } }
-        ]
+        ...baseWhere,
+        checkOutDate: { [Op.between]: [today, threshold] }
       },
       include: [
         {
           model: Room,
           as: 'room',
-          attributes: ['id', 'name'],
-          include: [
-            {
-              model: EzService,
-              as: 'ezService',
-              attributes: ['cleaningService']
-            }
-          ]
+          attributes: ['id', 'roomName'],
+          include: [{ model: EzService, as: 'ezService', attributes: ['cleaningService'] }]
         },
-        {
-          model: RentalOrder,
-          as: 'rentalOrders',
-          attributes: ['id'],
-          required: false,
-          include: [
-            {
-              model: RentalOrderItem,
-              as: 'items',
-              where: { status: 'ACTIVE' },
-              required: false,
-              attributes: ['id', 'quantity'],
-              include: [
-                {
-                  model: RentalItem,
-                  as: 'rentalItem',
-                  where: { itemType: 'bedding_set' },
-                  required: false,
-                  attributes: ['id', 'itemType']
-                }
-              ]
-            }
-          ]
-        }
+        rentalOrderInclude
       ]
+    });
+
+    // ── 쿼리 B: 입주일 7일 이내 (BEDDING_DELIVERY 대상) ──
+    const checkinContracts = await Contract.findAll({
+      where: {
+        ...baseWhere,
+        checkInDate: { [Op.between]: [today, threshold] }
+      },
+      include: [rentalOrderInclude]
     });
 
     let created = 0;
 
-    for (const contract of contracts) {
-      const checkInDate = contract.checkInDate;
+    // ── A 처리: CLEANING + BEDDING_RETRIEVAL ──
+    for (const contract of checkoutContracts) {
       const checkOutDate = contract.checkOutDate;
 
-      // 1. 청소 서비스
+      // 청소 서비스
       if (contract.room?.ezService?.cleaningService) {
         const [, wasCreated] = await ServiceTask.findOrCreate({
           where: { contractId: contract.id, taskType: 'CLEANING' },
-          defaults: {
-            referenceDate: checkOutDate,
-            status: 'PENDING',
-            quantity: null
-          }
+          defaults: { referenceDate: checkOutDate, status: 'PENDING', quantity: null }
         });
         if (wasCreated) created++;
       }
 
-      // 2. 침구류: bedding_set ACTIVE 주문 수량 합산
-      const beddingQty = contract.rentalOrders?.reduce((total, order) => {
-        return total + (order.items?.reduce((sum, item) => {
-          return item.rentalItem ? sum + item.quantity : sum;
-        }, 0) ?? 0);
-      }, 0) ?? 0;
-
+      // 침구 회수 (기준일: 퇴실일)
+      const beddingQty = calcBeddingQty(contract);
       if (beddingQty > 0) {
-        // 침구 대여 (기준일: 입주일)
-        const [, deliveryCreated] = await ServiceTask.findOrCreate({
-          where: { contractId: contract.id, taskType: 'BEDDING_DELIVERY' },
-          defaults: {
-            referenceDate: checkInDate,
-            status: 'PENDING',
-            quantity: beddingQty
-          }
-        });
-        if (deliveryCreated) created++;
-
-        // 침구 회수 (기준일: 퇴실일)
         const [, retrievalCreated] = await ServiceTask.findOrCreate({
           where: { contractId: contract.id, taskType: 'BEDDING_RETRIEVAL' },
-          defaults: {
-            referenceDate: checkOutDate,
-            status: 'PENDING',
-            quantity: beddingQty
-          }
+          defaults: { referenceDate: checkOutDate, status: 'PENDING', quantity: beddingQty }
         });
         if (retrievalCreated) created++;
+      }
+    }
+
+    // ── B 처리: BEDDING_DELIVERY ──
+    for (const contract of checkinContracts) {
+      const beddingQty = calcBeddingQty(contract);
+      if (beddingQty > 0) {
+        const [, deliveryCreated] = await ServiceTask.findOrCreate({
+          where: { contractId: contract.id, taskType: 'BEDDING_DELIVERY' },
+          defaults: { referenceDate: contract.checkInDate, status: 'PENDING', quantity: beddingQty }
+        });
+        if (deliveryCreated) created++;
       }
     }
 
