@@ -1,9 +1,12 @@
 /**
- * 일회성 마이그레이션: 기존 종료된 채팅방에 chatWritableUntil 소급 적용
+ * 일회성 마이그레이션
  *
- * 대상:
- *   - depositStatus = 'RETURNED' → updatedAt + 24H (이미 지난 시각이므로 즉시 쓰기 차단)
- *   - 취소된 계약 (CANCELLED_*, PAYMENT_EXPIRED 등) → 과거 시각으로 설정 (즉시 쓰기 차단)
+ * 1. 기존 Firestore 채팅방 문서의 hostId/guestId를 string으로 변환
+ *    (Rules에서 request.auth.uid(string) == hostId 비교를 위해)
+ *
+ * 2. 종료된 채팅방에 chatWritableUntil 소급 적용
+ *    - depositStatus = 'RETURNED' → updatedAt + 24H (즉시 쓰기 차단)
+ *    - 취소된 계약 → cancelledAt + 24H (즉시 쓰기 차단)
  *
  * 실행: node scripts/migrate-chat-writable-until.js
  */
@@ -11,9 +14,9 @@
 require('dotenv').config();
 
 const { Contract, ChatRoom } = require('../models');
-const { setChatWritableUntil } = require('../config/firebaseAdmin');
-const { initializeFirebase } = require('../config/firebaseAdmin');
+const { setChatWritableUntil, initializeFirebase, getFirestore } = require('../config/firebaseAdmin');
 const { Op } = require('sequelize');
+const admin = require('firebase-admin');
 
 const CANCELLED_STATUSES = [
   'CANCELLED_BY_GUEST',
@@ -24,19 +27,62 @@ const CANCELLED_STATUSES = [
   'APPROVAL_EXPIRED'
 ];
 
-async function migrate() {
-  initializeFirebase();
+/**
+ * Step 1: 기존 Firestore 문서의 hostId/guestId를 string으로 변환
+ */
+async function migrateHostGuestIdToString() {
+  console.log('[Step 1] hostId/guestId string 변환 시작...\n');
 
-  console.log('=== 채팅방 chatWritableUntil 마이그레이션 시작 ===\n');
+  const db = getFirestore();
+  const snapshot = await db.collection('chatRooms').get();
 
-  // 1. depositStatus = RETURNED인 계약
+  if (snapshot.empty) {
+    console.log('Firestore 채팅방 없음, 스킵\n');
+    return;
+  }
+
+  let success = 0;
+  let skip = 0;
+
+  for (const doc of snapshot.docs) {
+    const data = doc.data();
+    const hostId = data.hostId;
+    const guestId = data.guestId;
+
+    // 이미 string이면 스킵
+    if (typeof hostId === 'string' && typeof guestId === 'string') {
+      skip++;
+      continue;
+    }
+
+    try {
+      await doc.ref.update({
+        hostId: String(hostId),
+        guestId: String(guestId),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+      console.log(`✅ ${doc.id}: hostId(${typeof hostId}) → string, guestId(${typeof guestId}) → string`);
+      success++;
+    } catch (err) {
+      console.error(`❌ ${doc.id} 변환 실패:`, err.message);
+    }
+  }
+
+  console.log(`\n[Step 1] 완료: 변환 ${success}건, 스킵(이미 string) ${skip}건\n`);
+}
+
+/**
+ * Step 2: 종료된 채팅방 chatWritableUntil 소급 적용
+ */
+async function migrateWritableUntil() {
+  console.log('[Step 2] chatWritableUntil 소급 적용 시작...\n');
+
   const returnedContracts = await Contract.findAll({
     where: { depositStatus: 'RETURNED' },
     attributes: ['id', 'updatedAt'],
     include: [{ model: ChatRoom, as: 'chatRoom', attributes: ['id', 'firebaseChatRoomId'] }]
   });
 
-  // 2. 취소된 계약
   const cancelledContracts = await Contract.findAll({
     where: { status: { [Op.in]: CANCELLED_STATUSES } },
     attributes: ['id', 'cancelledAt', 'updatedAt'],
@@ -44,23 +90,21 @@ async function migrate() {
   });
 
   const targets = [
-    // RETURNED: updatedAt이 반환 완료 시점 (이미 지난 시각 → +24H도 과거 → 즉시 차단)
     ...returnedContracts.map(c => ({
       contractId: c.id,
       chatRoom: c.chatRoom,
       baseTime: new Date(c.updatedAt),
       reason: 'RETURNED'
     })),
-    // 취소: 과거 시각 기준 → 즉시 차단
     ...cancelledContracts.map(c => ({
       contractId: c.id,
       chatRoom: c.chatRoom,
       baseTime: new Date(c.cancelledAt || c.updatedAt),
       reason: 'CANCELLED'
     }))
-  ].filter(t => t.chatRoom); // 채팅방이 없는 계약 제외
+  ].filter(t => t.chatRoom);
 
-  console.log(`대상 채팅방: ${targets.length}건 (RETURNED: ${returnedContracts.filter(c => c.chatRoom).length}건, CANCELLED: ${cancelledContracts.filter(c => c.chatRoom).length}건)\n`);
+  console.log(`대상: ${targets.length}건 (RETURNED: ${returnedContracts.filter(c => c.chatRoom).length}건, CANCELLED: ${cancelledContracts.filter(c => c.chatRoom).length}건)\n`);
 
   let success = 0;
   let fail = 0;
@@ -76,7 +120,18 @@ async function migrate() {
     }
   }
 
-  console.log(`\n=== 마이그레이션 완료: 성공 ${success}건 / 실패 ${fail}건 ===`);
+  console.log(`\n[Step 2] 완료: 성공 ${success}건 / 실패 ${fail}건`);
+}
+
+async function migrate() {
+  initializeFirebase();
+
+  console.log('=== 채팅방 마이그레이션 시작 ===\n');
+
+  await migrateHostGuestIdToString();
+  await migrateWritableUntil();
+
+  console.log('\n=== 마이그레이션 전체 완료 ===');
   process.exit(0);
 }
 

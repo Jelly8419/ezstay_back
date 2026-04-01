@@ -31,8 +31,8 @@ service cloud.firestore {
   // 호스트 또는 게스트 여부 확인
   // Custom Token uid는 백엔드 userId를 String으로 변환한 값
   function isMember(chatRoomData) {
-    return request.auth.uid == string(chatRoomData.hostId) ||
-           request.auth.uid == string(chatRoomData.guestId);
+    return request.auth.uid == chatRoomData.hostId ||
+           request.auth.uid == chatRoomData.guestId;
   }
 
   // 쓰기 가능 여부: chatWritableUntil이 없거나(결제완료 후 미설정) 현재 시각 이전

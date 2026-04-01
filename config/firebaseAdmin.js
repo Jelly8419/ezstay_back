@@ -86,14 +86,16 @@ const createChatRoomMetadata = async (chatRoomId, metadata) => {
     const db = getFirestore();
     await db.collection('chatRooms').doc(chatRoomId).set({
       ...metadata,
+      hostId: String(metadata.hostId),
+      guestId: String(metadata.guestId),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       lastMessageText: null,
       lastMessageSenderId: null,
       lastMessageAt: null,
       unreadCount: {
-        [metadata.hostId]: 0,
-        [metadata.guestId]: 0
+        [String(metadata.hostId)]: 0,
+        [String(metadata.guestId)]: 0
       }
     });
     console.log(`✅ 채팅방 메타데이터 생성 완료: ${chatRoomId}`);
