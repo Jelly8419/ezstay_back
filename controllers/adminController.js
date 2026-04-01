@@ -985,6 +985,11 @@ const getReservationDetail = async (req, res) => {
               }]
             }
           ]
+        },
+        {
+          model: DepositAgreement,
+          as: 'depositAgreement',
+          required: false
         }
       ]
     });
@@ -1122,6 +1127,113 @@ const getReservationDetail = async (req, res) => {
     const rentalRefundTotal = (reservation.rentalOrders || [])
       .reduce((sum, ro) => sum + (parseFloat(ro.refundedAmount) || 0), 0);
 
+    // === 보증금 퇴실 흐름 타임라인 ===
+    // checkoutStatus가 NOT_STARTED이고 관련 시점 데이터도 없으면 null 반환
+    const hasCheckoutFlow = reservation.checkoutStatus !== 'NOT_STARTED'
+      || reservation.checkoutRequestedAt != null;
+
+    let checkoutTimeline = null;
+    if (hasCheckoutFlow) {
+      const steps = [];
+      const da = reservation.depositAgreement;
+
+      // 1) 퇴실 확인 요청 (게스트)
+      if (reservation.checkoutRequestedAt) {
+        steps.push({
+          step: 'CHECKOUT_REQUESTED',
+          label: '퇴실 확인 요청',
+          actor: 'guest',
+          occurredAt: reservation.checkoutRequestedAt,
+          isAuto: !reservation.checkoutRequested  // 스케줄러 자동 처리 여부
+        });
+      }
+
+      // 2a) 퇴실 확인 (호스트) — 보류 없이 바로 확인한 경우
+      if (reservation.hostCheckedOutAt && !reservation.holdRequestedAt) {
+        steps.push({
+          step: 'CHECKOUT_CONFIRMED',
+          label: '퇴실 확인',
+          actor: 'host',
+          occurredAt: reservation.hostCheckedOutAt
+        });
+      }
+
+      // 2b) 보류 신청 (호스트)
+      if (reservation.holdRequestedAt) {
+        steps.push({
+          step: 'HOLD_REQUESTED',
+          label: '보증금 보류 신청',
+          actor: 'host',
+          occurredAt: reservation.holdRequestedAt,
+          holdReason: reservation.deductionReason || null
+        });
+      }
+
+      // 3) 관리자 보류 승인
+      if (reservation.holdApprovedAt) {
+        steps.push({
+          step: 'HOLD_APPROVED',
+          label: '보증금 보류 승인',
+          actor: 'admin',
+          occurredAt: reservation.holdApprovedAt,
+          agreementDeadline: new Date(new Date(reservation.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000)
+        });
+      }
+
+      // 4) 호스트 합의 내용 제출
+      if (da?.submittedAt) {
+        steps.push({
+          step: 'AGREEMENT_SUBMITTED',
+          label: '합의 내용 제출',
+          actor: 'host',
+          occurredAt: da.submittedAt,
+          deductAmount: da.deductAmount,
+          agreementText: da.agreementText
+        });
+      }
+
+      // 5a) 게스트 합의 동의
+      if (da?.acceptedAt) {
+        steps.push({
+          step: 'AGREEMENT_ACCEPTED',
+          label: '합의 동의',
+          actor: 'guest',
+          occurredAt: da.acceptedAt,
+          deductAmount: da.deductAmount
+        });
+      }
+
+      // 5b) 데드라인 초과 자동 전액 반환
+      if (da?.status === 'AUTO_RETURNED') {
+        steps.push({
+          step: 'AUTO_RETURNED',
+          label: '합의 기한 초과 — 보증금 전액 자동 반환',
+          actor: 'system',
+          occurredAt: da.updatedAt
+        });
+      }
+
+      // 퇴실 확인 (보류 후 합의 완료로 HOST_CONFIRMED된 경우)
+      if (reservation.hostCheckedOutAt && reservation.holdRequestedAt) {
+        steps.push({
+          step: 'CHECKOUT_CONFIRMED',
+          label: '퇴실 확인 (합의 완료)',
+          actor: 'system',
+          occurredAt: reservation.hostCheckedOutAt
+        });
+      }
+
+      steps.sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt));
+
+      checkoutTimeline = {
+        currentCheckoutStatus: reservation.checkoutStatus,
+        currentDepositStatus: reservation.depositStatus,
+        deposit: reservation.deposit,
+        refundableDeposit: reservation.refundableDeposit,
+        steps
+      };
+    }
+
     return success(res, {
       reservation,
       paymentSummary: {
@@ -1133,7 +1245,8 @@ const getReservationDetail = async (req, res) => {
         rentalPaidTotal,
         rentalRefundTotal
       },
-      timeline
+      timeline,
+      checkoutTimeline
     }, '예약 상세 조회 성공');
   } catch (err) {
     console.error('예약 상세 조회 실패:', err);

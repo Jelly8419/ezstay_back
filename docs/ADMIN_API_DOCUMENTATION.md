@@ -703,38 +703,153 @@ GET /api/admin/reservations/:contractId
 {
   "success": true,
   "data": {
-    "id": 1,
-    "orderId": "ORD-20260208-001",
-    "status": "IN_PROGRESS",
-    "checkInDate": "2026-02-01",
-    "checkOutDate": "2026-02-15",
-    "totalDays": 14,
-    "rentalFee": 700000,
-    "maintenanceFee": 70000,
-    "cleaningFee": 30000,
-    "platformFee": 79200,
-    "finalTotalAmount": 879200,
-    "paidAt": "2026-01-26T14:30:00.000Z",
-    "guest": {
-      "id": 10,
-      "name": "홍길동",
-      "email": "hong@test.com",
-      "phoneNumber": "010-1234-5678"
+    "reservation": {
+      "id": 1,
+      "orderId": "ORD-20260208-001",
+      "status": "COMPLETED",
+      "checkInDate": "2026-02-01",
+      "checkOutDate": "2026-02-15",
+      "totalDays": 14,
+      "rentalFee": 700000,
+      "maintenanceFee": 70000,
+      "cleaningFee": 30000,
+      "platformFee": 79200,
+      "finalTotalAmount": 879200,
+      "deposit": 300000,
+      "paidAt": "2026-01-26T14:30:00.000Z",
+      "guest": {
+        "id": 10,
+        "name": "홍길동",
+        "email": "hong@test.com",
+        "phoneNumber": "010-1234-5678"
+      },
+      "host": {
+        "id": 15,
+        "name": "김호스트",
+        "email": "host@test.com"
+      },
+      "room": {
+        "id": 5,
+        "roomName": "강남 원룸",
+        "photos": [{ "id": 10, "url": "/uploads/rooms/photo10.jpg", "order": 1 }]
+      },
+      "payment": { "...": "결제 정보" },
+      "refunds": [],
+      "rentalOrders": [],
+      "depositAgreement": null
     },
-    "host": {
-      "id": 15,
-      "name": "김호스트",
-      "email": "host@test.com"
+    "paymentSummary": {
+      "totalPaidAmount": 879200,
+      "totalRefundedAmount": 0,
+      "currentBalance": 879200,
+      "contractPaidAmount": 879200,
+      "contractRefundTotal": 0,
+      "rentalPaidTotal": 0,
+      "rentalRefundTotal": 0
     },
-    "room": {
-      "id": 5,
-      "roomName": "강남 원룸",
-      "photos": [{ "id": 10, "url": "/uploads/rooms/photo10.jpg", "order": 1 }]
+    "timeline": [
+      {
+        "occurredAt": "2026-01-26T14:30:00.000Z",
+        "type": "결제완료",
+        "amount": 879200,
+        "description": "방 계약, 강남 원룸",
+        "actor": "guest",
+        "actorName": "홍길동",
+        "pgStatus": "DONE",
+        "paymentKey": "tgen_xxx",
+        "method": "카드"
+      }
+    ],
+    "checkoutTimeline": {
+      "currentCheckoutStatus": "HOST_PENDING",
+      "currentDepositStatus": "RETURN_HOLD",
+      "deposit": 300000,
+      "refundableDeposit": null,
+      "steps": [
+        {
+          "step": "CHECKOUT_REQUESTED",
+          "label": "퇴실 확인 요청",
+          "actor": "guest",
+          "occurredAt": "2026-02-15T11:00:00.000Z",
+          "isAuto": false
+        },
+        {
+          "step": "HOLD_REQUESTED",
+          "label": "보증금 보류 신청",
+          "actor": "host",
+          "occurredAt": "2026-02-15T13:00:00.000Z",
+          "holdReason": "벽지 훼손"
+        },
+        {
+          "step": "HOLD_APPROVED",
+          "label": "보증금 보류 승인",
+          "actor": "admin",
+          "occurredAt": "2026-02-15T15:00:00.000Z",
+          "agreementDeadline": "2026-02-25T15:00:00.000Z"
+        },
+        {
+          "step": "AGREEMENT_SUBMITTED",
+          "label": "합의 내용 제출",
+          "actor": "host",
+          "occurredAt": "2026-02-16T10:00:00.000Z",
+          "deductAmount": 50000,
+          "agreementText": "벽지 훼손으로 인한 수리비 50,000원 차감 요청"
+        },
+        {
+          "step": "AGREEMENT_ACCEPTED",
+          "label": "합의 동의",
+          "actor": "guest",
+          "occurredAt": "2026-02-17T09:00:00.000Z",
+          "deductAmount": 50000
+        }
+      ]
     }
   },
   "message": "예약 상세 조회 성공"
 }
 ```
+
+#### `checkoutTimeline` 상세
+
+퇴실 프로세스가 시작되지 않은 계약(`checkoutStatus: NOT_STARTED`)은 `checkoutTimeline: null`로 반환됩니다.
+
+**`currentCheckoutStatus` 값**
+
+| 값 | 의미 |
+|---|---|
+| `NOT_STARTED` | 퇴실 프로세스 시작 전 |
+| `GUEST_COMPLETED` | 게스트 퇴실 요청 완료, 호스트 확인 대기 중 |
+| `HOLD_REQUESTED` | 호스트 보증금 보류 신청, 관리자 승인 대기 중 |
+| `HOST_PENDING` | 관리자 보류 승인 완료, 호스트-게스트 합의 진행 중 |
+| `HOST_CONFIRMED` | 퇴실 확인 완료 (보증금 반환 처리 진행) |
+
+**`currentDepositStatus` 값**
+
+| 값 | 의미 |
+|---|---|
+| `HOLDING` | 보증금 보관 중 |
+| `RETURN_PENDING` | 반환 대기 (호스트가 보류 없이 퇴실 확인한 경우) |
+| `RETURN_HOLD` | 반환 보류 (관리자 승인 후 합의 진행 중) |
+| `RETURN_CONFIRMED` | 반환 확정 (전액 반환) |
+| `DEDUCTION_CONFIRMED` | 차감 확정 (합의로 일부 차감 후 나머지 반환) |
+| `RETURNED` | 반환 완료 |
+| `REFUND_FAILED` | PG 환불 실패 (관리자 수동 처리 필요) |
+
+**`steps[].step` 값 및 포함 필드**
+
+| `step` | `label` | `actor` | 추가 필드 |
+|---|---|---|---|
+| `CHECKOUT_REQUESTED` | 퇴실 확인 요청 | `guest` | `isAuto` (스케줄러 자동 처리 여부) |
+| `CHECKOUT_CONFIRMED` | 퇴실 확인 | `host` or `system` | - |
+| `HOLD_REQUESTED` | 보증금 보류 신청 | `host` | `holdReason` |
+| `HOLD_APPROVED` | 보증금 보류 승인 | `admin` | `agreementDeadline` (승인일 +10일) |
+| `AGREEMENT_SUBMITTED` | 합의 내용 제출 | `host` | `deductAmount`, `agreementText` |
+| `AGREEMENT_ACCEPTED` | 합의 동의 | `guest` | `deductAmount` |
+| `AUTO_RETURNED` | 합의 기한 초과 — 보증금 전액 자동 반환 | `system` | - |
+
+> **보류 없이 바로 퇴실 확인된 경우** `steps`는 `CHECKOUT_REQUESTED → CHECKOUT_CONFIRMED` 2단계만 포함됩니다.
+>
+> **`isAuto: true`** 는 게스트가 직접 요청하지 않고 스케줄러가 자동으로 퇴실 요청 처리한 경우입니다 (계약 완료 후 48시간 미요청 시).
 
 ---
 
