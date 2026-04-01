@@ -1828,6 +1828,13 @@ const requestRefund = async (req, res) => {
       });
     }
 
+    // 자동 승인(입주 전)이면 채팅 쓰기 마감
+    if (autoApprove && chatRoom) {
+      setChatWritableUntil(chatRoom.firebaseChatRoomId, new Date()).catch(err => {
+        console.error('REFUNDED 채팅 쓰기 마감 설정 실패 (무시됨):', err);
+      });
+    }
+
     // 자동 승인(입주 전)이면 PG 취소 즉시 처리
     if (autoApprove && refundData.finalRefundAmount > 0) {
       const payment = await Payment.findOne({
@@ -3087,12 +3094,15 @@ const cancelContractByHost = async (req, res) => {
       console.error('호스트 취소 서비스 태스크 삭제 실패 (무시됨):', taskErr);
     }
 
-    // 채팅방 시스템 메시지 발송
+    // 채팅방 시스템 메시지 발송 + 쓰기 마감
     try {
       const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
       if (chatRoom && chatRoom.firebaseChatRoomId) {
         const messageText = getSystemMessageTemplate(SystemMessageTypes.CONTRACT_CANCELED_BY_HOST);
         await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, SystemMessageTypes.CONTRACT_CANCELED_BY_HOST);
+        setChatWritableUntil(chatRoom.firebaseChatRoomId, new Date()).catch(err => {
+          console.error('호스트 취소 채팅 쓰기 마감 설정 실패 (무시됨):', err);
+        });
       }
     } catch (chatErr) {
       console.error('호스트 취소 시스템 메시지 전송 실패 (무시됨):', chatErr);

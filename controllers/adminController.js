@@ -5,7 +5,7 @@ const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 const { calculateProgress } = require('../utils/roomProgress');
 const { toAbsoluteUrl } = require('../utils/urlHelper');
-const { sendSystemMessage } = require('../config/firebaseAdmin');
+const { sendSystemMessage, setChatWritableUntil } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { getBankName } = require('../utils/bankCodes');
@@ -2077,6 +2077,19 @@ const approveRefund = async (req, res) => {
 
     await transaction.commit();
 
+    // 채팅 쓰기 마감 (CANCEL_REQUESTED → 관리자 환불 승인 완료 시점)
+    try {
+      const { ChatRoom } = require('../models');
+      const chatRoom = await ChatRoom.findOne({ where: { contractId: refund.contractId } });
+      if (chatRoom && chatRoom.firebaseChatRoomId) {
+        setChatWritableUntil(chatRoom.firebaseChatRoomId, new Date()).catch(err => {
+          console.error('approveRefund 채팅 쓰기 마감 설정 실패 (무시됨):', err);
+        });
+      }
+    } catch (chatErr) {
+      console.error('approveRefund 채팅방 조회 실패 (무시됨):', chatErr);
+    }
+
     return updated(
       res,
       {
@@ -2937,6 +2950,9 @@ const adminForceCancel = async (req, res) => {
           SystemMessageTypes.CONTRACT_FORCE_CANCELLED,
           { contractId: contract.id }
         );
+        setChatWritableUntil(contract.chatRoom.firebaseChatRoomId, new Date()).catch(err => {
+          console.error('강제 취소 채팅 쓰기 마감 설정 실패 (무시됨):', err);
+        });
       }
     } catch (chatErr) {
       console.error('강제 취소 시스템 메시지 전송 실패 (무시됨):', chatErr);

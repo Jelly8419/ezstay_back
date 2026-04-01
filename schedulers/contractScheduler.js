@@ -222,7 +222,7 @@ async function updatePaymentExpired() {
     // 시스템 메시지 및 알림 발송 (트랜잭션 외부에서 비동기 실행)
     if (expiredContracts.length > 0) {
       for (const contract of expiredContracts) {
-        // 채팅 시스템 메시지
+        // 채팅 시스템 메시지 + 쓰기 마감
         if (contract.chatRoom) {
           sendSystemMessage(
             contract.chatRoom.firebaseChatRoomId,
@@ -231,6 +231,9 @@ async function updatePaymentExpired() {
             { contractId: contract.id }
           ).catch(err => {
             console.error(`결제 만료 시스템 메시지 발송 실패 (계약 ID: ${contract.id}):`, err);
+          });
+          setChatWritableUntil(contract.chatRoom.firebaseChatRoomId, new Date()).catch(err => {
+            console.error(`결제 만료 채팅 쓰기 마감 설정 실패 (계약 ID: ${contract.id}):`, err);
           });
         }
 

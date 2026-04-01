@@ -18,13 +18,16 @@ const { setChatWritableUntil, initializeFirebase, getFirestore } = require('../c
 const { Op } = require('sequelize');
 const admin = require('firebase-admin');
 
-const CANCELLED_STATUSES = [
-  'CANCELLED_BY_GUEST',
-  'CANCELLED_BY_HOST',
-  'CANCELLED_BY_ADMIN_WITH_REFUND',
-  'CANCELLED_BY_ADMIN_NO_REFUND',
-  'PAYMENT_EXPIRED',
-  'APPROVAL_EXPIRED'
+// 채팅방이 생성된 이후에 종료될 수 있는 상태만 포함
+// - CANCELLED_BY_GUEST: PENDING_APPROVAL 단계 취소 → 채팅방 없음 → 제외
+// - APPROVAL_EXPIRED: PENDING_APPROVAL 단계 만료 → 채팅방 없음 → 제외
+// - REJECTED: PENDING_APPROVAL 단계 거절 → 채팅방 없음 → 제외
+const TERMINATED_STATUSES = [
+  'CANCELLED_BY_HOST',            // 호스트가 PAYMENT_COMPLETED에서 취소
+  'CANCELLED_BY_ADMIN_WITH_REFUND', // 관리자 강제 취소 (환불 있음)
+  'CANCELLED_BY_ADMIN_NO_REFUND',   // 관리자 강제 취소 (환불 없음)
+  'PAYMENT_EXPIRED',              // 결제 기한 만료 (APPROVED 이후)
+  'REFUNDED',                     // 게스트 환불 요청 자동 승인 (입주 전)
 ];
 
 /**
@@ -84,7 +87,7 @@ async function migrateWritableUntil() {
   });
 
   const cancelledContracts = await Contract.findAll({
-    where: { status: { [Op.in]: CANCELLED_STATUSES } },
+    where: { status: { [Op.in]: TERMINATED_STATUSES } },
     attributes: ['id', 'cancelledAt', 'updatedAt'],
     include: [{ model: ChatRoom, as: 'chatRoom', attributes: ['id', 'firebaseChatRoomId'] }]
   });
