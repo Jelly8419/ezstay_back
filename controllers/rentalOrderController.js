@@ -273,7 +273,7 @@ const getRentalOrderPaymentInfo = async (req, res) => {
       ? `렌탈 아이템 추가 (${firstItem} 외 ${otherCount}건)`
       : `렌탈 아이템 추가 (${firstItem})`;
 
-    return success(res, {
+    const responseData = {
       rentalOrderId: rentalOrder.id,
       orderId: rentalOrder.orderId,
       amount: rentalOrder.totalAmount,
@@ -281,7 +281,14 @@ const getRentalOrderPaymentInfo = async (req, res) => {
       customerEmail: user.email,
       customerName: user.name,
       customerPhone: user.phoneNumber
-    });
+    };
+
+    const testAmount = paytagClient.getTestAmount();
+    if (testAmount) {
+      responseData.pgAmount = testAmount;
+    }
+
+    return success(res, responseData);
   } catch (err) {
     console.error('렌탈 주문 결제 정보 조회 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
