@@ -20,7 +20,7 @@ service cloud.firestore {
         allow create: if request.auth != null &&
           isMember(get(/databases/$(database)/documents/chatRooms/$(chatRoomId)).data) &&
           isWritable(get(/databases/$(database)/documents/chatRooms/$(chatRoomId)).data) &&
-          request.resource.data.senderId == request.auth.uid;
+          request.auth.uid == string(request.resource.data.senderId);
 
         // 수정/삭제 불가
         allow update, delete: if false;
