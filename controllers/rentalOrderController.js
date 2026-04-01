@@ -1069,12 +1069,6 @@ const requestRentalItemsReturn = async (req, res) => {
       return error(res, { code: validErr.code || 4460, message: validErr.message }, validErr.status || 400);
     }
 
-    // 단일 주문 제약 (반품신청은 주문 1건 단위)
-    if (groups.size > 1) {
-      await transaction.rollback();
-      return error(res, { code: 4471, message: '반품 신청은 주문 1건 단위로만 가능합니다. 주문별로 각각 신청해주세요.' }, 400);
-    }
-
     // 배송중/완료 상태 이중 검증 + 중복 요청 차단
     for (const [, { rentalOrder }] of groups) {
       if (!['IN_TRANSIT', 'DELIVERED'].includes(rentalOrder.deliveryStatus)) {
