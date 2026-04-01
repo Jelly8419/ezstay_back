@@ -1506,6 +1506,14 @@ const cancelContractByGuest = async (req, res) => {
 
     await transaction.commit();
 
+    // 서비스 태스크 PENDING 삭제 (트랜잭션 외부)
+    try {
+      const { cancelPendingServiceTasks } = require('../schedulers/contractScheduler');
+      await cancelPendingServiceTasks(contract.id);
+    } catch (taskErr) {
+      console.error('게스트 취소 서비스 태스크 삭제 실패 (무시됨):', taskErr);
+    }
+
     return updated(
       res,
       {
@@ -3009,6 +3017,14 @@ const cancelContractByHost = async (req, res) => {
     );
 
     await transaction.commit();
+
+    // 서비스 태스크 PENDING 삭제 (트랜잭션 외부)
+    try {
+      const { cancelPendingServiceTasks } = require('../schedulers/contractScheduler');
+      await cancelPendingServiceTasks(contract.id);
+    } catch (taskErr) {
+      console.error('호스트 취소 서비스 태스크 삭제 실패 (무시됨):', taskErr);
+    }
 
     // 채팅방 시스템 메시지 발송
     try {

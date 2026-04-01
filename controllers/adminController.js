@@ -1,5 +1,5 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, ServiceTask, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -2785,6 +2785,14 @@ const adminForceCancel = async (req, res) => {
 
     await transaction.commit();
 
+    // 서비스 태스크 PENDING 삭제 (트랜잭션 외부)
+    try {
+      const { cancelPendingServiceTasks } = require('../schedulers/contractScheduler');
+      await cancelPendingServiceTasks(contract.id);
+    } catch (taskErr) {
+      console.error('강제 취소 서비스 태스크 삭제 실패 (무시됨):', taskErr);
+    }
+
     // 채팅 시스템 메시지 (트랜잭션 외부)
     try {
       if (contract.chatRoom && contract.chatRoom.firebaseChatRoomId) {
@@ -2921,6 +2929,14 @@ const approveHostCancelRequest = async (req, res) => {
     });
 
     await transaction.commit();
+
+    // 서비스 태스크 PENDING 삭제 (트랜잭션 외부)
+    try {
+      const { cancelPendingServiceTasks } = require('../schedulers/contractScheduler');
+      await cancelPendingServiceTasks(contract.id);
+    } catch (taskErr) {
+      console.error('호스트 취소 승인 서비스 태스크 삭제 실패 (무시됨):', taskErr);
+    }
 
     // 채팅 시스템 메시지
     try {
@@ -4022,6 +4038,186 @@ const retryAlimtalkLog = async (req, res) => {
   }
 };
 
+// ============================================================
+// 서비스 태스크 관리 (청소 / 침구류 대여 / 침구류 회수)
+// ============================================================
+
+/**
+ * 서비스 태스크 목록 조회
+ * GET /api/admin/service-tasks
+ *
+ * Query:
+ *   tab        : 'pending' | 'all'  (pending → status=PENDING 자동 필터)
+ *   task_type  : CLEANING | BEDDING_DELIVERY | BEDDING_RETRIEVAL
+ *   status     : PENDING | RESERVED | COMPLETED | ISSUE
+ *   date_from  : YYYY-MM-DD
+ *   date_to    : YYYY-MM-DD
+ *   page       : number (기본 1)
+ *   limit      : number (기본 20)
+ */
+const getServiceTasks = async (req, res) => {
+  try {
+    const {
+      tab,
+      task_type,
+      status: statusFilter,
+      date_from,
+      date_to,
+      page = 1,
+      limit = 20
+    } = req.query;
+
+    const where = {};
+
+    // 탭: pending → PENDING 상태 고정 필터
+    if (tab === 'pending') {
+      where.status = 'PENDING';
+    } else if (statusFilter) {
+      where.status = statusFilter;
+    }
+
+    if (task_type) {
+      where.taskType = task_type;
+    }
+
+    if (date_from || date_to) {
+      where.referenceDate = {};
+      if (date_from) where.referenceDate[Op.gte] = date_from;
+      if (date_to)   where.referenceDate[Op.lte] = date_to;
+    }
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const { count, rows } = await ServiceTask.findAndCountAll({
+      where,
+      include: [
+        {
+          model: Contract,
+          as: 'contract',
+          attributes: ['id', 'checkInDate', 'checkOutDate'],
+          include: [
+            {
+              model: Room,
+              as: 'room',
+              attributes: ['id', 'roomName']
+            }
+          ]
+        }
+      ],
+      order: [['referenceDate', 'ASC']],
+      limit: parseInt(limit),
+      offset
+    });
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const data = rows.map(task => {
+      const refDate = new Date(task.referenceDate);
+      refDate.setHours(0, 0, 0, 0);
+      const diffMs = refDate - today;
+      const dDay = Math.ceil(diffMs / (1000 * 60 * 60 * 24)); // 양수=남은일, 0=당일, 음수=지남
+
+      return {
+        id: task.id,
+        contractId: task.contractId,
+        roomName: task.contract?.room?.roomName ?? null,
+        taskType: task.taskType,
+        referenceDate: task.referenceDate,
+        dDay,
+        quantity: task.quantity,
+        status: task.status,
+        vendorName: task.vendorName,
+        vendorContact: task.vendorContact,
+        vendorRefNo: task.vendorRefNo,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt
+      };
+    });
+
+    return success(res, {
+      total: count,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      items: data
+    });
+  } catch (err) {
+    console.error('서비스 태스크 목록 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 서비스 태스크 상태 변경
+ * PATCH /api/admin/service-tasks/:id/status
+ *
+ * Body:
+ *   status       : PENDING | RESERVED | COMPLETED | ISSUE  (필수)
+ *   vendorName   : string (선택, RESERVED 시 함께 저장)
+ *   vendorContact: string (선택)
+ *   vendorRefNo  : string (선택)
+ */
+const updateServiceTaskStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status: newStatus, vendorName, vendorContact, vendorRefNo } = req.body;
+
+    if (!newStatus) {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, 'status는 필수입니다.');
+    }
+
+    const validStatuses = ['PENDING', 'RESERVED', 'COMPLETED', 'ISSUE'];
+    if (!validStatuses.includes(newStatus)) {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, '유효하지 않은 status 값입니다.');
+    }
+
+    const task = await ServiceTask.findByPk(id);
+    if (!task) {
+      return error(res, ErrorCodes.NOT_FOUND, 404, '서비스 태스크를 찾을 수 없습니다.');
+    }
+
+    // 상태 전환 규칙 검증
+    const transitions = {
+      PENDING:   ['RESERVED', 'COMPLETED', 'ISSUE'],
+      RESERVED:  ['COMPLETED', 'ISSUE'],
+      ISSUE:     ['RESERVED', 'COMPLETED'],
+      COMPLETED: ['PENDING', 'RESERVED', 'ISSUE'] // 관리자만 역방향 허용
+    };
+
+    if (!transitions[task.status]?.includes(newStatus)) {
+      return error(
+        res,
+        ErrorCodes.VALIDATION_ERROR,
+        400,
+        `${task.status} → ${newStatus} 전환은 허용되지 않습니다.`
+      );
+    }
+
+    const updateData = { status: newStatus };
+
+    // RESERVED 상태로 변경 시 업체 정보 저장 (전달된 값만 덮어씀)
+    if (newStatus === 'RESERVED') {
+      if (vendorName    !== undefined) updateData.vendorName    = vendorName;
+      if (vendorContact !== undefined) updateData.vendorContact = vendorContact;
+      if (vendorRefNo   !== undefined) updateData.vendorRefNo   = vendorRefNo;
+    }
+
+    await task.update(updateData);
+
+    return updated(res, {
+      id: task.id,
+      status: task.status,
+      vendorName: task.vendorName,
+      vendorContact: task.vendorContact,
+      vendorRefNo: task.vendorRefNo,
+      updatedAt: task.updatedAt
+    });
+  } catch (err) {
+    console.error('서비스 태스크 상태 변경 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   // 대시보드
   getDashboardStats,
@@ -4078,7 +4274,12 @@ module.exports = {
   forceDepositHold,
   retryDepositRefund,
 
+  // 서비스 태스크 관리
+  getServiceTasks,
+  updateServiceTaskStatus,
+
   // 알림톡 관리
+
   getAlimtalkTemplates,
   syncAlimtalkTemplates,
   getAlimtalkLogs,

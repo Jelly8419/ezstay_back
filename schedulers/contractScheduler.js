@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { Contract, ChatRoom, Room, User, ContractStatusLog, Settlement, Payout, DepositAgreement, sequelize } = require('../models');
+const { Contract, ChatRoom, Room, EzService, User, ContractStatusLog, Settlement, Payout, DepositAgreement, RentalOrder, RentalOrderItem, RentalItem, ServiceTask, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
@@ -95,6 +95,11 @@ async function updateApprovalExpired() {
     const result = [expiredContracts.length, expiredContracts.length];
 
     await transaction.commit();
+
+    // 만료된 계약의 PENDING 서비스 태스크 삭제
+    for (const contract of expiredContracts) {
+      await cancelPendingServiceTasks(contract.id);
+    }
 
     if (result[0] > 0) {
       console.log(`[스케줄러] ${result[0]}건의 계약을 미승인 만료 처리했습니다.`);
@@ -208,6 +213,11 @@ async function updatePaymentExpired() {
     }
 
     await transaction.commit();
+
+    // 만료된 계약의 PENDING 서비스 태스크 삭제
+    for (const contract of expiredContracts) {
+      await cancelPendingServiceTasks(contract.id);
+    }
 
     // 시스템 메시지 및 알림 발송 (트랜잭션 외부에서 비동기 실행)
     if (expiredContracts.length > 0) {
@@ -992,6 +1002,154 @@ async function updatePayoutPayable() {
   }
 }
 
+/**
+ * 11. 서비스 태스크 자동 생성
+ * - PAYMENT_COMPLETED / IN_PROGRESS 계약 중
+ * - checkInDate 또는 checkOutDate가 오늘 ~ 오늘+7일 이내인 경우
+ * - 청소 서비스: EzService.cleaningService === true → CLEANING 태스크 (기준일: checkOutDate)
+ * - 침구류: bedding_set ACTIVE 주문 존재 → BEDDING_DELIVERY(기준일: checkInDate) + BEDDING_RETRIEVAL(기준일: checkOutDate)
+ * - findOrCreate로 중복 생성 방지
+ */
+async function generateServiceTasks() {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const threshold = new Date(today);
+    threshold.setDate(threshold.getDate() + 7);
+    threshold.setHours(23, 59, 59, 999);
+
+    const contracts = await Contract.findAll({
+      where: {
+        status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS'] },
+        [Op.or]: [
+          { checkInDate: { [Op.between]: [today, threshold] } },
+          { checkOutDate: { [Op.between]: [today, threshold] } }
+        ]
+      },
+      include: [
+        {
+          model: Room,
+          as: 'room',
+          attributes: ['id', 'name'],
+          include: [
+            {
+              model: EzService,
+              as: 'ezService',
+              attributes: ['cleaningService']
+            }
+          ]
+        },
+        {
+          model: RentalOrder,
+          as: 'rentalOrders',
+          attributes: ['id'],
+          required: false,
+          include: [
+            {
+              model: RentalOrderItem,
+              as: 'items',
+              where: { status: 'ACTIVE' },
+              required: false,
+              attributes: ['id', 'quantity'],
+              include: [
+                {
+                  model: RentalItem,
+                  as: 'rentalItem',
+                  where: { itemType: 'bedding_set' },
+                  required: false,
+                  attributes: ['id', 'itemType']
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    });
+
+    let created = 0;
+
+    for (const contract of contracts) {
+      const checkInDate = contract.checkInDate;
+      const checkOutDate = contract.checkOutDate;
+
+      // 1. 청소 서비스
+      if (contract.room?.ezService?.cleaningService) {
+        const [, wasCreated] = await ServiceTask.findOrCreate({
+          where: { contractId: contract.id, taskType: 'CLEANING' },
+          defaults: {
+            referenceDate: checkOutDate,
+            status: 'PENDING',
+            quantity: null
+          }
+        });
+        if (wasCreated) created++;
+      }
+
+      // 2. 침구류: bedding_set ACTIVE 주문 수량 합산
+      const beddingQty = contract.rentalOrders?.reduce((total, order) => {
+        return total + (order.items?.reduce((sum, item) => {
+          return item.rentalItem ? sum + item.quantity : sum;
+        }, 0) ?? 0);
+      }, 0) ?? 0;
+
+      if (beddingQty > 0) {
+        // 침구 대여 (기준일: 입주일)
+        const [, deliveryCreated] = await ServiceTask.findOrCreate({
+          where: { contractId: contract.id, taskType: 'BEDDING_DELIVERY' },
+          defaults: {
+            referenceDate: checkInDate,
+            status: 'PENDING',
+            quantity: beddingQty
+          }
+        });
+        if (deliveryCreated) created++;
+
+        // 침구 회수 (기준일: 퇴실일)
+        const [, retrievalCreated] = await ServiceTask.findOrCreate({
+          where: { contractId: contract.id, taskType: 'BEDDING_RETRIEVAL' },
+          defaults: {
+            referenceDate: checkOutDate,
+            status: 'PENDING',
+            quantity: beddingQty
+          }
+        });
+        if (retrievalCreated) created++;
+      }
+    }
+
+    if (created > 0) {
+      console.log(`[스케줄러] 서비스 태스크 생성 완료: ${created}건`);
+    }
+    return created;
+  } catch (error) {
+    console.error('[스케줄러] 서비스 태스크 생성 오류:', error);
+    return 0;
+  }
+}
+
+/**
+ * 계약 취소 시 PENDING 상태 서비스 태스크 삭제
+ * - 계약 취소 처리 로직에서 호출
+ * @param {number} contractId
+ */
+async function cancelPendingServiceTasks(contractId) {
+  try {
+    const deleted = await ServiceTask.destroy({
+      where: {
+        contractId,
+        status: 'PENDING'
+      }
+    });
+    if (deleted > 0) {
+      console.log(`[ServiceTask] 계약 ${contractId} PENDING 태스크 ${deleted}건 삭제`);
+    }
+    return deleted;
+  } catch (error) {
+    console.error(`[ServiceTask] 계약 ${contractId} 태스크 삭제 오류:`, error);
+    return 0;
+  }
+}
+
 async function runContractStatusUpdate() {
   console.log('[스케줄러] 계약 상태 자동 업데이트 시작:', new Date().toISOString());
 
@@ -1007,6 +1165,7 @@ async function runContractStatusUpdate() {
     await updateSettlementReady();        // 8. 정산 예정일 도래 시 READY 상태 변경
     await autoReturnDeposit();            // 9. 정산 READY 후 보증금 자동 반환
     await updatePayoutPayable();          // 10. 지급 가능 날짜 도래 시 PAYABLE 전환
+    await generateServiceTasks();         // 11. 청소·침구류 서비스 태스크 자동 생성
 
     console.log('[스케줄러] 계약 상태 자동 업데이트 완료:', new Date().toISOString());
   } catch (error) {
@@ -1017,7 +1176,7 @@ async function runContractStatusUpdate() {
 /**
  * 스케줄러 시작
  *
- * 모든 상태 업데이트를 매 10분마다 실행 (10단계)
+ * 모든 상태 업데이트를 매 10분마다 실행 (11단계)
  * 1. 미승인 만료: 72시간 경과 OR 입실날짜 다음날
  * 2. 미결제 만료: 24시간 경과 OR 입실날짜 다음날
  * 3. 임대중: 입실날짜 + 방 입실시간 경과 (+ Settlement 자동 생성)
@@ -1028,6 +1187,7 @@ async function runContractStatusUpdate() {
  * 8. 정산 READY: 정산 예정일(입주일+3영업일) 도래 시 PENDING→READY
  * 9. 보증금 반환: 정산 READY 후 RETURN_PENDING→RETURNED (HOST_PENDING 제외)
  * 10. Payout PAYABLE: payableAfter 도래 시 PENDING→PAYABLE (관리자 지급 실행 대기)
+ * 11. 서비스 태스크 생성: 7일 이내 입주/퇴실 계약 대상 청소·침구류 태스크 자동 생성
  */
 function startContractScheduler() {
   // 모든 상태 업데이트를 매 10분마다 실행
@@ -1051,5 +1211,7 @@ module.exports = {
   autoReturnDepositOnDeadline,
   updateSettlementReady,
   autoReturnDeposit,
-  updatePayoutPayable
+  updatePayoutPayable,
+  generateServiceTasks,
+  cancelPendingServiceTasks
 };
