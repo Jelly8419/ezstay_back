@@ -12,7 +12,7 @@ const {
   validateDates,
   recalcRentalItemsAmounts
 } = require('../utils/contractHelper');
-const { createChatRoomMetadata, sendSystemMessage } = require('../config/firebaseAdmin');
+const { createChatRoomMetadata, sendSystemMessage, setChatWritableUntil } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 const appConfig = require('../config/app.config');
 const { toAbsoluteUrl } = require('../utils/urlHelper');
@@ -3705,7 +3705,7 @@ const acceptDepositAgreement = async (req, res) => {
       }
     }
 
-    // 채팅방 시스템 메시지 발송
+    // 채팅방 시스템 메시지 발송 + 차감확정 시 채팅 쓰기 마감 설정
     try {
       const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
       if (chatRoom && chatRoom.firebaseChatRoomId) {
@@ -3714,6 +3714,14 @@ const acceptDepositAgreement = async (req, res) => {
           : SystemMessageTypes.DEPOSIT_RETURN_CONFIRMED;
         const messageText = getSystemMessageTemplate(messageType);
         await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, messageType);
+
+        // DEDUCTION_CONFIRMED는 스케줄러에서 RETURNED로 안 바뀌므로 여기서 채팅 마감 설정
+        // RETURN_CONFIRMED는 스케줄러 autoReturnDeposit에서 처리
+        if (depositStatus === 'DEDUCTION_CONFIRMED') {
+          setChatWritableUntil(chatRoom.firebaseChatRoomId, new Date()).catch(err => {
+            console.error('합의 차감확정 채팅 쓰기 마감 설정 실패 (무시됨):', err);
+          });
+        }
       }
     } catch (chatErr) {
       console.error('합의 동의 시스템 메시지 전송 실패 (무시됨):', chatErr);
