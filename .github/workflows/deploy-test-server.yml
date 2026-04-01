@@ -9,6 +9,10 @@ on:
       - develop
     types: [closed]  # develop으로 PR 병합될 때 자동 배포
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   deploy:
     name: Deploy to Test Server
@@ -41,7 +45,10 @@ jobs:
 
       - name: Get GitHub Actions Runner IP
         id: ip
-        uses: haythem/public-ip@v1.3
+        run: |
+          IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+          echo "ipv4=$IP" >> $GITHUB_OUTPUT
+          echo "Runner IP: $IP"
 
       - name: Add GitHub Actions IP to EC2 Security Group
         env:
@@ -156,5 +163,19 @@ jobs:
             --port 22 \
             --cidr ${RUNNER_IP}/32 \
             || echo "⚠️ IP does not exist or already removed"
+          
+      - name: Slack 배포 알림
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          fields: repo,message,commit,author,ref,workflow,took
+          text: |
+            레포: ${{ github.repository }}
+            브랜치: ${{ github.ref_name }}
+            커밋: ${{ github.sha }}
+            트리거: ${{ github.actor }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     

@@ -54,6 +54,7 @@ const RentalOrderLog = sequelize.define('RentalOrderLog', {
       'REFUND_FAILED',        // 환불 실패
       'ORDER_CANCELLED',      // 주문 전체 취소
       'ORDER_EXPIRED',        // 주문 자동 만료 (미결제/기한 초과)
+      'CANCEL_REQUESTED',     // 반품/취소 요청 (게스트)
       'DELIVERY_STARTED',     // 배송 시작
       'DELIVERY_COMPLETED',   // 배송 완료
       'ADMIN_REFUND'          // 관리자 직접 환불
@@ -164,6 +165,7 @@ RentalOrderLog.ACTION_LABELS = {
   REFUND_FAILED: '환불 실패',
   ORDER_CANCELLED: '주문 취소',
   ORDER_EXPIRED: '주문 자동 만료',
+  CANCEL_REQUESTED: '반품/취소 요청',
   DELIVERY_STARTED: '배송 시작',
   DELIVERY_COMPLETED: '배송 완료'
 };

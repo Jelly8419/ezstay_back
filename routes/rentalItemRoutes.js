@@ -15,7 +15,7 @@ const {
   adjustStock,
   getRentalItemStats
 } = require('../controllers/rentalItemController');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, authenticateAdmin } = require('../middleware/auth');
 
 // ============================================
 // 게스트용 공개 API (인증 불필요)
@@ -59,16 +59,16 @@ module.exports = router;
 const adminRouter = express.Router();
 
 // 통계 조회 (먼저 정의해야 /:id와 충돌 방지)
-adminRouter.get('/stats', authenticateToken, getRentalItemStats);
+adminRouter.get('/stats', authenticateAdmin, getRentalItemStats);
 
 // 대여 물품 CRUD
-adminRouter.get('/', authenticateToken, getAllRentalItems);
-adminRouter.get('/:id', authenticateToken, getRentalItemById);
-adminRouter.post('/', authenticateToken, createRentalItem);
-adminRouter.patch('/:id', authenticateToken, updateRentalItem);
-adminRouter.delete('/:id', authenticateToken, deleteRentalItem);
+adminRouter.get('/', authenticateAdmin, getAllRentalItems);
+adminRouter.get('/:id', authenticateAdmin, getRentalItemById);
+adminRouter.post('/', authenticateAdmin, createRentalItem);
+adminRouter.patch('/:id', authenticateAdmin, updateRentalItem);
+adminRouter.delete('/:id', authenticateAdmin, deleteRentalItem);
 
 // 재고 수동 조정
-adminRouter.patch('/:id/stock', authenticateToken, adjustStock);
+adminRouter.patch('/:id/stock', authenticateAdmin, adjustStock);
 
 module.exports.adminRouter = adminRouter;

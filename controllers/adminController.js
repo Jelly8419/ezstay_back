@@ -1,11 +1,11 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, ServiceTask, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 const { calculateProgress } = require('../utils/roomProgress');
 const { toAbsoluteUrl } = require('../utils/urlHelper');
-const { sendSystemMessage } = require('../config/firebaseAdmin');
+const { sendSystemMessage, setChatWritableUntil } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { getBankName } = require('../utils/bankCodes');
@@ -985,6 +985,11 @@ const getReservationDetail = async (req, res) => {
               }]
             }
           ]
+        },
+        {
+          model: DepositAgreement,
+          as: 'depositAgreement',
+          required: false
         }
       ]
     });
@@ -1122,6 +1127,113 @@ const getReservationDetail = async (req, res) => {
     const rentalRefundTotal = (reservation.rentalOrders || [])
       .reduce((sum, ro) => sum + (parseFloat(ro.refundedAmount) || 0), 0);
 
+    // === 보증금 퇴실 흐름 타임라인 ===
+    // checkoutStatus가 NOT_STARTED이고 관련 시점 데이터도 없으면 null 반환
+    const hasCheckoutFlow = reservation.checkoutStatus !== 'NOT_STARTED'
+      || reservation.checkoutRequestedAt != null;
+
+    let checkoutTimeline = null;
+    if (hasCheckoutFlow) {
+      const steps = [];
+      const da = reservation.depositAgreement;
+
+      // 1) 퇴실 확인 요청 (게스트)
+      if (reservation.checkoutRequestedAt) {
+        steps.push({
+          step: 'CHECKOUT_REQUESTED',
+          label: '퇴실 확인 요청',
+          actor: 'guest',
+          occurredAt: reservation.checkoutRequestedAt,
+          isAuto: !reservation.checkoutRequested  // 스케줄러 자동 처리 여부
+        });
+      }
+
+      // 2a) 퇴실 확인 (호스트) — 보류 없이 바로 확인한 경우
+      if (reservation.hostCheckedOutAt && !reservation.holdRequestedAt) {
+        steps.push({
+          step: 'CHECKOUT_CONFIRMED',
+          label: '퇴실 확인',
+          actor: 'host',
+          occurredAt: reservation.hostCheckedOutAt
+        });
+      }
+
+      // 2b) 보류 신청 (호스트)
+      if (reservation.holdRequestedAt) {
+        steps.push({
+          step: 'HOLD_REQUESTED',
+          label: '보증금 보류 신청',
+          actor: 'host',
+          occurredAt: reservation.holdRequestedAt,
+          holdReason: reservation.deductionReason || null
+        });
+      }
+
+      // 3) 관리자 보류 승인
+      if (reservation.holdApprovedAt) {
+        steps.push({
+          step: 'HOLD_APPROVED',
+          label: '보증금 보류 승인',
+          actor: 'admin',
+          occurredAt: reservation.holdApprovedAt,
+          agreementDeadline: new Date(new Date(reservation.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000)
+        });
+      }
+
+      // 4) 호스트 합의 내용 제출
+      if (da?.submittedAt) {
+        steps.push({
+          step: 'AGREEMENT_SUBMITTED',
+          label: '합의 내용 제출',
+          actor: 'host',
+          occurredAt: da.submittedAt,
+          deductAmount: da.deductAmount,
+          agreementText: da.agreementText
+        });
+      }
+
+      // 5a) 게스트 합의 동의
+      if (da?.acceptedAt) {
+        steps.push({
+          step: 'AGREEMENT_ACCEPTED',
+          label: '합의 동의',
+          actor: 'guest',
+          occurredAt: da.acceptedAt,
+          deductAmount: da.deductAmount
+        });
+      }
+
+      // 5b) 데드라인 초과 자동 전액 반환
+      if (da?.status === 'AUTO_RETURNED') {
+        steps.push({
+          step: 'AUTO_RETURNED',
+          label: '합의 기한 초과 — 보증금 전액 자동 반환',
+          actor: 'system',
+          occurredAt: da.updatedAt
+        });
+      }
+
+      // 퇴실 확인 (보류 후 합의 완료로 HOST_CONFIRMED된 경우)
+      if (reservation.hostCheckedOutAt && reservation.holdRequestedAt) {
+        steps.push({
+          step: 'CHECKOUT_CONFIRMED',
+          label: '퇴실 확인 (합의 완료)',
+          actor: 'system',
+          occurredAt: reservation.hostCheckedOutAt
+        });
+      }
+
+      steps.sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt));
+
+      checkoutTimeline = {
+        currentCheckoutStatus: reservation.checkoutStatus,
+        currentDepositStatus: reservation.depositStatus,
+        deposit: reservation.deposit,
+        refundableDeposit: reservation.refundableDeposit,
+        steps
+      };
+    }
+
     return success(res, {
       reservation,
       paymentSummary: {
@@ -1133,7 +1245,8 @@ const getReservationDetail = async (req, res) => {
         rentalPaidTotal,
         rentalRefundTotal
       },
-      timeline
+      timeline,
+      checkoutTimeline
     }, '예약 상세 조회 성공');
   } catch (err) {
     console.error('예약 상세 조회 실패:', err);
@@ -1964,6 +2077,19 @@ const approveRefund = async (req, res) => {
 
     await transaction.commit();
 
+    // 채팅 쓰기 마감 (CANCEL_REQUESTED → 관리자 환불 승인 완료 시점)
+    try {
+      const { ChatRoom } = require('../models');
+      const chatRoom = await ChatRoom.findOne({ where: { contractId: refund.contractId } });
+      if (chatRoom && chatRoom.firebaseChatRoomId) {
+        setChatWritableUntil(chatRoom.firebaseChatRoomId, new Date()).catch(err => {
+          console.error('approveRefund 채팅 쓰기 마감 설정 실패 (무시됨):', err);
+        });
+      }
+    } catch (chatErr) {
+      console.error('approveRefund 채팅방 조회 실패 (무시됨):', chatErr);
+    }
+
     return updated(
       res,
       {
@@ -2683,6 +2809,24 @@ const updateRentalOrderDeliveryStatus = async (req, res) => {
 
     await transaction.commit();
 
+    // 배송 완료 시 해당 계약의 BEDDING_DELIVERY 태스크 자동 COMPLETED 처리
+    if (deliveryStatus === 'DELIVERED') {
+      try {
+        await ServiceTask.update(
+          { status: 'COMPLETED' },
+          {
+            where: {
+              contractId: rentalOrder.contractId,
+              taskType: 'BEDDING_DELIVERY',
+              status: { [Op.in]: ['PENDING', 'RESERVED'] }
+            }
+          }
+        );
+      } catch (taskErr) {
+        console.error('배송완료 서비스 태스크 자동 완료 처리 실패 (무시됨):', taskErr);
+      }
+    }
+
     return updated(res, {
       rentalOrderId: rentalOrder.id,
       orderId: rentalOrder.orderId,
@@ -2785,6 +2929,14 @@ const adminForceCancel = async (req, res) => {
 
     await transaction.commit();
 
+    // 서비스 태스크 PENDING 삭제 (트랜잭션 외부)
+    try {
+      const { cancelPendingServiceTasks } = require('../schedulers/contractScheduler');
+      await cancelPendingServiceTasks(contract.id);
+    } catch (taskErr) {
+      console.error('강제 취소 서비스 태스크 삭제 실패 (무시됨):', taskErr);
+    }
+
     // 채팅 시스템 메시지 (트랜잭션 외부)
     try {
       if (contract.chatRoom && contract.chatRoom.firebaseChatRoomId) {
@@ -2798,6 +2950,9 @@ const adminForceCancel = async (req, res) => {
           SystemMessageTypes.CONTRACT_FORCE_CANCELLED,
           { contractId: contract.id }
         );
+        setChatWritableUntil(contract.chatRoom.firebaseChatRoomId, new Date()).catch(err => {
+          console.error('강제 취소 채팅 쓰기 마감 설정 실패 (무시됨):', err);
+        });
       }
     } catch (chatErr) {
       console.error('강제 취소 시스템 메시지 전송 실패 (무시됨):', chatErr);
@@ -2921,6 +3076,14 @@ const approveHostCancelRequest = async (req, res) => {
     });
 
     await transaction.commit();
+
+    // 서비스 태스크 PENDING 삭제 (트랜잭션 외부)
+    try {
+      const { cancelPendingServiceTasks } = require('../schedulers/contractScheduler');
+      await cancelPendingServiceTasks(contract.id);
+    } catch (taskErr) {
+      console.error('호스트 취소 승인 서비스 태스크 삭제 실패 (무시됨):', taskErr);
+    }
 
     // 채팅 시스템 메시지
     try {
@@ -4022,6 +4185,186 @@ const retryAlimtalkLog = async (req, res) => {
   }
 };
 
+// ============================================================
+// 서비스 태스크 관리 (청소 / 침구류 대여 / 침구류 회수)
+// ============================================================
+
+/**
+ * 서비스 태스크 목록 조회
+ * GET /api/admin/service-tasks
+ *
+ * Query:
+ *   tab        : 'pending' | 'all'  (pending → status=PENDING 자동 필터)
+ *   task_type  : CLEANING | BEDDING_DELIVERY | BEDDING_RETRIEVAL
+ *   status     : PENDING | RESERVED | COMPLETED | ISSUE
+ *   date_from  : YYYY-MM-DD
+ *   date_to    : YYYY-MM-DD
+ *   page       : number (기본 1)
+ *   limit      : number (기본 20)
+ */
+const getServiceTasks = async (req, res) => {
+  try {
+    const {
+      tab,
+      task_type,
+      status: statusFilter,
+      date_from,
+      date_to,
+      page = 1,
+      limit = 20
+    } = req.query;
+
+    const where = {};
+
+    // 탭: pending → PENDING 상태 고정 필터
+    if (tab === 'pending') {
+      where.status = 'PENDING';
+    } else if (statusFilter) {
+      where.status = statusFilter;
+    }
+
+    if (task_type) {
+      where.taskType = task_type;
+    }
+
+    if (date_from || date_to) {
+      where.referenceDate = {};
+      if (date_from) where.referenceDate[Op.gte] = date_from;
+      if (date_to)   where.referenceDate[Op.lte] = date_to;
+    }
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const { count, rows } = await ServiceTask.findAndCountAll({
+      where,
+      include: [
+        {
+          model: Contract,
+          as: 'contract',
+          attributes: ['id', 'checkInDate', 'checkOutDate'],
+          include: [
+            {
+              model: Room,
+              as: 'room',
+              attributes: ['id', 'roomName']
+            }
+          ]
+        }
+      ],
+      order: [['referenceDate', 'ASC']],
+      limit: parseInt(limit),
+      offset
+    });
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const data = rows.map(task => {
+      const refDate = new Date(task.referenceDate);
+      refDate.setHours(0, 0, 0, 0);
+      const diffMs = refDate - today;
+      const dDay = Math.ceil(diffMs / (1000 * 60 * 60 * 24)); // 양수=남은일, 0=당일, 음수=지남
+
+      return {
+        id: task.id,
+        contractId: task.contractId,
+        roomName: task.contract?.room?.roomName ?? null,
+        taskType: task.taskType,
+        referenceDate: task.referenceDate,
+        dDay,
+        quantity: task.quantity,
+        status: task.status,
+        vendorName: task.vendorName,
+        vendorContact: task.vendorContact,
+        vendorRefNo: task.vendorRefNo,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt
+      };
+    });
+
+    return success(res, {
+      total: count,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      items: data
+    });
+  } catch (err) {
+    console.error('서비스 태스크 목록 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 서비스 태스크 상태 변경
+ * PATCH /api/admin/service-tasks/:id/status
+ *
+ * Body:
+ *   status       : PENDING | RESERVED | COMPLETED | ISSUE  (필수)
+ *   vendorName   : string (선택, RESERVED 시 함께 저장)
+ *   vendorContact: string (선택)
+ *   vendorRefNo  : string (선택)
+ */
+const updateServiceTaskStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status: newStatus, vendorName, vendorContact, vendorRefNo } = req.body;
+
+    if (!newStatus) {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, 'status는 필수입니다.');
+    }
+
+    const validStatuses = ['PENDING', 'RESERVED', 'COMPLETED', 'ISSUE'];
+    if (!validStatuses.includes(newStatus)) {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, '유효하지 않은 status 값입니다.');
+    }
+
+    const task = await ServiceTask.findByPk(id);
+    if (!task) {
+      return error(res, ErrorCodes.NOT_FOUND, 404, '서비스 태스크를 찾을 수 없습니다.');
+    }
+
+    // 상태 전환 규칙 검증
+    const transitions = {
+      PENDING:   ['RESERVED', 'COMPLETED', 'ISSUE'],
+      RESERVED:  ['COMPLETED', 'ISSUE'],
+      ISSUE:     ['RESERVED', 'COMPLETED'],
+      COMPLETED: ['PENDING', 'RESERVED', 'ISSUE'] // 관리자만 역방향 허용
+    };
+
+    if (!transitions[task.status]?.includes(newStatus)) {
+      return error(
+        res,
+        ErrorCodes.VALIDATION_ERROR,
+        400,
+        `${task.status} → ${newStatus} 전환은 허용되지 않습니다.`
+      );
+    }
+
+    const updateData = { status: newStatus };
+
+    // RESERVED 상태로 변경 시 업체 정보 저장 (전달된 값만 덮어씀)
+    if (newStatus === 'RESERVED') {
+      if (vendorName    !== undefined) updateData.vendorName    = vendorName;
+      if (vendorContact !== undefined) updateData.vendorContact = vendorContact;
+      if (vendorRefNo   !== undefined) updateData.vendorRefNo   = vendorRefNo;
+    }
+
+    await task.update(updateData);
+
+    return updated(res, {
+      id: task.id,
+      status: task.status,
+      vendorName: task.vendorName,
+      vendorContact: task.vendorContact,
+      vendorRefNo: task.vendorRefNo,
+      updatedAt: task.updatedAt
+    });
+  } catch (err) {
+    console.error('서비스 태스크 상태 변경 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   // 대시보드
   getDashboardStats,
@@ -4078,7 +4421,12 @@ module.exports = {
   forceDepositHold,
   retryDepositRefund,
 
+  // 서비스 태스크 관리
+  getServiceTasks,
+  updateServiceTaskStatus,
+
   // 알림톡 관리
+
   getAlimtalkTemplates,
   syncAlimtalkTemplates,
   getAlimtalkLogs,

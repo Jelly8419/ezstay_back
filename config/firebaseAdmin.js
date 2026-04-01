@@ -86,14 +86,16 @@ const createChatRoomMetadata = async (chatRoomId, metadata) => {
     const db = getFirestore();
     await db.collection('chatRooms').doc(chatRoomId).set({
       ...metadata,
+      hostId: String(metadata.hostId),
+      guestId: String(metadata.guestId),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       lastMessageText: null,
       lastMessageSenderId: null,
       lastMessageAt: null,
       unreadCount: {
-        [metadata.hostId]: 0,
-        [metadata.guestId]: 0
+        [String(metadata.hostId)]: 0,
+        [String(metadata.guestId)]: 0
       }
     });
     console.log(`✅ 채팅방 메타데이터 생성 완료: ${chatRoomId}`);
@@ -190,6 +192,34 @@ const deactivateChatRoom = async (chatRoomId) => {
 };
 
 /**
+ * 채팅 쓰기 마감 시각 설정 (보증금 반환 완료 시점 + 24H)
+ * @param {string} chatRoomId - 채팅방 ID
+ * @param {Date} depositReturnedAt - 보증금 반환 완료 시점
+ */
+const setChatWritableUntil = async (chatRoomId, depositReturnedAt) => {
+  try {
+    const db = getFirestore();
+    const writableUntil = new Date(); // 로컬 테스트용: 즉시 종료 (원래: depositReturnedAt + 24H)
+
+    // 문서 존재 여부 확인 — 없으면 스킵 (Firestore 미생성 채팅방)
+    const doc = await db.collection('chatRooms').doc(chatRoomId).get();
+    if (!doc.exists) {
+      console.warn(`⚠️ Firestore 채팅방 문서 없음, 스킵: ${chatRoomId}`);
+      return;
+    }
+
+    await db.collection('chatRooms').doc(chatRoomId).update({
+      chatWritableUntil: admin.firestore.Timestamp.fromDate(writableUntil),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    console.log(`✅ 채팅 쓰기 마감 시각 설정 완료: ${chatRoomId} → ${writableUntil.toISOString()}`);
+  } catch (error) {
+    console.error('Firestore 채팅 쓰기 마감 시각 설정 실패:', error);
+    throw error;
+  }
+};
+
+/**
  * 시스템 메시지 발송
  * @param {string} chatRoomId - 채팅방 ID (예: contract_123)
  * @param {string} text - 메시지 내용
@@ -255,5 +285,6 @@ module.exports = {
   getChatRoomMetadata,
   getUserChatRooms,
   deactivateChatRoom,
+  setChatWritableUntil,
   sendSystemMessage
 };

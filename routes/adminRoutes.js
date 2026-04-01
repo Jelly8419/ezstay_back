@@ -538,4 +538,18 @@ router.post(
   adminController.retryAlimtalkLog
 );
 
+// ============================================
+// 서비스 태스크 관리 (청소 / 침구류 대여·회수)
+// ============================================
+
+// 목록 조회 (?tab=pending|all &task_type= &status= &date_from= &date_to= &page= &limit=)
+router.get('/service-tasks', adminController.getServiceTasks);
+
+// 상태 변경 + 업체 정보 입력
+router.patch(
+  '/service-tasks/:id/status',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.updateServiceTaskStatus
+);
+
 module.exports = router;

@@ -12,7 +12,7 @@ const {
   validateDates,
   recalcRentalItemsAmounts
 } = require('../utils/contractHelper');
-const { createChatRoomMetadata, sendSystemMessage } = require('../config/firebaseAdmin');
+const { createChatRoomMetadata, sendSystemMessage, setChatWritableUntil } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
 const appConfig = require('../config/app.config');
 const { toAbsoluteUrl } = require('../utils/urlHelper');
@@ -1506,6 +1506,14 @@ const cancelContractByGuest = async (req, res) => {
 
     await transaction.commit();
 
+    // 서비스 태스크 PENDING 삭제 (트랜잭션 외부)
+    try {
+      const { cancelPendingServiceTasks } = require('../schedulers/contractScheduler');
+      await cancelPendingServiceTasks(contract.id);
+    } catch (taskErr) {
+      console.error('게스트 취소 서비스 태스크 삭제 실패 (무시됨):', taskErr);
+    }
+
     return updated(
       res,
       {
@@ -1817,6 +1825,13 @@ const requestRefund = async (req, res) => {
         }
       ).catch(err => {
         console.error('시스템 메시지 발송 실패 (환불 요청은 완료됨):', err);
+      });
+    }
+
+    // 자동 승인(입주 전)이면 채팅 쓰기 마감
+    if (autoApprove && chatRoom) {
+      setChatWritableUntil(chatRoom.firebaseChatRoomId, new Date()).catch(err => {
+        console.error('REFUNDED 채팅 쓰기 마감 설정 실패 (무시됨):', err);
       });
     }
 
@@ -2786,12 +2801,14 @@ const confirmCheckout = async (req, res) => {
       }, 400);
     }
 
-    // 퇴실 확인 처리 - 정책 7.6.3: 퇴실확인 완료 시 보증금 반환 프로세스 트리거
-    // 호스트 직접 차감 불가, 항상 RETURN_PENDING으로 설정
+    const refundableDeposit = contract.deposit || 0;
+    const now = new Date();
+
+    // 퇴실 확인 처리
     await contract.update({
       hostCheckedOut: true,
-      hostCheckedOutAt: new Date(),
-      refundableDeposit: contract.deposit || 0,
+      hostCheckedOutAt: now,
+      refundableDeposit,
       depositStatus: 'RETURN_PENDING',
       checkoutStatus: 'HOST_CONFIRMED'
     });
@@ -2803,11 +2820,70 @@ const confirmCheckout = async (req, res) => {
       console.error('퇴실 완료 알림 전송 실패 (무시됨):', notifyErr);
     }
 
+    // 보증금 즉시 PG 환불 (보증금이 있는 경우)
+    if (refundableDeposit > 0) {
+      try {
+        const payment = await Payment.findOne({
+          where: { contractId: contract.id, paymentType: 'CONTRACT', status: 'DONE' },
+          order: [['createdAt', 'DESC']]
+        });
+
+        if (payment) {
+          const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+          const newBalance = payment.balanceAmount - refundableDeposit;
+          const canceltype = newBalance === 0 ? '0' : '1';
+
+          await paytagClient.cancelPayment({
+            orderno,
+            orgpaydate,
+            orgtranamt,
+            cancelamt: refundableDeposit,
+            canceltype
+          });
+
+          await payment.update({
+            balanceAmount: newBalance,
+            status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+          });
+
+          await contract.update({
+            depositStatus: 'RETURNED'
+          });
+
+          // 채팅 쓰기 마감 설정 (보증금 반환 완료 시점 + 24H)
+          const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
+          if (chatRoom) {
+            setChatWritableUntil(chatRoom.firebaseChatRoomId, now).catch(err => {
+              console.error('퇴실확인 채팅 쓰기 마감 설정 실패 (무시됨):', err);
+            });
+          }
+
+          console.log(`[confirmCheckout] 보증금 즉시 환불 완료: contractId=${contract.id}, amount=${refundableDeposit}`);
+        }
+      } catch (pgErr) {
+        console.error(`[confirmCheckout] 보증금 환불 PG 실패 (contractId=${contract.id}):`, pgErr.message);
+
+        await contract.update({ depositStatus: 'REFUND_FAILED' });
+
+        await PaymentFailureLog.create({
+          contractId: contract.id,
+          orderId: `DEPOSIT_REFUND_${contract.id}`,
+          failureCode: pgErr.paytagErrorCode || 'PG_CANCEL_FAILED',
+          failureMessage: pgErr.paytagErrorMessage || pgErr.message,
+          requestData: {
+            type: 'DEPOSIT_FULL_REFUND',
+            cancelamt: refundableDeposit
+          },
+          responseData: pgErr.paytagResponse || null
+        });
+      }
+    }
+
     return updated(res, {
       contractId: contract.id,
       deposit: contract.deposit,
-      refundableDeposit: contract.deposit || 0,
-      depositStatus: 'RETURN_PENDING',
+      refundableDeposit,
+      depositStatus: refundableDeposit > 0 ? 'RETURNED' : 'RETURN_PENDING',
       checkoutStatus: 'HOST_CONFIRMED'
     }, '퇴실이 확인되었습니다. 보증금 전액 반환 처리가 진행됩니다.');
 
@@ -3010,12 +3086,23 @@ const cancelContractByHost = async (req, res) => {
 
     await transaction.commit();
 
-    // 채팅방 시스템 메시지 발송
+    // 서비스 태스크 PENDING 삭제 (트랜잭션 외부)
+    try {
+      const { cancelPendingServiceTasks } = require('../schedulers/contractScheduler');
+      await cancelPendingServiceTasks(contract.id);
+    } catch (taskErr) {
+      console.error('호스트 취소 서비스 태스크 삭제 실패 (무시됨):', taskErr);
+    }
+
+    // 채팅방 시스템 메시지 발송 + 쓰기 마감
     try {
       const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
       if (chatRoom && chatRoom.firebaseChatRoomId) {
         const messageText = getSystemMessageTemplate(SystemMessageTypes.CONTRACT_CANCELED_BY_HOST);
         await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, SystemMessageTypes.CONTRACT_CANCELED_BY_HOST);
+        setChatWritableUntil(chatRoom.firebaseChatRoomId, new Date()).catch(err => {
+          console.error('호스트 취소 채팅 쓰기 마감 설정 실패 (무시됨):', err);
+        });
       }
     } catch (chatErr) {
       console.error('호스트 취소 시스템 메시지 전송 실패 (무시됨):', chatErr);
@@ -3689,7 +3776,7 @@ const acceptDepositAgreement = async (req, res) => {
       }
     }
 
-    // 채팅방 시스템 메시지 발송
+    // 채팅방 시스템 메시지 발송 + 차감확정 시 채팅 쓰기 마감 설정
     try {
       const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
       if (chatRoom && chatRoom.firebaseChatRoomId) {
@@ -3698,6 +3785,13 @@ const acceptDepositAgreement = async (req, res) => {
           : SystemMessageTypes.DEPOSIT_RETURN_CONFIRMED;
         const messageText = getSystemMessageTemplate(messageType);
         await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, messageType);
+
+        // PG 환불 완료 시점 기준 채팅 쓰기 마감 설정 (보증금 반환 완료 + 24H)
+        // DEDUCTION_CONFIRMED: 스케줄러에서 RETURNED로 안 바뀌므로 여기서 처리
+        // RETURN_CONFIRMED: PG 환불은 즉시 완료되므로 스케줄러 대기 없이 여기서 처리
+        setChatWritableUntil(chatRoom.firebaseChatRoomId, new Date()).catch(err => {
+          console.error('합의 동의 채팅 쓰기 마감 설정 실패 (무시됨):', err);
+        });
       }
     } catch (chatErr) {
       console.error('합의 동의 시스템 메시지 전송 실패 (무시됨):', chatErr);

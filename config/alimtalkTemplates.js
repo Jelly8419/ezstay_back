@@ -256,7 +256,7 @@ const templates = {
   // 4-6. 퇴실 전일 안내
   // =====================================================
   checkout_eve_guest: {
-    tplCode: 'UF_8362',
+    tplCode: 'UG_4150',
     eventLabel: '퇴실 전일 안내_게스트',
     varMap: { checkOutTime: '퇴실시간' },
     fallbackContent:
@@ -276,7 +276,7 @@ const templates = {
   // 4-7. 퇴실 당일 알림
   // =====================================================
   checkout_today_guest: {
-    tplCode: 'UF_8722',
+    tplCode: 'UG_4151',
     eventLabel: '게스트 퇴실 당일 안내_게스트',
     varMap: {},
     fallbackContent:

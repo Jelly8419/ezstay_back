@@ -166,7 +166,15 @@ const getAllRentalItems = async (req, res) => {
       ]
     });
 
-    return success(res, items, '대여 물품 목록을 조회했습니다.');
+    const itemsWithMeta = items.map(item => ({
+      ...item.toJSON(),
+      isOutOfStock: item.availableStock === 0,
+      rentedStock: item.totalStock - item.availableStock,
+      salesTypeLabel: RentalItem.SALES_TYPE_LABELS[item.salesType] || item.salesType,
+      itemTypeLabel: RentalItem.ITEM_TYPE_LABELS[item.itemType] || item.itemType
+    }));
+
+    return success(res, itemsWithMeta, '대여 물품 목록을 조회했습니다.');
   } catch (err) {
     console.error('getAllRentalItems Error:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
@@ -188,7 +196,15 @@ const getRentalItemById = async (req, res) => {
       }, 404);
     }
 
-    return success(res, item, '대여 물품 정보를 조회했습니다.');
+    const itemWithMeta = {
+      ...item.toJSON(),
+      isOutOfStock: item.availableStock === 0,
+      rentedStock: item.totalStock - item.availableStock,
+      salesTypeLabel: RentalItem.SALES_TYPE_LABELS[item.salesType] || item.salesType,
+      itemTypeLabel: RentalItem.ITEM_TYPE_LABELS[item.itemType] || item.itemType
+    };
+
+    return success(res, itemWithMeta, '대여 물품 정보를 조회했습니다.');
   } catch (err) {
     console.error('getRentalItemById Error:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
@@ -203,6 +219,7 @@ const createRentalItem = async (req, res) => {
   try {
     const {
       itemType,
+      salesType,
       name,
       description,
       price,
@@ -212,10 +229,18 @@ const createRentalItem = async (req, res) => {
     } = req.body;
 
     // 필수 필드 검증
-    if (!itemType || !name || price === undefined || totalStock === undefined) {
+    if (!itemType || !salesType || !name || price === undefined || totalStock === undefined) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, {
-        required: ['itemType', 'name', 'price', 'totalStock']
+        required: ['itemType', 'salesType', 'name', 'price', 'totalStock']
       });
+    }
+
+    // salesType 유효성 검증
+    if (!['SALE', 'RENTAL'].includes(salesType)) {
+      return error(res, {
+        code: 4010,
+        message: 'salesType은 SALE 또는 RENTAL이어야 합니다.'
+      }, 400);
     }
 
     // 가격과 재고는 음수 불가
@@ -228,6 +253,7 @@ const createRentalItem = async (req, res) => {
 
     const newItem = await RentalItem.create({
       itemType,
+      salesType,
       name,
       description,
       price,
@@ -260,6 +286,7 @@ const updateRentalItem = async (req, res) => {
     }
 
     const {
+      salesType,
       name,
       description,
       price,
@@ -267,6 +294,14 @@ const updateRentalItem = async (req, res) => {
       imageUrl,
       isActive
     } = req.body;
+
+    // salesType 유효성 검증
+    if (salesType !== undefined && !['SALE', 'RENTAL'].includes(salesType)) {
+      return error(res, {
+        code: 4010,
+        message: 'salesType은 SALE 또는 RENTAL이어야 합니다.'
+      }, 400);
+    }
 
     // totalStock 업데이트는 별도 메서드 사용
     if (totalStock !== undefined && totalStock !== item.totalStock) {
@@ -281,6 +316,7 @@ const updateRentalItem = async (req, res) => {
     }
 
     // 나머지 필드 업데이트
+    if (salesType !== undefined) item.salesType = salesType;
     if (name !== undefined) item.name = name;
     if (description !== undefined) item.description = description;
     if (price !== undefined) {
@@ -388,16 +424,19 @@ const getRentalItemStats = async (req, res) => {
     const stats = await RentalItem.findAll({
       attributes: [
         'itemType',
+        'salesType',
         [require('sequelize').fn('COUNT', require('sequelize').col('id')), 'itemCount'],
         [require('sequelize').fn('SUM', require('sequelize').col('total_stock')), 'totalStock'],
         [require('sequelize').fn('SUM', require('sequelize').col('available_stock')), 'availableStock']
       ],
-      group: ['itemType']
+      group: ['itemType', 'salesType']
     });
 
     const formattedStats = stats.map(stat => ({
       itemType: stat.itemType,
       itemTypeLabel: RentalItem.ITEM_TYPE_LABELS[stat.itemType] || stat.itemType,
+      salesType: stat.salesType,
+      salesTypeLabel: RentalItem.SALES_TYPE_LABELS[stat.salesType] || stat.salesType,
       itemCount: parseInt(stat.dataValues.itemCount),
       totalStock: parseInt(stat.dataValues.totalStock) || 0,
       availableStock: parseInt(stat.dataValues.availableStock) || 0,

@@ -222,7 +222,7 @@ const getMyChatRooms = async (req, res) => {
     const terminatedStatuses = [
       'COMPLETED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_HOST',
       'CANCELLED_BY_ADMIN_WITH_REFUND', 'CANCELLED_BY_ADMIN_NO_REFUND',
-      'PAYMENT_EXPIRED', 'APPROVAL_EXPIRED', 'REFUND_COMPLETED'
+      'PAYMENT_EXPIRED', 'APPROVAL_EXPIRED', 'REFUND_COMPLETED', 'REFUNDED'
     ];
 
     const chatRoomsWithMetadata = await Promise.all(
@@ -315,7 +315,7 @@ const getChatRoomDetail = async (req, res) => {
     const terminatedStatuses = [
       'COMPLETED', 'CANCELLED_BY_GUEST', 'CANCELLED_BY_HOST',
       'CANCELLED_BY_ADMIN_WITH_REFUND', 'CANCELLED_BY_ADMIN_NO_REFUND',
-      'PAYMENT_EXPIRED', 'APPROVAL_EXPIRED', 'REFUND_COMPLETED'
+      'PAYMENT_EXPIRED', 'APPROVAL_EXPIRED', 'REFUND_COMPLETED', 'REFUNDED'
     ];
     const isReadOnly = terminatedStatuses.includes(contractStatus);
 

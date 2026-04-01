@@ -9,8 +9,6 @@ const { Room } = require('./Room');
 const { RoomPhoto } = require('./RoomPhoto');
 const { RoomAmenity } = require('./RoomAmenity');
 const { EzService } = require('./EzService');
-// 하위 호환성을 위한 별칭 (DEPRECATED: EzService 사용 권장)
-const RoomFreeService = EzService;
 const { UserBankAccount } = require('./UserBankAccount');
 const RentalItem = require('./RentalItem');
 const Contract = require('./Contract');
@@ -47,6 +45,7 @@ const Receipt = require('./Receipt');
 const UserSessionModel = require('./UserSession');
 const AdminRefund = require('./AdminRefund');
 const RentalOrderRefundRequest = require('./RentalOrderRefundRequest');
+const ServiceTaskModel = require('./ServiceTask');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -95,6 +94,9 @@ const Payout = PayoutModel(sequelize);
 const PayoutLog = PayoutLogModel(sequelize);
 const RentalPayment = RentalPaymentModel(sequelize);
 const RentalPaymentFailureLog = RentalPaymentFailureLogModel(sequelize);
+
+// 서비스 태스크 모델 초기화
+const ServiceTask = ServiceTaskModel(sequelize);
 
 // 방 관리 모델 초기화
 const RoomMemoModel = require('./RoomMemo');
@@ -1012,6 +1014,22 @@ Admin.hasMany(Receipt, {
   onUpdate: 'CASCADE'
 });
 
+// =====================================================
+// ServiceTask 관계 설정 (청소·침구류 예약 관리)
+// =====================================================
+Contract.hasMany(ServiceTask, {
+  foreignKey: 'contractId',
+  as: 'serviceTasks',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+ServiceTask.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -1024,7 +1042,6 @@ module.exports = {
   RoomPhoto,
   RoomAmenity,
   EzService,
-  RoomFreeService, // DEPRECATED: EzService의 별칭, 하위 호환성 유지
   UserBankAccount,
   RentalItem,
   Contract,
@@ -1063,5 +1080,6 @@ module.exports = {
   Receipt,
   UserSession,
   AdminRefund,
-  RentalOrderRefundRequest
+  RentalOrderRefundRequest,
+  ServiceTask
 };

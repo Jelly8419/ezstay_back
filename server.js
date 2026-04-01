@@ -133,7 +133,7 @@ if (process.env.NODE_ENV === 'development') {
   console.log('[Server] Production mode: Nginx handles /uploads');
 }
 
-const { User, LocalUser, SocialUser, Room, RoomPhoto, RoomAmenity, RoomFreeService, sequelize } = require('./models');
+const { User, LocalUser, SocialUser, Room, RoomPhoto, RoomAmenity, sequelize } = require('./models');
 const { connectRedis } = require('./config/redis');
 
 // MySQL 연결

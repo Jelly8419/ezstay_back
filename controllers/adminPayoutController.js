@@ -7,7 +7,7 @@
  *                                          ↘ CANCELLED
  */
 
-const { sequelize, Payout, PayoutLog, Contract, Settlement, Refund, User, Admin, UserBankAccount, GuestRefundAccount } = require('../models');
+const { sequelize, Payout, PayoutLog, Contract, Settlement, Refund, User, Admin, UserBankAccount, GuestRefundAccount, RentalOrder } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
 const { maskAccountNumber } = require('../services/settlementService');
@@ -96,7 +96,10 @@ exports.getPayoutDetail = async (req, res) => {
 
     const payout = await Payout.findByPk(payoutId, {
       include: [
-        { model: Contract, as: 'contract', attributes: ['id', 'checkInDate', 'checkOutDate', 'rentalFee', 'maintenanceFee', 'cleaningFee', 'finalTotalAmount'] },
+        {
+          model: Contract, as: 'contract', attributes: ['id', 'checkInDate', 'checkOutDate', 'rentalFee', 'maintenanceFee', 'cleaningFee', 'finalTotalAmount'],
+          include: [{ model: RentalOrder, as: 'rentalOrders', attributes: ['totalAmount'], required: false }]
+        },
         { model: Settlement, as: 'settlement', attributes: ['id', 'status', 'netAmount', 'expectedDate', 'payoutAvailableDate'] },
         { model: Refund, as: 'refund', attributes: ['id', 'penaltyAmount', 'cancellationFaultType', 'cancellationDate'] },
         { model: User, as: 'recipient', attributes: ['id', 'name', 'nickname', 'phoneNumber'] },
@@ -546,7 +549,16 @@ function formatPayoutDetail(p) {
     failureReason: p.failureReason,
     note: p.note,
     // 연관 정보
-    contract: p.contract,
+    contract: p.contract ? {
+      id: p.contract.id,
+      checkInDate: p.contract.checkInDate,
+      checkOutDate: p.contract.checkOutDate,
+      rentalFee: p.contract.rentalFee,
+      maintenanceFee: p.contract.maintenanceFee,
+      cleaningFee: p.contract.cleaningFee,
+      finalTotalAmount: p.contract.finalTotalAmount,
+      rentalItemsFee: (p.contract.rentalOrders || []).reduce((sum, o) => sum + (o.totalAmount || 0), 0)
+    } : null,
     settlement: p.settlement,
     refund: p.refund,
     createdAt: p.createdAt,
