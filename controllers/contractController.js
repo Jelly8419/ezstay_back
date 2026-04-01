@@ -3776,13 +3776,12 @@ const acceptDepositAgreement = async (req, res) => {
         const messageText = getSystemMessageTemplate(messageType);
         await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, messageType);
 
-        // DEDUCTION_CONFIRMED는 스케줄러에서 RETURNED로 안 바뀌므로 여기서 채팅 마감 설정
-        // RETURN_CONFIRMED는 스케줄러 autoReturnDeposit에서 처리
-        if (depositStatus === 'DEDUCTION_CONFIRMED') {
-          setChatWritableUntil(chatRoom.firebaseChatRoomId, new Date()).catch(err => {
-            console.error('합의 차감확정 채팅 쓰기 마감 설정 실패 (무시됨):', err);
-          });
-        }
+        // PG 환불 완료 시점 기준 채팅 쓰기 마감 설정 (보증금 반환 완료 + 24H)
+        // DEDUCTION_CONFIRMED: 스케줄러에서 RETURNED로 안 바뀌므로 여기서 처리
+        // RETURN_CONFIRMED: PG 환불은 즉시 완료되므로 스케줄러 대기 없이 여기서 처리
+        setChatWritableUntil(chatRoom.firebaseChatRoomId, new Date()).catch(err => {
+          console.error('합의 동의 채팅 쓰기 마감 설정 실패 (무시됨):', err);
+        });
       }
     } catch (chatErr) {
       console.error('합의 동의 시스템 메시지 전송 실패 (무시됨):', chatErr);
