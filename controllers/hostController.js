@@ -4,7 +4,8 @@ const { convertRoadAddressToCoordinates } = require('../utils/geocoding');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
 const { calculateProgress } = require('../utils/roomProgress');
 const { Op } = require('sequelize');
-const { getFileUrl } = require('../middleware/upload');
+const { getFileUrl, deleteFromS3 } = require('../middleware/upload');
+const isProduction = process.env.NODE_ENV === 'production';
 const { toAbsoluteUrl } = require('../utils/urlHelper');
 
 // 1. 기본 정보 등록
@@ -667,7 +668,12 @@ const deletePhoto = async (req, res) => {
     // 재심사 트리거: 사진 삭제 시
     const needsReview = REVIEW_TRIGGER_STATUSES.includes(room.status);
 
+    // 복제본이 같은 URL을 참조 중인지 확인 → 아무도 참조 안 할 때만 S3/로컬 파일 삭제
+    const urlRefCount = await RoomPhoto.count({ where: { url: photo.url } });
     await photo.destroy();
+    if (urlRefCount === 1 && isProduction) {
+      await deleteFromS3(photo.url);
+    }
 
     if (needsReview) {
       await room.update({ status: 'pending_review', submittedAt: new Date() });

@@ -1,6 +1,6 @@
 require('dotenv').config();
 const bcrypt = require('bcryptjs');
-const { sequelize, User, LocalUser, Room, RoomPhoto, RoomAmenity, RoomFreeService } = require('../models');
+const { sequelize, User, LocalUser, Room, RoomPhoto, RoomAmenity, EzService } = require('../models');
 
 // 서울 주요 지역 좌표 (위도, 경도)
 const seoulLocations = [
@@ -221,13 +221,9 @@ async function seedDummyData() {
       }, { transaction });
 
       // 무료 부가서비스 추가
-      await RoomFreeService.create({
+      await EzService.create({
         roomId: room.id,
         cleaningService: randomBoolean(),
-        hairDryerRental: randomBoolean(),
-        beddingService: randomBoolean(),
-        amenityKit: randomBoolean(),
-        towelSetRental: randomBoolean(),
         roomPassword: String(randomInt(1000, 9999))
       }, { transaction });
 

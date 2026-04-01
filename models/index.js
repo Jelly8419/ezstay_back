@@ -9,8 +9,6 @@ const { Room } = require('./Room');
 const { RoomPhoto } = require('./RoomPhoto');
 const { RoomAmenity } = require('./RoomAmenity');
 const { EzService } = require('./EzService');
-// 하위 호환성을 위한 별칭 (DEPRECATED: EzService 사용 권장)
-const RoomFreeService = EzService;
 const { UserBankAccount } = require('./UserBankAccount');
 const RentalItem = require('./RentalItem');
 const Contract = require('./Contract');
@@ -1044,7 +1042,6 @@ module.exports = {
   RoomPhoto,
   RoomAmenity,
   EzService,
-  RoomFreeService, // DEPRECATED: EzService의 별칭, 하위 호환성 유지
   UserBankAccount,
   RentalItem,
   Contract,
