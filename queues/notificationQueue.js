@@ -25,13 +25,9 @@ const redisConfig = {
 const notificationQueue = new Queue('notifications', {
   redis: redisConfig,
   defaultJobOptions: {
-    removeOnComplete: 100,  // 완료된 작업 100개만 유지
-    removeOnFail: 50,       // 실패한 작업 50개만 유지
-    attempts: 3,            // 실패 시 3회 재시도
-    backoff: {
-      type: 'exponential',
-      delay: 5000           // 5초부터 시작, 지수 증가
-    }
+    removeOnComplete: true, // 완료 즉시 Redis에서 제거
+    removeOnFail: true,     // 실패 즉시 Redis에서 제거 (밀린 job 재실행 방지)
+    attempts: 1,            // 재시도 없음 (알림톡은 시각이 지나면 의미 없음)
   }
 });
 
@@ -43,18 +39,17 @@ const notificationQueue = new Queue('notifications', {
  * 특정 날짜의 오전 9시 시간을 계산
  */
 function getDateAt9AM(date) {
-  const target = new Date(date);
-  target.setHours(9, 0, 0, 0);
-  return target;
+  // 날짜 문자열에서 연/월/일만 추출하여 시간대 변환 영향 없이 오전 9시 생성
+  const d = new Date(date);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 9, 0, 0, 0);
 }
 
 /**
  * 특정 날짜의 오전 10시 시간을 계산
  */
 function getDateAt10AM(date) {
-  const target = new Date(date);
-  target.setHours(10, 0, 0, 0);
-  return target;
+  const d = new Date(date);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 10, 0, 0, 0);
 }
 
 /**
@@ -103,10 +98,19 @@ notificationQueue.process('payment-pending', async (job) => {
  * 입주 당일 알림 처리
  */
 notificationQueue.process('checkin-today', async (job) => {
-  const { contractId } = job.data;
+  const { contractId, scheduledAt } = job.data;
   console.log(`[알림 큐] 입주 당일 알림 처리: contractId=${contractId}`);
 
   try {
+    // 입주 당일 알림 유효성 체크
+    // 오전 10시 이후 실행된 경우 무조건 skip (서버 장애 밀림, 날짜 오류 등 모든 케이스 차단)
+    const now = new Date();
+    const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 0, 0, 0);
+    if (now >= cutoff) {
+      console.warn(`[알림 큐] 입주 당일 알림 스킵 (오전 10시 초과): contractId=${contractId}, 현재=${now.toISOString()}`);
+      return { success: false, reason: 'past_cutoff' };
+    }
+
     const { Contract, User, Room } = require('../models');
     const contract = await Contract.findByPk(contractId, {
       include: [
@@ -143,10 +147,16 @@ notificationQueue.process('checkin-today', async (job) => {
  * 퇴실 3일 전 알림 처리
  */
 notificationQueue.process('checkout-reminder', async (job) => {
-  const { contractId } = job.data;
+  const { contractId, scheduledAt } = job.data;
   console.log(`[알림 큐] 퇴실 3일 전 알림 처리: contractId=${contractId}`);
 
   try {
+    // 예약 시각 기준 하루 이상 지연 실행된 경우 skip (퇴실일 지나고 발송 방지)
+    if (scheduledAt && Date.now() - new Date(scheduledAt).getTime() > 24 * 60 * 60 * 1000) {
+      console.warn(`[알림 큐] 퇴실 3일 전 알림 stale job 스킵: contractId=${contractId}, scheduledAt=${scheduledAt}`);
+      return { success: false, reason: 'stale_job' };
+    }
+
     const { Contract, Room } = require('../models');
     const contract = await Contract.findByPk(contractId, {
       include: [
@@ -185,6 +195,14 @@ notificationQueue.process('checkout-today', async (job) => {
   console.log(`[알림 큐] 퇴실 당일 알림 처리: contractId=${contractId}`);
 
   try {
+    // 오전 10시 이후 실행된 경우 skip
+    const now = new Date();
+    const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 0, 0, 0);
+    if (now >= cutoff) {
+      console.warn(`[알림 큐] 퇴실 당일 알림 스킵 (오전 10시 초과): contractId=${contractId}, 현재=${now.toISOString()}`);
+      return { success: false, reason: 'past_cutoff' };
+    }
+
     const { Contract } = require('../models');
     const contract = await Contract.findByPk(contractId);
 
@@ -211,10 +229,16 @@ notificationQueue.process('checkout-today', async (job) => {
  * 옵션 마감 알림 처리
  */
 notificationQueue.process('option-deadline', async (job) => {
-  const { contractId } = job.data;
+  const { contractId, scheduledAt } = job.data;
   console.log(`[알림 큐] 옵션 마감 알림 처리: contractId=${contractId}`);
 
   try {
+    // 예약 시각 기준 하루 이상 지연 실행된 경우 skip (입주 후 옵션 마감 알림 방지)
+    if (scheduledAt && Date.now() - new Date(scheduledAt).getTime() > 24 * 60 * 60 * 1000) {
+      console.warn(`[알림 큐] 옵션 마감 알림 stale job 스킵: contractId=${contractId}, scheduledAt=${scheduledAt}`);
+      return { success: false, reason: 'stale_job' };
+    }
+
     const { Contract } = require('../models');
     const contract = await Contract.findByPk(contractId);
 
@@ -288,20 +312,18 @@ async function schedulePaymentPendingNotification(contractId, approvedAt) {
 async function schedulePaymentCompletedNotifications(contractId, checkInDate) {
   const jobs = [];
 
-  // 1. 입주 당일 알림 (입주일 오전 9시)
+  // 1. 입주 당일 알림 (입주일 오전 9시, 이미 지났으면 즉시 발송)
   const checkinNotifyAt = getDateAt9AM(checkInDate);
   const checkinDelay = calculateDelay(checkinNotifyAt);
 
-  if (checkinDelay > 0) {
-    console.log(`[알림 큐] 입주 당일 알림 예약: contractId=${contractId}, 발송=${checkinNotifyAt.toISOString()}`);
-    jobs.push(
-      notificationQueue.add(
-        'checkin-today',
-        { contractId },
-        { delay: checkinDelay, jobId: `checkin-today-${contractId}` }
-      )
-    );
-  }
+  console.log(`[알림 큐] 입주 당일 알림 예약: contractId=${contractId}, 발송=${checkinDelay > 0 ? checkinNotifyAt.toISOString() : '즉시'}`);
+  jobs.push(
+    notificationQueue.add(
+      'checkin-today',
+      { contractId, scheduledAt: checkinNotifyAt.toISOString() },
+      { delay: checkinDelay, jobId: `checkin-today-${contractId}` }
+    )
+  );
 
   // 2. 옵션 마감 알림 (입주 6일 전 오전 10시)
   const optionDeadline = new Date(checkInDate);
@@ -314,7 +336,7 @@ async function schedulePaymentCompletedNotifications(contractId, checkInDate) {
     jobs.push(
       notificationQueue.add(
         'option-deadline',
-        { contractId },
+        { contractId, scheduledAt: optionNotifyAt.toISOString() },
         { delay: optionDelay, jobId: `option-deadline-${contractId}` }
       )
     );
@@ -343,7 +365,7 @@ async function scheduleCheckinConfirmedNotifications(contractId, checkOutDate) {
     jobs.push(
       notificationQueue.add(
         'checkout-reminder',
-        { contractId },
+        { contractId, scheduledAt: reminderNotifyAt.toISOString() },
         { delay: reminderDelay, jobId: `checkout-reminder-${contractId}` }
       )
     );
@@ -358,7 +380,7 @@ async function scheduleCheckinConfirmedNotifications(contractId, checkOutDate) {
     jobs.push(
       notificationQueue.add(
         'checkout-today',
-        { contractId },
+        { contractId, scheduledAt: checkoutNotifyAt.toISOString() },
         { delay: checkoutDelay, jobId: `checkout-today-${contractId}` }
       )
     );
