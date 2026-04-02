@@ -4365,6 +4365,59 @@ const updateServiceTaskStatus = async (req, res) => {
   }
 };
 
+/**
+ * 알림 큐 전체 현황 조회
+ * GET /api/admin/notification-queue/stats
+ */
+const getNotificationQueueStats = async (req, res) => {
+  try {
+    const { getQueueStats, notificationQueue } = require('../queues/notificationQueue');
+
+    const stats = await getQueueStats();
+
+    // delayed job 목록 상세 조회
+    const delayed = await notificationQueue.getDelayed();
+    const jobs = delayed.map(job => ({
+      jobId: job.id,
+      type: job.name,
+      contractId: job.data.contractId,
+      scheduledAt: job.data.scheduledAt || new Date(job.timestamp + job.opts.delay).toISOString(),
+      fireAt: new Date(job.timestamp + job.opts.delay).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }),
+      remainingMs: job.timestamp + job.opts.delay - Date.now()
+    }));
+
+    // type별 그룹핑
+    const byType = jobs.reduce((acc, job) => {
+      acc[job.type] = acc[job.type] || [];
+      acc[job.type].push(job);
+      return acc;
+    }, {});
+
+    return success(res, { stats, jobs, byType }, '알림 큐 현황을 조회했습니다.');
+  } catch (err) {
+    console.error('알림 큐 현황 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 특정 계약의 예약된 알림 조회
+ * GET /api/admin/notification-queue/contract/:contractId
+ */
+const getContractNotificationQueue = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const { getScheduledNotifications } = require('../queues/notificationQueue');
+
+    const scheduled = await getScheduledNotifications(contractId);
+
+    return success(res, { contractId: parseInt(contractId), scheduled }, '계약 알림 큐를 조회했습니다.');
+  } catch (err) {
+    console.error('계약 알림 큐 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   // 대시보드
   getDashboardStats,
@@ -4426,10 +4479,13 @@ module.exports = {
   updateServiceTaskStatus,
 
   // 알림톡 관리
-
   getAlimtalkTemplates,
   syncAlimtalkTemplates,
   getAlimtalkLogs,
   getAlimtalkStats,
-  retryAlimtalkLog
+  retryAlimtalkLog,
+
+  // 알림 큐 관리
+  getNotificationQueueStats,
+  getContractNotificationQueue
 };
