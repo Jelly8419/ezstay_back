@@ -400,8 +400,16 @@ const createContractRequest = async (req, res) => {
         roomId,
         hostId: room.hostId,
         guestId,
-        checkInDate,
-        checkOutDate,
+        checkInDate: (() => {
+          const d = new Date(checkInDate);
+          d.setHours(room.checkInTime || 14, 0, 0, 0);
+          return d;
+        })(),
+        checkOutDate: (() => {
+          const d = new Date(checkOutDate);
+          d.setHours(room.checkOutTime || 11, 0, 0, 0);
+          return d;
+        })(),
         totalDays,
         totalWeeks: Math.floor(totalDays / 7),
 
