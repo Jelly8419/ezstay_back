@@ -114,7 +114,7 @@ jobs:
 
             # PM2로 무중단 배포 (reload)
             echo "🔄 PM2 Reload (무중단 배포)..."
-            pm2 reload ezstay-api || pm2 start server.js --name ezstay-api
+            pm2 reload ecosystem.config.js || pm2 start ecosystem.config.js
 
             # 헬스체크 (5초 대기)
             echo "🏥 헬스체크 중..."
