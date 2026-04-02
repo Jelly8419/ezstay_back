@@ -545,6 +545,16 @@ router.post(
 // 전체 큐 현황 + delayed job 목록
 router.get('/notification-queue/stats', adminController.getNotificationQueueStats);
 
+// 큐 누락 계약 조회 (DB 기준으로 큐에 없는 알림 탐지)
+router.get('/notification-queue/missing', adminController.getMissingNotificationQueue);
+
+// 누락 알림 단건 복구 (super_admin, admin만 가능)
+router.post(
+  '/notification-queue/recover',
+  requireAdminRole(['super_admin', 'admin']),
+  adminController.recoverNotificationQueue
+);
+
 // 특정 계약의 예약된 알림 조회
 router.get('/notification-queue/contract/:contractId', adminController.getContractNotificationQueue);
 

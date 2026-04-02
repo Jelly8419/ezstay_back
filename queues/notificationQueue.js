@@ -188,6 +188,46 @@ notificationQueue.process('checkout-reminder', async (job) => {
 });
 
 /**
+ * 퇴실 전일 알림 처리 (알림톡)
+ */
+notificationQueue.process('checkout-eve', async (job) => {
+  const { contractId, scheduledAt } = job.data;
+  console.log(`[알림 큐] 퇴실 전일 알림 처리: contractId=${contractId}`);
+
+  try {
+    if (scheduledAt && Date.now() - new Date(scheduledAt).getTime() > 24 * 60 * 60 * 1000) {
+      console.warn(`[알림 큐] 퇴실 전일 알림 stale job 스킵: contractId=${contractId}, scheduledAt=${scheduledAt}`);
+      return { success: false, reason: 'stale_job' };
+    }
+
+    const { Contract, User, Room } = require('../models');
+    const contract = await Contract.findByPk(contractId, {
+      include: [
+        { model: User, as: 'guest', attributes: ['id', 'name', 'nickname', 'phoneNumber'] },
+        { model: Room, as: 'room', attributes: ['id', 'roomName', 'checkOutTime'] }
+      ]
+    });
+
+    if (!contract) {
+      return { success: false, reason: 'contract_not_found' };
+    }
+
+    if (!['CONFIRMED', 'IN_PROGRESS'].includes(contract.status)) {
+      console.log(`[알림 큐] 상태 변경됨 (스킵): contractId=${contractId}, status=${contract.status}`);
+      return { success: false, reason: 'status_changed', currentStatus: contract.status };
+    }
+
+    const AlimtalkService = require('../services/alimtalkService');
+    await AlimtalkService.sendCheckoutEve(contract, contract.guest, contract.room);
+    console.log(`[알림 큐] 퇴실 전일 알림 발송 완료: contractId=${contractId}`);
+    return { success: true, contractId };
+  } catch (err) {
+    console.error(`[알림 큐] 퇴실 전일 알림 실패: contractId=${contractId}`, err);
+    throw err;
+  }
+});
+
+/**
  * 퇴실 당일 알림 처리
  */
 notificationQueue.process('checkout-today', async (job) => {
@@ -371,7 +411,24 @@ async function scheduleCheckinConfirmedNotifications(contractId, checkOutDate) {
     );
   }
 
-  // 2. 퇴실 당일 알림 (퇴실일 오전 9시)
+  // 2. 퇴실 전일 알림 (퇴실 1일 전 오전 9시, 알림톡)
+  const eveDate = new Date(checkOutDate);
+  eveDate.setDate(eveDate.getDate() - 1);
+  const eveNotifyAt = getDateAt9AM(eveDate);
+  const eveDelay = calculateDelay(eveNotifyAt);
+
+  if (eveDelay > 0) {
+    console.log(`[알림 큐] 퇴실 전일 알림 예약: contractId=${contractId}, 발송=${eveNotifyAt.toISOString()}`);
+    jobs.push(
+      notificationQueue.add(
+        'checkout-eve',
+        { contractId, scheduledAt: eveNotifyAt.toISOString() },
+        { delay: eveDelay, jobId: `checkout-eve-${contractId}` }
+      )
+    );
+  }
+
+  // 3. 퇴실 당일 알림 (퇴실일 오전 9시)
   const checkoutNotifyAt = getDateAt9AM(checkOutDate);
   const checkoutDelay = calculateDelay(checkoutNotifyAt);
 
@@ -396,7 +453,7 @@ async function scheduleCheckinConfirmedNotifications(contractId, checkOutDate) {
  * @param {string[]} types - 취소할 알림 유형 (기본: 모든 유형)
  */
 async function cancelScheduledNotifications(contractId, types = null) {
-  const allTypes = ['payment-pending', 'checkin-today', 'checkout-reminder', 'checkout-today', 'option-deadline'];
+  const allTypes = ['payment-pending', 'checkin-today', 'checkout-reminder', 'checkout-eve', 'checkout-today', 'option-deadline'];
   const targetTypes = types || allTypes;
 
   const results = [];
@@ -462,6 +519,69 @@ async function getScheduledNotifications(contractId) {
   return scheduled;
 }
 
+/**
+ * type별 발송 예정 시각 계산
+ */
+function getFireAt(type, checkInDate, checkOutDate) {
+  if (type === 'checkin-today') {
+    return getDateAt9AM(checkInDate);
+  } else if (type === 'option-deadline') {
+    const d = new Date(checkInDate);
+    d.setDate(d.getDate() - 6);
+    return getDateAt10AM(d);
+  } else if (type === 'checkout-reminder') {
+    const d = new Date(checkOutDate);
+    d.setDate(d.getDate() - 3);
+    return getDateAt9AM(d);
+  } else if (type === 'checkout-eve') {
+    const d = new Date(checkOutDate);
+    d.setDate(d.getDate() - 1);
+    return getDateAt9AM(d);
+  } else if (type === 'checkout-today') {
+    return getDateAt9AM(checkOutDate);
+  }
+  return null;
+}
+
+/**
+ * 누락된 알림 단건 복구 (관리자 수동 요청)
+ *
+ * @param {number} contractId
+ * @param {string} type - 알림 타입
+ * @param {Date} checkInDate
+ * @param {Date} checkOutDate
+ * @returns {{ queued: boolean, reason: string, fireAt: string|null }}
+ */
+async function recoverNotification(contractId, type, checkInDate, checkOutDate) {
+  const now = new Date();
+
+  const fireAt = getFireAt(type, checkInDate, checkOutDate);
+  if (!fireAt) {
+    return { queued: false, reason: 'unknown_type' };
+  }
+
+  // 발송 시점이 이미 지난 경우 거부
+  if (fireAt <= now) {
+    return { queued: false, reason: 'already_past', fireAt: fireAt.toISOString() };
+  }
+
+  // 이미 큐에 있는 경우 거부
+  const existing = await notificationQueue.getJob(`${type}-${contractId}`);
+  if (existing) {
+    return { queued: false, reason: 'already_queued', fireAt: fireAt.toISOString() };
+  }
+
+  const delay = calculateDelay(fireAt);
+  await notificationQueue.add(
+    type,
+    { contractId, scheduledAt: fireAt.toISOString() },
+    { delay, jobId: `${type}-${contractId}` }
+  );
+
+  console.log(`[알림 큐] 복구 적재: contractId=${contractId}, type=${type}, fireAt=${fireAt.toISOString()}`);
+  return { queued: true, reason: 'recovered', fireAt: fireAt.toISOString() };
+}
+
 module.exports = {
   notificationQueue,
   // 예약 함수
@@ -473,5 +593,8 @@ module.exports = {
   cancelScheduledNotifications,
   // 조회 함수
   getQueueStats,
-  getScheduledNotifications
+  getScheduledNotifications,
+  // 복구 함수
+  recoverNotification,
+  getFireAt
 };
