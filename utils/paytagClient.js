@@ -129,6 +129,21 @@ async function cancelPayment({ orderno, orgpaydate, orgtranamt, cancelamt, cance
     snd_msg: '1' // 문자 미발송 (서버 처리)
   });
 
+  // [DEBUG] 운영 오류 추적용 - 확인 후 제거
+  console.log('[PayTag CARDCANCEL DEBUG]', {
+    certStr_plain: [PAYTAG_SERVICECODE, 'CARDCANCEL', PAYTAG_SHOPCODE, resolvedLoginId, '', orderno, String(cancelamt)].join('|'),
+    PAYTAG_SERVICECODE,
+    PAYTAG_SHOPCODE,
+    PAYTAG_API_KEY_len: PAYTAG_API_KEY ? PAYTAG_API_KEY.length : null,
+    resolvedLoginId,
+    orderno,
+    orgpaydate,
+    orgtranamt,
+    cancelamt,
+    canceltype,
+    PAYTAG_API_URL,
+  });
+
   const response = await axios.post(
     `${PAYTAG_API_URL}/pay/cardcancel`,
     params.toString(),
