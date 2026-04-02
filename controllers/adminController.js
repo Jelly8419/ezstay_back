@@ -4366,6 +4366,217 @@ const updateServiceTaskStatus = async (req, res) => {
 };
 
 /**
+ * 알림 큐 누락 계약 조회
+ * GET /api/admin/notification-queue/missing
+ *
+ * DB 상태 기준으로 큐에 있어야 할 알림이 없는 계약을 반환
+ */
+const getMissingNotificationQueue = async (req, res) => {
+  try {
+    const { notificationQueue, getFireAt } = require('../queues/notificationQueue');
+    const { Contract } = require('../models');
+    const { Op } = require('sequelize');
+    const now = new Date();
+
+    // 1. 큐에 있어야 할 계약 조회
+    const [paymentCompletedContracts, confirmedContracts] = await Promise.all([
+      // PAYMENT_COMPLETED: checkin-today, option-deadline 대상
+      Contract.findAll({
+        where: {
+          status: 'PAYMENT_COMPLETED',
+          checkInDate: { [Op.gt]: now }
+        },
+        attributes: ['id', 'status', 'checkInDate', 'checkOutDate']
+      }),
+      // CONFIRMED / IN_PROGRESS: checkout-reminder, checkout-today 대상
+      Contract.findAll({
+        where: {
+          status: { [Op.in]: ['CONFIRMED', 'IN_PROGRESS'] },
+          checkOutDate: { [Op.gt]: now }
+        },
+        attributes: ['id', 'status', 'checkInDate', 'checkOutDate']
+      })
+    ]);
+
+    // 2. 이미 발송된 알림톡 로그 조회 (알림톡이 있는 타입만: checkin-today, checkout-today)
+    // checkout-reminder, option-deadline은 앱 푸시만 발송하므로 AlimtalkLog 없음
+    const { AlimtalkLog } = require('../models');
+    const allContractIds = [
+      ...paymentCompletedContracts.map(c => c.id),
+      ...confirmedContracts.map(c => c.id)
+    ];
+
+    const sentLogs = await AlimtalkLog.findAll({
+      where: {
+        contractId: { [Op.in]: allContractIds },
+        eventName: { [Op.in]: ['checkin_today_guest', 'checkout_eve_guest', 'checkout_today_guest'] },
+        status: 'SUCCESS'
+      },
+      attributes: ['contractId', 'eventName']
+    });
+
+    // { contractId: Set<eventName> } 형태로 변환
+    const sentMap = {};
+    for (const log of sentLogs) {
+      if (!sentMap[log.contractId]) sentMap[log.contractId] = new Set();
+      sentMap[log.contractId].add(log.eventName);
+    }
+
+    // queue type → alimtalk eventName 매핑 (알림톡 있는 타입만)
+    const typeToEventName = {
+      'checkin-today': 'checkin_today_guest',
+      'checkout-eve': 'checkout_eve_guest',
+      'checkout-today': 'checkout_today_guest'
+      // 'option-deadline', 'checkout-reminder': 알림톡 없음 → AlimtalkLog 확인 불가
+    };
+
+    // 3. 각 계약별 jobId 존재 여부 확인 (발송 완료된 것은 제외)
+    const missing = [];
+
+    for (const contract of paymentCompletedContracts) {
+      const checks = [
+        { type: 'checkin-today', condition: new Date(contract.checkInDate) > now },
+        {
+          type: 'option-deadline',
+          condition: (() => {
+            const d = new Date(contract.checkInDate);
+            d.setDate(d.getDate() - 6);
+            return d > now;
+          })()
+        }
+      ];
+
+      for (const { type, condition } of checks) {
+        if (!condition) continue;
+        const alreadySent = sentMap[contract.id]?.has(typeToEventName[type]);
+        if (alreadySent) continue;
+        const job = await notificationQueue.getJob(`${type}-${contract.id}`);
+        if (!job) {
+          const fireAt = getFireAt(type, contract.checkInDate, contract.checkOutDate);
+          missing.push({
+            contractId: contract.id,
+            status: contract.status,
+            missingType: type,
+            checkInDate: contract.checkInDate,
+            checkOutDate: contract.checkOutDate,
+            fireAt: fireAt ? fireAt.toISOString() : null
+          });
+        }
+      }
+    }
+
+    for (const contract of confirmedContracts) {
+      const eveDate = new Date(contract.checkOutDate);
+      eveDate.setDate(eveDate.getDate() - 1);
+      const reminderDate = new Date(contract.checkOutDate);
+      reminderDate.setDate(reminderDate.getDate() - 3);
+
+      const checks = [
+        { type: 'checkout-reminder', condition: reminderDate > now },
+        { type: 'checkout-eve', condition: eveDate > now },
+        { type: 'checkout-today', condition: new Date(contract.checkOutDate) > now }
+      ];
+
+      for (const { type, condition } of checks) {
+        if (!condition) continue;
+        const alreadySent = sentMap[contract.id]?.has(typeToEventName[type]);
+        if (alreadySent) continue;
+        const job = await notificationQueue.getJob(`${type}-${contract.id}`);
+        if (!job) {
+          const fireAt = getFireAt(type, contract.checkInDate, contract.checkOutDate);
+          missing.push({
+            contractId: contract.id,
+            status: contract.status,
+            missingType: type,
+            checkInDate: contract.checkInDate,
+            checkOutDate: contract.checkOutDate,
+            fireAt: fireAt ? fireAt.toISOString() : null
+          });
+        }
+      }
+    }
+
+    return success(res, {
+      missingCount: missing.length,
+      missing
+    }, missing.length > 0 ? `누락된 알림 ${missing.length}건이 있습니다.` : '누락된 알림이 없습니다.');
+  } catch (err) {
+    console.error('알림 큐 누락 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 누락 알림 단건 복구 (관리자 수동 큐 적재)
+ * POST /api/admin/notification-queue/recover
+ */
+const recoverNotificationQueue = async (req, res) => {
+  try {
+    const { contractId, type } = req.body;
+
+    if (!contractId || !type) {
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    }
+
+    const validTypes = ['checkin-today', 'option-deadline', 'checkout-reminder', 'checkout-eve', 'checkout-today'];
+    if (!validTypes.includes(type)) {
+      return error(res, ErrorCodes.INVALID_INPUT, 400, { message: `유효하지 않은 type입니다. 가능한 값: ${validTypes.join(', ')}` });
+    }
+
+    const { Contract, AlimtalkLog } = require('../models');
+    const { Op } = require('sequelize');
+
+    const contract = await Contract.findByPk(contractId, {
+      attributes: ['id', 'status', 'checkInDate', 'checkOutDate']
+    });
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    // 알림톡 로그 있는 타입은 이미 발송 완료 여부 확인
+    const typeToEventName = {
+      'checkin-today': 'checkin_today_guest',
+      'checkout-eve': 'checkout_eve_guest',
+      'checkout-today': 'checkout_today_guest'
+    };
+    const eventName = typeToEventName[type];
+    if (eventName) {
+      const alreadySent = await AlimtalkLog.findOne({
+        where: { contractId, eventName, status: 'SUCCESS' }
+      });
+      if (alreadySent) {
+        return error(res, ErrorCodes.INVALID_INPUT, 400, { message: '이미 발송 완료된 알림입니다.' });
+      }
+    }
+
+    const { recoverNotification } = require('../queues/notificationQueue');
+    const result = await recoverNotification(contractId, type, contract.checkInDate, contract.checkOutDate);
+
+    if (!result.queued) {
+      const messages = {
+        already_past: '발송 시점이 이미 지났습니다.',
+        already_queued: '이미 큐에 등록되어 있습니다.',
+        unknown_type: '알 수 없는 알림 타입입니다.'
+      };
+      return error(res, ErrorCodes.INVALID_INPUT, 400, {
+        message: messages[result.reason] || result.reason,
+        fireAt: result.fireAt
+      });
+    }
+
+    return success(res, {
+      contractId,
+      type,
+      fireAt: result.fireAt
+    }, '알림 큐에 적재되었습니다.');
+  } catch (err) {
+    console.error('알림 큐 복구 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
  * 알림 큐 전체 현황 조회
  * GET /api/admin/notification-queue/stats
  */
@@ -4487,5 +4698,7 @@ module.exports = {
 
   // 알림 큐 관리
   getNotificationQueueStats,
-  getContractNotificationQueue
+  getContractNotificationQueue,
+  getMissingNotificationQueue,
+  recoverNotificationQueue
 };
