@@ -1,5 +1,6 @@
 const { Room, Contract, BlockedPeriod, User } = require('../models');
 const { Op } = require('sequelize');
+const { toDateStrKST } = require('../utils/dateHelper');
 
 /**
  * 통합 일정 데이터 조회
@@ -13,11 +14,11 @@ async function getScheduleData(roomId, startDate, endDate) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const defaultStartDate = today.toISOString().split('T')[0];
+  const defaultStartDate = toDateStrKST(today);
 
   const oneYearLater = new Date(today);
   oneYearLater.setMonth(oneYearLater.getMonth() + 12);
-  const defaultEndDate = oneYearLater.toISOString().split('T')[0];
+  const defaultEndDate = toDateStrKST(oneYearLater);
 
   const queryStartDate = startDate || defaultStartDate;
   const queryEndDate = endDate || defaultEndDate;
@@ -73,8 +74,8 @@ async function getScheduleData(roomId, startDate, endDate) {
   // 응답 데이터 포맷팅
   const formattedContracts = contracts.map(contract => ({
     id: contract.orderId,
-    startDate: contract.checkInDate.toISOString().split('T')[0],
-    endDate: contract.checkOutDate.toISOString().split('T')[0],
+    startDate: toDateStrKST(contract.checkInDate),
+    endDate: toDateStrKST(contract.checkOutDate),
     guestName: contract.guest ? contract.guest.name : '알 수 없음',
     guestId: contract.guestId,
     status: contract.status === 'PAYMENT_COMPLETED' ? 'confirmed' : 'in_progress',
@@ -166,8 +167,8 @@ async function createBlockedPeriod(roomId, hostId, startDate, endDate, reason) {
   if (conflictingContracts.length > 0) {
     const conflictDetails = conflictingContracts.map(c => ({
       id: c.orderId,
-      startDate: c.checkInDate.toISOString().split('T')[0],
-      endDate: c.checkOutDate.toISOString().split('T')[0]
+      startDate: toDateStrKST(c.checkInDate),
+      endDate: toDateStrKST(c.checkOutDate)
     }));
 
     const error = new Error('CONFLICT_WITH_CONTRACT');
@@ -297,7 +298,7 @@ async function unblockPeriod(roomId, hostId, startDate, endDate) {
         const prevPeriod = await BlockedPeriod.create({
           roomId,
           startDate: period.startDate,
-          endDate: prevEnd.toISOString().split('T')[0],
+          endDate: toDateStrKST(prevEnd),
           reason: period.reason,
           createdBy: hostId
         }, { transaction });
@@ -317,7 +318,7 @@ async function unblockPeriod(roomId, hostId, startDate, endDate) {
 
         const nextPeriod = await BlockedPeriod.create({
           roomId,
-          startDate: nextStart.toISOString().split('T')[0],
+          startDate: toDateStrKST(nextStart),
           endDate: period.endDate,
           reason: period.reason,
           createdBy: hostId
@@ -388,8 +389,8 @@ async function getContracts(roomId, startDate, endDate) {
   const formattedContracts = contracts.map(contract => ({
     contractId: contract.orderId,
     guestName: contract.guest ? contract.guest.name : '알 수 없음',
-    checkInDate: contract.checkInDate.toISOString().split('T')[0],
-    checkOutDate: contract.checkOutDate.toISOString().split('T')[0],
+    checkInDate: toDateStrKST(contract.checkInDate),
+    checkOutDate: toDateStrKST(contract.checkOutDate),
     status: contract.status,
     totalAmount: contract.finalTotalAmount,
     createdAt: contract.createdAt.toISOString()

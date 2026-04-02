@@ -11,6 +11,7 @@ const { sequelize, Payout, PayoutLog, Contract, Settlement, Refund, User, Admin,
 const { Op } = require('sequelize');
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
 const { maskAccountNumber } = require('../services/settlementService');
+const { toDateStrKST, todayKST } = require('../utils/dateHelper');
 
 /**
  * 지급 목록 조회
@@ -443,7 +444,7 @@ exports.exportPayouts = async (req, res) => {
       p.accountNumber || '',
       p.amount,
       Payout.TYPE_LABELS[p.payoutType] || p.payoutType,
-      p.createdAt ? new Date(p.createdAt).toISOString().replace('T', ' ').substring(0, 19) : '',
+      p.createdAt ? new Date(p.createdAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', hour12: false }).replace(/\. /g, '-').replace('.', '') : '',
       Payout.STATUS_LABELS[p.status] || p.status
     ]);
 
@@ -451,7 +452,7 @@ exports.exportPayouts = async (req, res) => {
       .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
       .join('\n');
 
-    const filename = `payouts_${new Date().toISOString().split('T')[0]}.csv`;
+    const filename = `payouts_${todayKST()}.csv`;
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);

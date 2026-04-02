@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const { Op } = require('sequelize');
+const { nowKSTString } = require('../utils/dateHelper');
 const {
   sequelize,
   RentalOrder,
@@ -206,14 +207,14 @@ async function expireModifiableDeadlineOrders() {
  * 모든 렌탈 주문 만료 처리 실행
  */
 async function runRentalOrderExpiration() {
-  console.log('[렌탈 스케줄러] 렌탈 주문 만료 처리 시작:', new Date().toISOString());
+  console.log('[렌탈 스케줄러] 렌탈 주문 만료 처리 시작:', nowKSTString());
 
   try {
     // 순차적으로 실행
     await expirePendingRentalOrders();      // 1. 15분 미결제 만료
     await expireModifiableDeadlineOrders(); // 2. 입주일 5일 전 경과 만료
 
-    console.log('[렌탈 스케줄러] 렌탈 주문 만료 처리 완료:', new Date().toISOString());
+    console.log('[렌탈 스케줄러] 렌탈 주문 만료 처리 완료:', nowKSTString());
   } catch (error) {
     console.error('[렌탈 스케줄러] 실행 오류:', error);
   }

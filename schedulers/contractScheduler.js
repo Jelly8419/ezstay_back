@@ -3,6 +3,7 @@ const { Contract, ChatRoom, Room, EzService, User, ContractStatusLog, Settlement
 const { Op } = require('sequelize');
 const { sendSystemMessage, setChatWritableUntil } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
+const { toDateStrKST, nowKSTString } = require('../utils/dateHelper');
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { calculateSettlementDate, calculateSettlementAmount } = require('../services/settlementService');
@@ -363,9 +364,9 @@ async function updateInProgress() {
             refundDeduction: 0,
             grossAmount,
             netAmount,
-            expectedDate: expectedDate.toISOString().split('T')[0],
+            expectedDate: toDateStrKST(expectedDate),
             settlementSnapshot: {
-              createdAt: now.toISOString(),
+              createdAt: nowKSTString(),
               checkInDate: fullContract.checkInDate,
               rentalFee: fullContract.rentalFee,
               maintenanceFee: fullContract.maintenanceFee,
@@ -625,7 +626,7 @@ async function updateSettlementReady() {
 
   try {
     const today = new Date();
-    const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD
+    const todayStr = toDateStrKST(today);
 
     const [updatedCount] = await Settlement.update(
       {
@@ -988,7 +989,7 @@ async function updatePayoutPayable() {
   const transaction = await sequelize.transaction();
 
   try {
-    const todayStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const todayStr = toDateStrKST(new Date());
 
     const [updatedCount] = await Payout.update(
       { status: 'PAYABLE' },
@@ -1164,7 +1165,7 @@ async function cancelPendingServiceTasks(contractId) {
 }
 
 async function runContractStatusUpdate() {
-  console.log('[스케줄러] 계약 상태 자동 업데이트 시작:', new Date().toISOString());
+  console.log('[스케줄러] 계약 상태 자동 업데이트 시작:', nowKSTString());
 
   try {
     // 순차적으로 실행 (상태 변경이 순서대로 이루어져야 함)
@@ -1180,7 +1181,7 @@ async function runContractStatusUpdate() {
     await updatePayoutPayable();          // 10. 지급 가능 날짜 도래 시 PAYABLE 전환
     await generateServiceTasks();         // 11. 청소·침구류 서비스 태스크 자동 생성
 
-    console.log('[스케줄러] 계약 상태 자동 업데이트 완료:', new Date().toISOString());
+    console.log('[스케줄러] 계약 상태 자동 업데이트 완료:', nowKSTString());
   } catch (error) {
     console.error('[스케줄러] 계약 상태 업데이트 실행 오류:', error);
   }

@@ -1,4 +1,5 @@
 const { sequelize } = require('../models');
+const { toDateStrKST } = require('./dateHelper');
 
 /**
  * 계약 주문번호 생성
@@ -18,7 +19,7 @@ async function generateOrderId(transaction = null) {
     const { ContractSequence, Contract } = require('../models');
 
     const today = new Date();
-    const dateKey = today.toISOString().split('T')[0]; // YYYY-MM-DD
+    const dateKey = toDateStrKST(today);
 
     // yymmdd 형식 생성
     const yymmdd = [

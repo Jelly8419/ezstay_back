@@ -1,6 +1,7 @@
 const { Receipt, User, Admin, Contract, Settlement, sequelize } = require('../models');
 const { ErrorCodes, success, error, updated } = require('../utils/responseHelper');
 const { Op } = require('sequelize');
+const { todayKST } = require('../utils/dateHelper');
 
 /**
  * 영수증 발급 대기/완료 리스트 조회
@@ -433,13 +434,13 @@ const exportReceiptsCsv = async (req, res) => {
         r.amount,
         r.date,
         statusLabels[r.status] || r.status,
-        r.issuedAt ? new Date(r.issuedAt).toISOString().replace('T', ' ').substring(0, 19) : ''
+        r.issuedAt ? new Date(r.issuedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', hour12: false }).replace(/\. /g, '-').replace('.', '') : ''
       ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(',');
     }).join('\n');
 
     const csv = bom + csvHeader + csvRows;
 
-    const filename = `receipts_${new Date().toISOString().split('T')[0]}.csv`;
+    const filename = `receipts_${todayKST()}.csv`;
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);

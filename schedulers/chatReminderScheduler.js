@@ -3,6 +3,7 @@ const { Contract, ChatRoom, NotificationLog } = require('../models');
 const { Op } = require('sequelize');
 const { sendSystemMessage } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
+const { nowKSTString } = require('../utils/dateHelper');
 
 /**
  * 체크인/체크아웃 알림 스케줄러
@@ -16,7 +17,10 @@ const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/syste
  * 날짜를 YYYY-MM-DD 형식으로 변환
  */
 function formatDate(date) {
-  return date.toISOString().split('T')[0];
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 /**
@@ -349,7 +353,7 @@ async function sendContractCompletionMessages() {
  * 모든 채팅 알림 발송 실행
  */
 async function runChatReminders() {
-  console.log('[스케줄러] 채팅 알림 발송 시작:', new Date().toISOString());
+  console.log('[스케줄러] 채팅 알림 발송 시작:', nowKSTString());
 
   try {
     // 병렬 실행
@@ -359,7 +363,7 @@ async function runChatReminders() {
       sendContractCompletionMessages()
     ]);
 
-    console.log('[스케줄러] 채팅 알림 발송 완료:', new Date().toISOString());
+    console.log('[스케줄러] 채팅 알림 발송 완료:', nowKSTString());
   } catch (error) {
     console.error('[스케줄러] 채팅 알림 발송 실행 오류:', error);
   }
