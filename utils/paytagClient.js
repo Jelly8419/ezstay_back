@@ -58,7 +58,7 @@ function getBaseParams() {
     reqtype: 'L',
     restype: 'J',
     shopcode: PAYTAG_SHOPCODE,
-    apiver: 2
+    apiver: '1'
   };
 }
 
