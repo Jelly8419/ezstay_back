@@ -154,7 +154,7 @@ const templates = {
   // 4-4. 입주 당일 안내
   // =====================================================
   checkin_today_guest: {
-    tplCode: 'UF_8712',
+    tplCode: 'UG_6968',
     eventLabel: '입주 당일 안내_게스트',
     varMap: { roomName: '방이름', address: '상세주소' },
     fallbackContent:
