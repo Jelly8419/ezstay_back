@@ -5,7 +5,7 @@ module.exports = {
     name: 'ezstay-api',
     script: 'server.js',
     env: {
-      TZ: process.env.TZ || 'Asia/Seoul'
+      TZ: 'Asia/Seoul'
     }
   }]
 };

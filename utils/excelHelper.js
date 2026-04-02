@@ -3,6 +3,7 @@
  * 엑셀 파일 생성 유틸리티
  */
 const ExcelJS = require('exceljs');
+const { toDateStrKST } = require('./dateHelper');
 
 /**
  * 정산 내역 엑셀 파일 생성
@@ -153,7 +154,7 @@ const createSettlementExcel = async (data) => {
 const formatDate = (date) => {
   if (!date) return '';
   const d = new Date(date);
-  return d.toISOString().split('T')[0];
+  return toDateStrKST(d);
 };
 
 module.exports = {

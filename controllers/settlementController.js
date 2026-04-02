@@ -4,6 +4,7 @@
  */
 const { Contract, Room, RoomPhoto, User, Refund, UserBankAccount, EzService, sequelize } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
+const { toDateStrKST, todayKST } = require('../utils/dateHelper');
 const { toAbsoluteUrl } = require('../utils/urlHelper');
 const { Op, fn, col, literal } = require('sequelize');
 const {
@@ -149,7 +150,7 @@ const getSettlements = async (req, res) => {
         checkOutDate: contract.checkOutDate,
         rentalDays: calculateRentalDays(contract.checkInDate, contract.checkOutDate),
         settlementAmount: settlement.finalAmount,
-        settlementDate: settlementDate.toISOString().split('T')[0],
+        settlementDate: toDateStrKST(settlementDate),
         status,
         statusLabel: SETTLEMENT_STATUS_LABELS[status],
         hasRefund: settlement.refund.hasRefund,
@@ -375,7 +376,7 @@ const getSettlementDetail = async (req, res) => {
       refund: refundInfo,
       settlement: {
         finalAmount: settlement.finalAmount,
-        settlementDate: settlementDate.toISOString().split('T')[0],
+        settlementDate: toDateStrKST(settlementDate),
         status,
         statusLabel: SETTLEMENT_STATUS_LABELS[status],
         bankInfo: bankAccount ? {
@@ -508,7 +509,7 @@ const exportSettlements = async (req, res) => {
         platformFee: settlement.platformFee,
         refundAmount: settlement.refund.totalRefundAmount,
         settlementAmount: settlement.finalAmount,
-        settlementDate: settlementDate.toISOString().split('T')[0],
+        settlementDate: toDateStrKST(settlementDate),
         status: SETTLEMENT_STATUS_LABELS[status]
       };
     });
@@ -517,7 +518,7 @@ const exportSettlements = async (req, res) => {
     const buffer = await createSettlementExcel(excelData);
 
     // 파일명 생성
-    const fileName = `settlement_${new Date().toISOString().split('T')[0]}.xlsx`;
+    const fileName = `settlement_${todayKST()}.xlsx`;
 
     // 응답 헤더 설정
     res.setHeader(

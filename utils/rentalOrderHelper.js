@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const paytagClient = require('./paytagClient');
+const { toDateStrKST } = require('./dateHelper');
 const {
   sequelize,
   RentalOrder,
@@ -79,7 +80,7 @@ function checkRentalModifiable(contract) {
  */
 async function generateRentalOrderId(transaction) {
   const today = new Date();
-  const datePrefix = today.toISOString().slice(2, 10).replace(/-/g, '');
+  const datePrefix = toDateStrKST(today).slice(2).replace(/-/g, '');
 
   // 오늘 생성된 렌탈 주문 수 조회
   const count = await RentalOrder.count({
@@ -668,10 +669,6 @@ async function cancelPaidRentalOrder(rentalOrder, reason, actorId, actor, req, t
   if (rentalPayment.balanceAmount < refundAmount) {
     throw new Error(`환불 가능 금액이 부족합니다. (가능: ${rentalPayment.balanceAmount}원, 요청: ${refundAmount}원)`);
   }
-
-  // TODO: PayTag 환불 API 문서 수령 후 구현 필요
-  // paytagClient.cancelPayment()로 실제 PG 환불 처리
-  // 현재는 DB 상태만 변경하며, 실제 PG 환불은 수동 처리 필요
 
   // RentalPayment 잔액 업데이트 (DB만 변경)
   const newBalance = rentalPayment.balanceAmount - refundAmount;

@@ -1,4 +1,5 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
+const { toDateStrKST } = require('../utils/dateHelper');
 const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, ServiceTask, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
@@ -4143,8 +4144,8 @@ const getAlimtalkStats = async (req, res) => {
 
     return success(res, {
       period: {
-        startDate: startDate.toISOString().split('T')[0],
-        endDate: endDate.toISOString().split('T')[0]
+        startDate: toDateStrKST(startDate),
+        endDate: toDateStrKST(endDate)
       },
       summary: {
         total,
