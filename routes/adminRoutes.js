@@ -539,6 +539,16 @@ router.post(
 );
 
 // ============================================
+// 알림 큐 관리 (Redis Bull Queue)
+// ============================================
+
+// 전체 큐 현황 + delayed job 목록
+router.get('/notification-queue/stats', adminController.getNotificationQueueStats);
+
+// 특정 계약의 예약된 알림 조회
+router.get('/notification-queue/contract/:contractId', adminController.getContractNotificationQueue);
+
+// ============================================
 // 서비스 태스크 관리 (청소 / 침구류 대여·회수)
 // ============================================
 
