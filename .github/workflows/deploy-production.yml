@@ -84,6 +84,7 @@ jobs:
             echo "🧹 로컬 변경사항 정리..."
             git restore package-lock.json 2>/dev/null || true
             git restore . 2>/dev/null || true
+            git clean -fd 2>/dev/null || true
 
             git pull origin master
 
