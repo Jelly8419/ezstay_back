@@ -1,3 +1,6 @@
+// TZ는 반드시 다른 모듈보다 먼저 설정해야 new Date()에 반영됨
+process.env.TZ = 'Asia/Seoul';
+
 const express = require('express');
 const { Sequelize } = require('sequelize');
 const cors = require('cors');
