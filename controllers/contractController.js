@@ -1047,7 +1047,7 @@ const approveContract = async (req, res) => {
 
   try {
     const { contractId } = req.params;
-    const { recommendedItems } = req.body;
+    const { recommendedItems } = req.body || {};
     const hostId = req.user.id;
 
     // 계약 조회
