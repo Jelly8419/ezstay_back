@@ -4,7 +4,7 @@
  */
 const { Contract, Room, RoomPhoto, User, Refund, UserBankAccount, EzService, sequelize } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
-const { toDateStrKST, todayKST } = require('../utils/dateHelper');
+const { toDateStrKST, todayKST, toKSTString } = require('../utils/dateHelper');
 const { toAbsoluteUrl } = require('../utils/urlHelper');
 const { Op, fn, col, literal } = require('sequelize');
 const {
@@ -70,12 +70,12 @@ const getSettlements = async (req, res) => {
       if (startDate || endDate) {
         const dateFilter = {};
         if (startDate) {
-          const filterStart = new Date(startDate);
+          const filterStart = new Date(startDate + 'T00:00:00');
           filterStart.setDate(filterStart.getDate() - 5);
           dateFilter[Op.gte] = filterStart;
         }
         if (endDate) {
-          const filterEnd = new Date(endDate);
+          const filterEnd = new Date(endDate + 'T00:00:00');
           filterEnd.setDate(filterEnd.getDate() - 5);
           dateFilter[Op.lte] = filterEnd;
         }
@@ -146,8 +146,8 @@ const getSettlements = async (req, res) => {
         roomTitle: contract.room?.roomName,
         roomThumbnail: toAbsoluteUrl(contract.room?.photos?.[0]?.url || null),
         guestName: contract.guest?.name,
-        checkInDate: contract.checkInDate,
-        checkOutDate: contract.checkOutDate,
+        checkInDate: toKSTString(contract.checkInDate),
+        checkOutDate: toKSTString(contract.checkOutDate),
         rentalDays: calculateRentalDays(contract.checkInDate, contract.checkOutDate),
         settlementAmount: settlement.finalAmount,
         settlementDate: toDateStrKST(settlementDate),
@@ -347,8 +347,8 @@ const getSettlementDetail = async (req, res) => {
         contractId: contract.id,
         contractNumber: contract.contractNumber,
         status: contract.status,
-        checkInDate: contract.checkInDate,
-        checkOutDate: contract.checkOutDate,
+        checkInDate: toKSTString(contract.checkInDate),
+        checkOutDate: toKSTString(contract.checkOutDate),
         rentalDays: calculateRentalDays(contract.checkInDate, contract.checkOutDate),
         paidAt: contract.paidAt
       },
@@ -432,12 +432,12 @@ const exportSettlements = async (req, res) => {
     if (startDate || endDate) {
       const dateFilter = {};
       if (startDate) {
-        const filterStart = new Date(startDate);
+        const filterStart = new Date(startDate + 'T00:00:00');
         filterStart.setDate(filterStart.getDate() - 5);
         dateFilter[Op.gte] = filterStart;
       }
       if (endDate) {
-        const filterEnd = new Date(endDate);
+        const filterEnd = new Date(endDate + 'T00:00:00');
         filterEnd.setDate(filterEnd.getDate() - 5);
         dateFilter[Op.lte] = filterEnd;
       }
@@ -498,8 +498,8 @@ const exportSettlements = async (req, res) => {
         contractNumber: contract.contractNumber,
         roomTitle: contract.room?.roomName,
         guestName: contract.guest?.name,
-        checkInDate: contract.checkInDate,
-        checkOutDate: contract.checkOutDate,
+        checkInDate: toKSTString(contract.checkInDate),
+        checkOutDate: toKSTString(contract.checkOutDate),
         rentalDays: calculateRentalDays(contract.checkInDate, contract.checkOutDate),
         rentalFee: settlement.rentalFee,
         maintenanceFee: settlement.maintenanceFee,

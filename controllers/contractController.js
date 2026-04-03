@@ -27,6 +27,7 @@ const {
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { calculateSettlementDate, calculatePayoutAvailableDate, calculateSettlementAmount } = require('../services/settlementService');
+const { toKSTString } = require('../utils/dateHelper');
 
 /**
  * 계약 요청 생성 (게스트 -> 호스트)
@@ -516,8 +517,8 @@ const createContractRequest = async (req, res) => {
         orderId: contract.orderId,
         status: finalStatus,
         hostId: room.hostId,
-        checkInDate: contract.checkInDate,
-        checkOutDate: contract.checkOutDate,
+        checkInDate: toKSTString(contract.checkInDate),
+        checkOutDate: toKSTString(contract.checkOutDate),
         finalTotalAmount: contract.finalTotalAmount,
         createdAt: contract.createdAt,
         autoApproved: finalStatus === 'APPROVED' && process.env.AUTO_APPROVE_CONTRACTS === 'true' // 디버깅용
@@ -669,8 +670,8 @@ const getGuestContracts = async (req, res) => {
           statusLabel: Contract.STATUS_LABELS[contract.status],
 
           // 날짜 정보
-          checkInDate: contract.checkInDate,
-          checkOutDate: contract.checkOutDate,
+          checkInDate: toKSTString(contract.checkInDate),
+          checkOutDate: toKSTString(contract.checkOutDate),
           totalDays: contract.totalDays,
 
           // 💰 최종 금액만 표시 (리스트 간소화)
@@ -785,8 +786,8 @@ const getHostContracts = async (req, res) => {
           statusLabel: Contract.STATUS_LABELS[contract.status],
 
           // 날짜 정보
-          checkInDate: contract.checkInDate,
-          checkOutDate: contract.checkOutDate,
+          checkInDate: toKSTString(contract.checkInDate),
+          checkOutDate: toKSTString(contract.checkOutDate),
           totalDays: contract.totalDays,
           totalWeeks: contract.totalWeeks,
 
@@ -916,8 +917,8 @@ const getContractDetail = async (req, res) => {
           statusLabel: Contract.STATUS_LABELS[contract.status],
 
           // 날짜 정보
-          checkInDate: contract.checkInDate,
-          checkOutDate: contract.checkOutDate,
+          checkInDate: toKSTString(contract.checkInDate),
+          checkOutDate: toKSTString(contract.checkOutDate),
           totalDays: contract.totalDays,
           totalWeeks: contract.totalWeeks,
 
@@ -1201,8 +1202,8 @@ const approveContract = async (req, res) => {
             nickname: guest.nickname,
             profileImageUrl: toAbsoluteUrl(guest.profileImageUrl)
           },
-          checkInDate: contract.checkInDate,
-          checkOutDate: contract.checkOutDate,
+          checkInDate: toKSTString(contract.checkInDate),
+          checkOutDate: toKSTString(contract.checkOutDate),
           isActive: true
         });
       } catch (firestoreErr) {
@@ -1231,8 +1232,8 @@ const approveContract = async (req, res) => {
         SystemMessageTypes.CONTRACT_APPROVED,
         {
           contractId: contract.id,
-          checkInDate: contract.checkInDate,
-          checkOutDate: contract.checkOutDate,
+          checkInDate: toKSTString(contract.checkInDate),
+          checkOutDate: toKSTString(contract.checkOutDate),
           paymentDeadline: paymentDeadlineStr
         }
       ).catch(err => {
@@ -1981,7 +1982,7 @@ const requestRefund = async (req, res) => {
         finalRefundAmount: refund.finalRefundAmount,
         requestedAt: refund.requestedAt,
         approvedAt: refund.approvedAt,
-        estimatedCompletionDate
+        estimatedCompletionDate: toKSTString(estimatedCompletionDate)
       },
       message
     );
@@ -2588,8 +2589,8 @@ const updatePendingRentalItems = async (req, res) => {
         code: 4701,
         message: '입주 5일 전까지만 렌탈 아이템을 수정할 수 있습니다'
       }, 400, {
-        checkInDate: contract.checkInDate,
-        modifiableUntil: modifiableUntil.toISOString()
+        checkInDate: toKSTString(contract.checkInDate),
+        modifiableUntil: toKSTString(modifiableUntil)
       });
     }
 

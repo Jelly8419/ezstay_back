@@ -1,6 +1,7 @@
 const { ChatRoom, Contract, User, Room } = require('../models');
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
 const { toAbsoluteUrl } = require('../utils/urlHelper');
+const { toKSTString } = require('../utils/dateHelper');
 const {
   createCustomToken,
   createChatRoomMetadata,
@@ -136,8 +137,8 @@ const createChatRoom = async (req, res) => {
         nickname: contract.guest.nickname,
         profileImageUrl: toAbsoluteUrl(contract.guest.profileImageUrl)
       },
-      checkInDate: contract.checkInDate,
-      checkOutDate: contract.checkOutDate,
+      checkInDate: toKSTString(contract.checkInDate),
+      checkOutDate: toKSTString(contract.checkOutDate),
       isActive: true
     });
 

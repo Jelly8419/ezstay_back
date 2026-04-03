@@ -11,7 +11,7 @@ const { sequelize, Payout, PayoutLog, Contract, Settlement, Refund, User, Admin,
 const { Op } = require('sequelize');
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
 const { maskAccountNumber } = require('../services/settlementService');
-const { toDateStrKST, todayKST } = require('../utils/dateHelper');
+const { toDateStrKST, todayKST, toKSTString } = require('../utils/dateHelper');
 
 /**
  * 지급 목록 조회
@@ -552,8 +552,8 @@ function formatPayoutDetail(p) {
     // 연관 정보
     contract: p.contract ? {
       id: p.contract.id,
-      checkInDate: p.contract.checkInDate,
-      checkOutDate: p.contract.checkOutDate,
+      checkInDate: toKSTString(p.contract.checkInDate),
+      checkOutDate: toKSTString(p.contract.checkOutDate),
       rentalFee: p.contract.rentalFee,
       maintenanceFee: p.contract.maintenanceFee,
       cleaningFee: p.contract.cleaningFee,

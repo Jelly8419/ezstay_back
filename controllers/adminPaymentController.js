@@ -2,6 +2,7 @@ const { Payment, PaymentFailureLog, RentalPayment, RentalOrder, RentalOrderItem,
 const { Op } = require('sequelize');
 const paytagClient = require('../utils/paytagClient');
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
+const { toKSTString } = require('../utils/dateHelper');
 const { partialRefundRentalOrder, logRentalAction } = require('../utils/rentalOrderHelper');
 
 /**
@@ -37,9 +38,9 @@ exports.getPayments = async (req, res) => {
 
       if (startDate || endDate) {
         where.requestedAt = {};
-        if (startDate) where.requestedAt[Op.gte] = new Date(startDate);
+        if (startDate) where.requestedAt[Op.gte] = new Date(startDate + 'T00:00:00');
         if (endDate) {
-          const end = new Date(endDate);
+          const end = new Date(endDate + 'T00:00:00');
           end.setHours(23, 59, 59, 999);
           where.requestedAt[Op.lte] = end;
         }
@@ -465,8 +466,8 @@ exports.getPaymentDetail = async (req, res) => {
         platformFee: contract.platformFee,
         hostPlatformFee: contract.hostPlatformFee,
         deposit: contract.deposit,
-        checkInDate: contract.checkInDate,
-        checkOutDate: contract.checkOutDate,
+        checkInDate: toKSTString(contract.checkInDate),
+        checkOutDate: toKSTString(contract.checkOutDate),
         paidAt: contract.paidAt
       },
       guest: contract.guest || null,
@@ -819,9 +820,9 @@ exports.getPaymentLogs = async (req, res) => {
     const buildDateFilter = (field) => {
       if (!startDate && !endDate) return {};
       const filter = {};
-      if (startDate) filter[Op.gte] = new Date(startDate);
+      if (startDate) filter[Op.gte] = new Date(startDate + 'T00:00:00');
       if (endDate) {
-        const end = new Date(endDate);
+        const end = new Date(endDate + 'T00:00:00');
         end.setHours(23, 59, 59, 999);
         filter[Op.lte] = end;
       }
@@ -1047,9 +1048,9 @@ exports.getPaymentSummary = async (req, res) => {
     const buildDateRange = (field) => {
       if (!startDate && !endDate) return {};
       const filter = {};
-      if (startDate) filter[Op.gte] = new Date(startDate);
+      if (startDate) filter[Op.gte] = new Date(startDate + 'T00:00:00');
       if (endDate) {
-        const end = new Date(endDate);
+        const end = new Date(endDate + 'T00:00:00');
         end.setHours(23, 59, 59, 999);
         filter[Op.lte] = end;
       }
@@ -1656,8 +1657,8 @@ exports.getRentalRefundRequestDetail = async (req, res) => {
         id: refundRequest.contract.id,
         orderId: refundRequest.contract.orderId,
         status: refundRequest.contract.status,
-        checkInDate: refundRequest.contract.checkInDate,
-        checkOutDate: refundRequest.contract.checkOutDate,
+        checkInDate: toKSTString(refundRequest.contract.checkInDate),
+        checkOutDate: toKSTString(refundRequest.contract.checkOutDate),
         guest: refundRequest.contract.guest || null
       } : null
     });
