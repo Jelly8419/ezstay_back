@@ -11,6 +11,7 @@ const {
   markChatAsRead
 } = require('../controllers/chatController');
 const { authenticateToken } = require('../middleware/auth');
+const { chatReadLimiter, chatNotifyLimiter } = require('../middleware/rateLimiter');
 
 /**
  * 채팅 API 라우트
@@ -36,9 +37,9 @@ router.get('/contracts/:contractId/room', authenticateToken, getChatRoomByContra
 router.post('/rooms/:chatRoomId/system-message', authenticateToken, sendTestSystemMessage);
 
 // 채팅 메시지 알림 요청 (프론트에서 메시지 전송 시 호출)
-router.post('/rooms/:chatRoomId/notify', authenticateToken, notifyChatMessage);
+router.post('/rooms/:chatRoomId/notify', authenticateToken, chatNotifyLimiter, notifyChatMessage);
 
 // 채팅방 읽음 처리 (프론트에서 채팅방 진입/포커스 시 호출)
-router.post('/rooms/:chatRoomId/read', authenticateToken, markChatAsRead);
+router.post('/rooms/:chatRoomId/read', authenticateToken, chatReadLimiter, markChatAsRead);
 
 module.exports = router;

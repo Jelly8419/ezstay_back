@@ -109,6 +109,95 @@ const duplicateLimiter = rateLimit({
 });
 
 /**
+ * 채팅 읽음 처리용 Rate Limiter
+ * 1분 동안 최대 100회 (30초 heartbeat × 여러 채팅방 고려)
+ * userId 기준 카운트
+ */
+const chatReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  keyGenerator: userAwareKeyGenerator,
+  message: {
+    success: false,
+    code: 4290,
+    message: '너무 많은 요청을 보냈습니다. 잠시 후 다시 시도해주세요.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+/**
+ * 채팅 알림 전송용 Rate Limiter
+ * 1분 동안 최대 50회 (메시지 전송 빈도 기준)
+ * userId 기준 카운트
+ */
+const chatNotifyLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 50,
+  keyGenerator: userAwareKeyGenerator,
+  message: {
+    success: false,
+    code: 4290,
+    message: '너무 많은 요청을 보냈습니다. 잠시 후 다시 시도해주세요.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+/**
+ * 지도 방 검색용 Rate Limiter
+ * 1분 동안 최대 30회 (지도 bounds 변경 기준)
+ */
+const roomSearchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  keyGenerator: userAwareKeyGenerator,
+  message: {
+    success: false,
+    code: 4290,
+    message: '검색 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+/**
+ * 계약 목록/상세 조회용 Rate Limiter
+ * 1시간 동안 최대 500회
+ * userId 기준 카운트
+ */
+const contractReadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 500,
+  keyGenerator: userAwareKeyGenerator,
+  message: {
+    success: false,
+    code: 4290,
+    message: '너무 많은 요청을 보냈습니다. 잠시 후 다시 시도해주세요.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+/**
+ * 계약 신청용 Rate Limiter
+ * 1시간 동안 최대 100회
+ * userId 기준 카운트
+ */
+const contractRequestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 100,
+  keyGenerator: userAwareKeyGenerator,
+  message: {
+    success: false,
+    code: 4290,
+    message: '너무 많은 요청을 보냈습니다. 잠시 후 다시 시도해주세요.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+/**
  * 관리자 인증용 Rate Limiter
  * 15분 동안 최대 10회
  */
@@ -150,6 +239,11 @@ module.exports = {
   uploadLimiter,
   passwordResetLimiter,
   duplicateLimiter,
+  chatReadLimiter,
+  chatNotifyLimiter,
+  roomSearchLimiter,
+  contractReadLimiter,
+  contractRequestLimiter,
   adminAuthLimiter,
   adminApiLimiter
 };

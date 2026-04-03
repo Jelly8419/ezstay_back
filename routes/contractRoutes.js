@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 const { requireUserInfo } = require('../middleware/validation');
+const { contractReadLimiter, contractRequestLimiter } = require('../middleware/rateLimiter');
 const {
   createContractRequest,
   getGuestContracts,
@@ -63,7 +64,7 @@ const { confirmPaymentMock } = require('../controllers/mockPaymentController');
  *   "pricingSnapshot": { ... }
  * }
  */
-router.post('/request', authenticateToken, requireUserInfo({ requirePhone: true }), createContractRequest);
+router.post('/request', authenticateToken, contractRequestLimiter, requireUserInfo({ requirePhone: true }), createContractRequest);
 
 /**
  * 게스트의 계약 요청 목록 조회
@@ -72,7 +73,7 @@ router.post('/request', authenticateToken, requireUserInfo({ requirePhone: true 
  * Query Parameters:
  * - status (optional): 계약 상태 필터링
  */
-router.get('/guest', authenticateToken, getGuestContracts);
+router.get('/guest', authenticateToken, contractReadLimiter, getGuestContracts);
 
 /**
  * 호스트가 받은 계약 요청 목록 조회
@@ -81,7 +82,7 @@ router.get('/guest', authenticateToken, getGuestContracts);
  * Query Parameters:
  * - status (optional): 계약 상태 필터링
  */
-router.get('/host', authenticateToken, getHostContracts);
+router.get('/host', authenticateToken, contractReadLimiter, getHostContracts);
 
 /**
  * 계약 상세 정보 조회 (호스트 또는 게스트)
