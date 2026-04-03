@@ -38,4 +38,23 @@ function nowKSTString() {
   return new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' }).replace(' ', 'T') + '+09:00';
 }
 
-module.exports = { todayKST, toDateStrKST, nowKSTString };
+/**
+ * Date 객체를 KST 기준 datetime 문자열로 변환 (시간 포함)
+ * API 응답 시 checkInDate / checkOutDate 등 DataTypes.DATE 필드에 사용
+ * @param {Date|string|null} date
+ * @returns {string|null} e.g. "2024-04-15T14:00:00+09:00"
+ */
+function toKSTString(date) {
+  if (!date) return null;
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return null;
+  const Y = d.getFullYear();
+  const M = String(d.getMonth() + 1).padStart(2, '0');
+  const D = String(d.getDate()).padStart(2, '0');
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  const s = String(d.getSeconds()).padStart(2, '0');
+  return `${Y}-${M}-${D}T${h}:${m}:${s}`;
+}
+
+module.exports = { todayKST, toDateStrKST, nowKSTString, toKSTString };

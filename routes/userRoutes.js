@@ -7,7 +7,6 @@ const {
   getProfile,
   changePassword,
   changeNickname,
-  changePhoneNumber,
   deleteAccount
 } = require('../controllers/userController');
 const { authenticateToken } = require('../middleware/auth');
@@ -29,9 +28,6 @@ router.patch('/password', authenticateToken, changePassword);
 
 // 닉네임 변경
 router.patch('/nickname', authenticateToken, changeNickname);
-
-// 연락처 변경
-router.patch('/phone', authenticateToken, changePhoneNumber);
 
 // 회원 탈퇴
 router.delete('/account', authenticateToken, deleteAccount);

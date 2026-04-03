@@ -202,6 +202,7 @@ const verifyResult = async (req, res) => {
       });
 
       if (existingDiUser && (!req.user || existingDiUser.id !== req.user.id)) {
+        console.log('[KMC] DI 중복 차단 - existingDiUser.id:', existingDiUser.id, '| req.user:', req.user ? req.user.id : 'null');
         return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
       }
     }

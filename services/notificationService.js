@@ -401,8 +401,7 @@ class NotificationService {
 
     // 호스트에게 알림
     const hostMsg = NotificationMessages.checkinTodayHost({
-      guestName: guest?.name || guest?.nickname,
-      guestPhoneNumber: guest?.phoneNumber
+      guestName: guest?.name || guest?.nickname
     });
     await this.create({
       userId: contract.hostId,
@@ -413,15 +412,12 @@ class NotificationService {
       relatedContractId: contract.id,
       relatedRoomId: contract.roomId,
       metadata: {
-        guestName: guest?.name || guest?.nickname,
-        guestPhoneNumber: guest?.phoneNumber
+        guestName: guest?.name || guest?.nickname
       }
     });
 
     // 게스트에게 알림
-    const guestMsg = NotificationMessages.checkinTodayGuest({
-      hostPhoneNumber: host?.phoneNumber
-    });
+    const guestMsg = NotificationMessages.checkinTodayGuest();
     await this.create({
       userId: contract.guestId,
       userMode: 'guest',
@@ -430,9 +426,7 @@ class NotificationService {
       message: guestMsg.message,
       relatedContractId: contract.id,
       relatedRoomId: contract.roomId,
-      metadata: {
-        hostPhoneNumber: host?.phoneNumber
-      }
+      metadata: {}
     });
 
     // 알림톡 발송 (4-4)

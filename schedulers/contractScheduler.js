@@ -344,26 +344,25 @@ async function updateInProgress() {
 
         if (!existingSettlement) {
           const fullContract = await Contract.findByPk(contract.id, {
-            attributes: ['id', 'hostId', 'checkInDate', 'rentalFee', 'maintenanceFee', 'cleaningFee', 'hostPlatformFee'],
+            attributes: ['id', 'hostId', 'checkInDate', 'rentalFee', 'maintenanceFee', 'cleaningFee', 'discountAmount', 'hostPlatformFee', 'roomSnapshot'],
             transaction
           });
 
           const expectedDate = calculateSettlementDate(fullContract.checkInDate);
-          const settlementCalc = calculateSettlementAmount(fullContract, []);
-          const grossAmount = settlementCalc.subtotal;
-          const netAmount = settlementCalc.finalAmount;
+          const hasEzCleaningService = fullContract.roomSnapshot?.ezService?.cleaningService || false;
+          const settlementCalc = calculateSettlementAmount(fullContract, [], { hasEzCleaningService });
 
           await Settlement.create({
             contractId: fullContract.id,
             hostId: fullContract.hostId,
             status: 'PENDING',
-            rentalFee: fullContract.rentalFee || 0,
-            maintenanceFee: fullContract.maintenanceFee || 0,
-            cleaningFee: fullContract.cleaningFee || 0,
-            hostPlatformFee: fullContract.hostPlatformFee || 0,
+            rentalFee: settlementCalc.rentalFee,
+            maintenanceFee: settlementCalc.maintenanceFee,
+            cleaningFee: settlementCalc.cleaningFee,
+            hostPlatformFee: settlementCalc.platformFee,
             refundDeduction: 0,
-            grossAmount,
-            netAmount,
+            grossAmount: settlementCalc.grossAmount,      // 할인/수수료 전 총액
+            netAmount: settlementCalc.grossSettlement,    // 수수료 차감 후 (초기 환불 없음)
             expectedDate: toDateStrKST(expectedDate),
             settlementSnapshot: {
               createdAt: nowKSTString(),

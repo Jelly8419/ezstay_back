@@ -12,6 +12,7 @@ const { sequelize, Settlement, Payout, Contract, Room, User, Refund, Payment, Us
 const { Op } = require('sequelize');
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
 const { maskAccountNumber } = require('../services/settlementService');
+const { toKSTString } = require('../utils/dateHelper');
 
 const STATUS_LABELS = {
   PENDING: '정산 대기',
@@ -401,8 +402,8 @@ function formatSettlementSummary(s) {
     netAmount: s.netAmount,
     expectedDate: s.expectedDate,
     payoutAvailableDate: s.payoutAvailableDate,
-    checkInDate: s.contract?.checkInDate || null,
-    checkOutDate: s.contract?.checkOutDate || null,
+    checkInDate: toKSTString(s.contract?.checkInDate) || null,
+    checkOutDate: toKSTString(s.contract?.checkOutDate) || null,
     payout: s.payouts?.[0] ? {
       id: s.payouts[0].id,
       status: s.payouts[0].status,
@@ -493,8 +494,8 @@ function formatSettlementDetail(s, bankAccount) {
     // 연관 계약
     contract: contract ? {
       id: contract.id,
-      checkInDate: contract.checkInDate,
-      checkOutDate: contract.checkOutDate,
+      checkInDate: toKSTString(contract.checkInDate),
+      checkOutDate: toKSTString(contract.checkOutDate),
       room: contract.room || null,
       guest: contract.guest || null,
       payment: contract.payment || null,

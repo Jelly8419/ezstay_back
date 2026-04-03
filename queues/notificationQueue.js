@@ -36,20 +36,32 @@ const notificationQueue = new Queue('notifications', {
 // =====================================================
 
 /**
- * 특정 날짜의 오전 9시 시간을 계산
+ * 날짜에서 KST 연/월/일 추출
+ * 'YYYY-MM-DD' 문자열은 UTC 기준으로 파싱되므로 KST(+9) 오프셋 보정
  */
-function getDateAt9AM(date) {
-  // 날짜 문자열에서 연/월/일만 추출하여 시간대 변환 영향 없이 오전 9시 생성
-  const d = new Date(date);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 9, 0, 0, 0);
+function getKSTDateParts(date) {
+  const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+  const kstMs = (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date))
+    ? new Date(date).getTime() + KST_OFFSET_MS
+    : new Date(date).getTime();
+  const kst = new Date(kstMs);
+  return { year: kst.getUTCFullYear(), month: kst.getUTCMonth(), day: kst.getUTCDate() };
 }
 
 /**
- * 특정 날짜의 오전 10시 시간을 계산
+ * 특정 날짜의 오전 9시 시간을 계산 (KST 기준)
+ */
+function getDateAt9AM(date) {
+  const { year, month, day } = getKSTDateParts(date);
+  return new Date(year, month, day, 9, 0, 0, 0);
+}
+
+/**
+ * 특정 날짜의 오전 10시 시간을 계산 (KST 기준)
  */
 function getDateAt10AM(date) {
-  const d = new Date(date);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 10, 0, 0, 0);
+  const { year, month, day } = getKSTDateParts(date);
+  return new Date(year, month, day, 10, 0, 0, 0);
 }
 
 /**

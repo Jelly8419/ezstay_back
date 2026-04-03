@@ -27,6 +27,7 @@ const {
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { calculateSettlementDate, calculatePayoutAvailableDate, calculateSettlementAmount } = require('../services/settlementService');
+const { toKSTString } = require('../utils/dateHelper');
 
 /**
  * 계약 요청 생성 (게스트 -> 호스트)
@@ -516,8 +517,8 @@ const createContractRequest = async (req, res) => {
         orderId: contract.orderId,
         status: finalStatus,
         hostId: room.hostId,
-        checkInDate: contract.checkInDate,
-        checkOutDate: contract.checkOutDate,
+        checkInDate: toKSTString(contract.checkInDate),
+        checkOutDate: toKSTString(contract.checkOutDate),
         finalTotalAmount: contract.finalTotalAmount,
         createdAt: contract.createdAt,
         autoApproved: finalStatus === 'APPROVED' && process.env.AUTO_APPROVE_CONTRACTS === 'true' // 디버깅용
@@ -669,8 +670,8 @@ const getGuestContracts = async (req, res) => {
           statusLabel: Contract.STATUS_LABELS[contract.status],
 
           // 날짜 정보
-          checkInDate: contract.checkInDate,
-          checkOutDate: contract.checkOutDate,
+          checkInDate: toKSTString(contract.checkInDate),
+          checkOutDate: toKSTString(contract.checkOutDate),
           totalDays: contract.totalDays,
 
           // 💰 최종 금액만 표시 (리스트 간소화)
@@ -696,6 +697,9 @@ const getGuestContracts = async (req, res) => {
 
           // 🛒 렌탈 아이템 정보
           rentalItems: rentalItemsData,
+
+          // 호스트 추천 옵션 상품 (APPROVED 상태일 때만)
+          recommendedItems: contract.status === 'APPROVED' ? (contract.recommendedItems || null) : undefined,
 
           // 퇴실/보증금 상태 (프론트 카드 액션 결정용)
           checkoutStatus: contract.checkoutStatus,
@@ -782,8 +786,8 @@ const getHostContracts = async (req, res) => {
           statusLabel: Contract.STATUS_LABELS[contract.status],
 
           // 날짜 정보
-          checkInDate: contract.checkInDate,
-          checkOutDate: contract.checkOutDate,
+          checkInDate: toKSTString(contract.checkInDate),
+          checkOutDate: toKSTString(contract.checkOutDate),
           totalDays: contract.totalDays,
           totalWeeks: contract.totalWeeks,
 
@@ -800,8 +804,19 @@ const getHostContracts = async (req, res) => {
           deposit: contract.deposit,
           finalTotalAmount: contract.finalTotalAmount,
 
-          // 📊 호스트 실수령액 (플랫폼 수수료 차감 후)
-          hostEarnings: contract.totalUsageFee - contract.platformFee,
+          // 📊 호스트 정산 내역 (렌탈아이템은 플랫폼 수익이므로 제외)
+          hostSettlement: (() => {
+            const hasEzCleaningService = contract.roomSnapshot?.ezService?.cleaningService || false;
+            const s = calculateSettlementAmount(contract, [], { hasEzCleaningService });
+            return {
+              rentalFee: s.rentalFee,
+              maintenanceFee: s.maintenanceFee,
+              cleaningFee: s.cleaningFee,
+              discountAmount: contract.discountAmount,
+              hostPlatformFee: s.platformFee,
+              hostEarnings: s.grossSettlement,
+            };
+          })(),
 
           // 렌탈 아이템
           rentalItems: contract.rentalItems,
@@ -822,7 +837,6 @@ const getHostContracts = async (req, res) => {
           // 퇴실/보증금 상태 (PRD v2)
           checkoutStatus: contract.checkoutStatus,
           checkoutStatusLabel: Contract.CHECKOUT_STATUS_LABELS[contract.checkoutStatus],
-          hostPlatformFee: contract.hostPlatformFee,
           depositStatus: contract.depositStatus,
           checkoutRequested: contract.checkoutRequested,
           hostCheckedOut: contract.hostCheckedOut,
@@ -913,8 +927,8 @@ const getContractDetail = async (req, res) => {
           statusLabel: Contract.STATUS_LABELS[contract.status],
 
           // 날짜 정보
-          checkInDate: contract.checkInDate,
-          checkOutDate: contract.checkOutDate,
+          checkInDate: toKSTString(contract.checkInDate),
+          checkOutDate: toKSTString(contract.checkOutDate),
           totalDays: contract.totalDays,
           totalWeeks: contract.totalWeeks,
 
@@ -996,10 +1010,23 @@ const getContractDetail = async (req, res) => {
             email: contract.guest.email
           },
 
+          // 📊 호스트 정산 내역 (렌탈아이템은 플랫폼 수익이므로 제외)
+          hostSettlement: (() => {
+            const hasEzCleaningService = contract.roomSnapshot?.ezService?.cleaningService || false;
+            const s = calculateSettlementAmount(contract, [], { hasEzCleaningService });
+            return {
+              rentalFee: s.rentalFee,
+              maintenanceFee: s.maintenanceFee,
+              cleaningFee: s.cleaningFee,
+              discountAmount: contract.discountAmount,
+              hostPlatformFee: s.platformFee,
+              hostEarnings: s.grossSettlement,
+            };
+          })(),
+
           // 퇴실/보증금 상태 (PRD v2)
           checkoutStatus: contract.checkoutStatus,
           checkoutStatusLabel: Contract.CHECKOUT_STATUS_LABELS[contract.checkoutStatus],
-          hostPlatformFee: contract.hostPlatformFee,
           depositStatus: contract.depositStatus,
           depositDeduction: contract.depositDeduction,
           deductionReason: contract.deductionReason,
@@ -1047,7 +1074,7 @@ const approveContract = async (req, res) => {
 
   try {
     const { contractId } = req.params;
-    const { recommendedItems } = req.body;
+    const { recommendedItems } = req.body || {};
     const hostId = req.user.id;
 
     // 계약 조회
@@ -1198,8 +1225,8 @@ const approveContract = async (req, res) => {
             nickname: guest.nickname,
             profileImageUrl: toAbsoluteUrl(guest.profileImageUrl)
           },
-          checkInDate: contract.checkInDate,
-          checkOutDate: contract.checkOutDate,
+          checkInDate: toKSTString(contract.checkInDate),
+          checkOutDate: toKSTString(contract.checkOutDate),
           isActive: true
         });
       } catch (firestoreErr) {
@@ -1228,8 +1255,8 @@ const approveContract = async (req, res) => {
         SystemMessageTypes.CONTRACT_APPROVED,
         {
           contractId: contract.id,
-          checkInDate: contract.checkInDate,
-          checkOutDate: contract.checkOutDate,
+          checkInDate: toKSTString(contract.checkInDate),
+          checkOutDate: toKSTString(contract.checkOutDate),
           paymentDeadline: paymentDeadlineStr
         }
       ).catch(err => {
@@ -1978,7 +2005,7 @@ const requestRefund = async (req, res) => {
         finalRefundAmount: refund.finalRefundAmount,
         requestedAt: refund.requestedAt,
         approvedAt: refund.approvedAt,
-        estimatedCompletionDate
+        estimatedCompletionDate: toKSTString(estimatedCompletionDate)
       },
       message
     );
@@ -2410,7 +2437,8 @@ const confirmPayment = async (req, res) => {
     checkInNextDay.setHours(0, 0, 0, 0);
     const payoutAvailableDate = pgAvailableDate > checkInNextDay ? pgAvailableDate : checkInNextDay;
     const settlementExpectedDate = calculateSettlementDate(contract.checkInDate);
-    const settlementAmounts = calculateSettlementAmount(contract);
+    const hasEzCleaningService = contract.roomSnapshot?.ezService?.cleaningService || false;
+    const settlementAmounts = calculateSettlementAmount(contract, [], { hasEzCleaningService });
 
     const settlement = await Settlement.create({
       contractId: contract.id,
@@ -2421,8 +2449,8 @@ const confirmPayment = async (req, res) => {
       cleaningFee: settlementAmounts.cleaningFee,
       hostPlatformFee: settlementAmounts.platformFee,
       refundDeduction: 0,
-      grossAmount: settlementAmounts.grossSettlement,
-      netAmount: settlementAmounts.grossSettlement, // 환불 없으므로 동일
+      grossAmount: settlementAmounts.grossAmount,       // 할인/수수료 전 총액
+      netAmount: settlementAmounts.grossSettlement,     // 수수료 차감 후 (초기 환불 없음)
       expectedDate: settlementExpectedDate,
       payoutAvailableDate
     }, { transaction });
@@ -2463,7 +2491,7 @@ const confirmPayment = async (req, res) => {
           include: [{ model: RentalItem, as: 'rentalItem', attributes: ['name'] }]
         });
         if (orderItems.length > 0) {
-          optionItems = orderItems.map(i => `${i.rentalItem?.name || '옵션'} ${i.quantity}개`).join(', ');
+          optionItems = orderItems.map(i => `${i.rentalItem?.name || '옵션'} ${i.quantity}개`).join('\n');
         }
       } catch (rentalErr) {
         console.error('렌탈 아이템 조회 실패 (무시됨):', rentalErr);
@@ -2585,8 +2613,8 @@ const updatePendingRentalItems = async (req, res) => {
         code: 4701,
         message: '입주 5일 전까지만 렌탈 아이템을 수정할 수 있습니다'
       }, 400, {
-        checkInDate: contract.checkInDate,
-        modifiableUntil: modifiableUntil.toISOString()
+        checkInDate: toKSTString(contract.checkInDate),
+        modifiableUntil: toKSTString(modifiableUntil)
       });
     }
 

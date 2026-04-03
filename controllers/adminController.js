@@ -1,5 +1,5 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
-const { toDateStrKST } = require('../utils/dateHelper');
+const { toDateStrKST, toKSTString } = require('../utils/dateHelper');
 const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, ServiceTask, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
@@ -1331,8 +1331,8 @@ const getRoomManagementDetail = async (req, res) => {
         id: contract.id,
         guestName: contract.guest.name,
         guestPhone: contract.guest.phoneNumber,
-        checkInDate: contract.checkInDate,
-        checkOutDate: contract.checkOutDate,
+        checkInDate: toKSTString(contract.checkInDate),
+        checkOutDate: toKSTString(contract.checkOutDate),
         status: contract.status,
         totalAmount: contract.totalAmount,
         createdAt: contract.createdAt
@@ -1821,8 +1821,8 @@ const getRefunds = async (req, res) => {
           // 계약 정보
           contract: {
             id: refund.contract.id,
-            checkInDate: refund.contract.checkInDate,
-            checkOutDate: refund.contract.checkOutDate,
+            checkInDate: toKSTString(refund.contract.checkInDate),
+            checkOutDate: toKSTString(refund.contract.checkOutDate),
             room: {
               id: refund.contract.room.id,
               roomName: refund.contract.room.roomName,
@@ -1920,8 +1920,8 @@ const getRefundDetail = async (req, res) => {
           // 계약 정보
           contract: {
             id: refund.contract.id,
-            checkInDate: refund.contract.checkInDate,
-            checkOutDate: refund.contract.checkOutDate,
+            checkInDate: toKSTString(refund.contract.checkInDate),
+            checkOutDate: toKSTString(refund.contract.checkOutDate),
             totalDays: refund.contract.totalDays,
             room: refund.contract.room,
             host: refund.contract.host,
@@ -1931,7 +1931,7 @@ const getRefundDetail = async (req, res) => {
           // 환불 계산 정보
           policyTypeUsed: refund.policyTypeUsed,
           cancellationDate: refund.cancellationDate,
-          checkInDate: refund.checkInDate,
+          checkInDate: toKSTString(refund.checkInDate),
           daysBeforeCheckin: refund.daysBeforeCheckin,
           isSameDayCancellation: refund.isSameDayCancellation,
 
@@ -2247,7 +2247,7 @@ const getRentalOrders = async (req, res) => {
     if (startDate || endDate) {
       where.createdAt = {};
       if (startDate) {
-        where.createdAt[Op.gte] = new Date(startDate);
+        where.createdAt[Op.gte] = new Date(startDate + 'T00:00:00');
       }
       if (endDate) {
         where.createdAt[Op.lte] = new Date(endDate + 'T23:59:59');
@@ -2307,8 +2307,8 @@ const getRentalOrders = async (req, res) => {
           id: order.contract.id,
           orderId: order.contract.orderId,
           status: order.contract.status,
-          checkInDate: order.contract.checkInDate,
-          checkOutDate: order.contract.checkOutDate,
+          checkInDate: toKSTString(order.contract.checkInDate),
+          checkOutDate: toKSTString(order.contract.checkOutDate),
           guest: order.contract.guest,
           room: order.contract.room
         } : null,
@@ -2410,8 +2410,8 @@ const getRentalOrderDetail = async (req, res) => {
           id: order.contract.id,
           orderId: order.contract.orderId,
           status: order.contract.status,
-          checkInDate: order.contract.checkInDate,
-          checkOutDate: order.contract.checkOutDate,
+          checkInDate: toKSTString(order.contract.checkInDate),
+          checkOutDate: toKSTString(order.contract.checkOutDate),
           guest: order.contract.guest,
           host: order.contract.host,
           room: order.contract.room
@@ -2512,8 +2512,8 @@ const getContractRentalHistory = async (req, res) => {
         id: contract.id,
         orderId: contract.orderId,
         status: contract.status,
-        checkInDate: contract.checkInDate,
-        checkOutDate: contract.checkOutDate,
+        checkInDate: toKSTString(contract.checkInDate),
+        checkOutDate: toKSTString(contract.checkOutDate),
         guest: contract.guest,
         room: contract.room
       },
@@ -3291,9 +3291,9 @@ const getDepositHolds = async (req, res) => {
 
     if (startDate || endDate) {
       contractWhere.holdRequestedAt = {};
-      if (startDate) contractWhere.holdRequestedAt[Op.gte] = new Date(startDate);
+      if (startDate) contractWhere.holdRequestedAt[Op.gte] = new Date(startDate + 'T00:00:00');
       if (endDate) {
-        const end = new Date(endDate);
+        const end = new Date(endDate + 'T00:00:00');
         end.setHours(23, 59, 59, 999);
         contractWhere.holdRequestedAt[Op.lte] = end;
       }
@@ -3423,8 +3423,8 @@ const getDepositHoldDetail = async (req, res) => {
     return success(res, {
       // 기본 계약 정보
       contractId: contract.id,
-      checkInDate: contract.checkInDate,
-      checkOutDate: contract.checkOutDate,
+      checkInDate: toKSTString(contract.checkInDate),
+      checkOutDate: toKSTString(contract.checkOutDate),
       guest: contract.guest,
       host: contract.host,
       room: contract.room,
@@ -4458,8 +4458,8 @@ const getMissingNotificationQueue = async (req, res) => {
             contractId: contract.id,
             status: contract.status,
             missingType: type,
-            checkInDate: contract.checkInDate,
-            checkOutDate: contract.checkOutDate,
+            checkInDate: toKSTString(contract.checkInDate),
+            checkOutDate: toKSTString(contract.checkOutDate),
             fireAt: fireAt ? fireAt.toISOString() : null
           });
         }
@@ -4489,8 +4489,8 @@ const getMissingNotificationQueue = async (req, res) => {
             contractId: contract.id,
             status: contract.status,
             missingType: type,
-            checkInDate: contract.checkInDate,
-            checkOutDate: contract.checkOutDate,
+            checkInDate: toKSTString(contract.checkInDate),
+            checkOutDate: toKSTString(contract.checkOutDate),
             fireAt: fireAt ? fireAt.toISOString() : null
           });
         }

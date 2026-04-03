@@ -29,6 +29,7 @@ const {
   RENTAL_CANCEL_REQUEST_DAYS
 } = require('../utils/rentalOrderHelper');
 const NotificationService = require('../services/notificationService');
+const { toKSTString } = require('../utils/dateHelper');
 
 /**
  * 계약별 렌탈 주문 목록 조회
@@ -851,8 +852,8 @@ const getAvailableRentalItems = async (req, res) => {
     return success(res, {
       modifiable: modifiableInfo.modifiable,
       modifiableUntil: modifiableInfo.modifiableUntil,
-      checkInDate: contract.checkInDate,
-      checkOutDate: contract.checkOutDate,
+      checkInDate: toKSTString(contract.checkInDate),
+      checkOutDate: toKSTString(contract.checkOutDate),
       items: itemsWithAvailability
     });
   } catch (err) {
