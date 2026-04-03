@@ -678,19 +678,9 @@ class NotificationService {
   static async notifyInquiryAnswered(inquiry) {
     const msg = NotificationMessages.inquiryAnswered();
 
-    // 문의 작성자에게 게스트/호스트 모드 둘 다 알림
     await this.create({
       userId: inquiry.userId,
-      userMode: 'guest',
-      type: 'INQUIRY_ANSWERED',
-      title: msg.title,
-      message: msg.message,
-      relatedInquiryId: inquiry.id
-    });
-
-    await this.create({
-      userId: inquiry.userId,
-      userMode: 'host',
+      userMode: inquiry.userType,
       type: 'INQUIRY_ANSWERED',
       title: msg.title,
       message: msg.message,

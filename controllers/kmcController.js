@@ -256,6 +256,9 @@ const verifyResult = async (req, res) => {
  */
 const handleCallback = async (req, res) => {
   try {
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip;
+    console.log(`[KMC] callback 수신 - IP: ${clientIp}, x-forwarded-for: ${req.headers['x-forwarded-for'] || '없음'}`);
+
     const { apiToken, certNum } = req.body;
 
     if (!apiToken || !certNum) {
