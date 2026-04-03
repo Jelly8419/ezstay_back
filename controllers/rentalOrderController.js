@@ -718,8 +718,9 @@ const cancelPaidRentalOrderByGuest = async (req, res) => {
     const newBalance = parseFloat(rentalPayment.balanceAmount) - refundAmount;
     const canceltype = newBalance === 0 ? '0' : '1';
 
+    let pgCancelResp;
     try {
-      await paytagClient.cancelPayment({
+      pgCancelResp = await paytagClient.cancelPayment({
         orderno, orgpaydate, orgtranamt, loginid,
         cancelamt: refundAmount,
         canceltype
@@ -744,7 +745,8 @@ const cancelPaidRentalOrderByGuest = async (req, res) => {
         userId,
         'GUEST',
         req,
-        dbTransaction
+        dbTransaction,
+        { pgResponse: pgCancelResp }
       );
       await dbTransaction.commit();
 

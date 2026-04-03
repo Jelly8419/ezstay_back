@@ -93,13 +93,13 @@ const templates = {
   payment_completed_guest: {
     tplCode: 'UF_9063',
     eventLabel: '게스트 계약 결제 완료_게스트',
-    varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일', amount: '결제총액', optionItems: '상품명, 상품개수' },
+    varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일', amount: '결제총액', optionItems: '상품명, 개수' },
     fallbackContent:
       `[계약 확정 안내]\n\n` +
       `방 이름: #{방이름}\n` +
       `계약 기간: #{입주일} ~ #{퇴실일}\n` +
       `결제 금액: #{결제총액}원\n` +
-      `옵션 상품: #{상품명, 상품개수}\n\n` +
+      `옵션 상품: #{상품명, 개수}\n\n` +
       `결제가 완료되어 계약이 확정되었습니다.\n` +
       `입주 문의는 호스트님에게 채팅으로 할 수 있어요.`,
     buildFallbackSMS: (data) =>
@@ -154,7 +154,7 @@ const templates = {
   // 4-4. 입주 당일 안내
   // =====================================================
   checkin_today_guest: {
-    tplCode: 'UF_8712',
+    tplCode: 'UG_6968',
     eventLabel: '입주 당일 안내_게스트',
     varMap: { roomName: '방이름', address: '상세주소' },
     fallbackContent:

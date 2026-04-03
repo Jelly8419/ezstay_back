@@ -171,6 +171,12 @@ const AdminRefund = sequelize.define('AdminRefund', {
     field: 'admin_notes',
     comment: '관리자 메모'
   },
+  pgResponse: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    field: 'pg_response',
+    comment: 'PG 취소 응답 원문'
+  },
   completedAt: {
     type: DataTypes.DATE,
     allowNull: true,
