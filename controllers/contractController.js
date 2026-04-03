@@ -1633,6 +1633,31 @@ const requestRefund = async (req, res) => {
       );
     }
 
+    // 체크인 당일 + 결제 당일 아닌 경우 환불 요청 차단
+    // (체크인 당일 결제한 경우는 90% 자동 승인 허용)
+    const now = new Date();
+    const checkInDateForBlock = new Date(contract.checkInDate);
+    const isSameDayFn = (d1, d2) => {
+      const a = new Date(d1), b = new Date(d2);
+      return a.getFullYear() === b.getFullYear() &&
+             a.getMonth() === b.getMonth() &&
+             a.getDate() === b.getDate();
+    };
+    const isCheckInDay = isSameDayFn(checkInDateForBlock, now);
+    const isPaidToday = isSameDayFn(contract.paidAt || contract.createdAt, now);
+
+    if (isCheckInDay && !isPaidToday) {
+      await transaction.rollback();
+      return error(
+        res,
+        {
+          code: 4505,
+          message: '체크인 당일에는 결제 당일 취소만 가능합니다. 관리자에게 문의해주세요.'
+        },
+        400
+      );
+    }
+
     // 이미 환불 요청이 있는지 확인
     const existingRefund = await Refund.findOne({
       where: {
@@ -1712,7 +1737,6 @@ const requestRefund = async (req, res) => {
     const refundData = refundResult.data;
 
     // 입주 전 자동 승인 여부 판단
-    const now = new Date();
     const checkInDate = new Date(contract.checkInDate);
     const isBeforeCheckIn = now < checkInDate;
 

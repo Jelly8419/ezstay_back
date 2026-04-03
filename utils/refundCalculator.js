@@ -78,26 +78,23 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
     let applicableRuleDescription = '';
     let applicableRule;
 
-    // 4-1. 결제 당일 취소인 경우 결제 당일 취소 규칙 우선 적용
+    // 4-1. 결제 당일 취소인 경우 당일 규칙과 기간별 규칙 중 높은 환불율 적용
     if (isSameDayCancellation) {
-      applicableRule = policy.rules.find(rule => rule.isSameDayCancellation === true);
+      const sameDayRule = policy.rules.find(rule => rule.isSameDayCancellation === true);
+      const periodRule = findApplicableRule(policy.rules, daysBeforeCheckin);
 
-      if (applicableRule) {
-        refundRate = parseFloat(applicableRule.refundRate);
-        applicableRuleDescription = applicableRule.description || '결제 당일 취소';
+      const sameDayRate = sameDayRule ? parseFloat(sameDayRule.refundRate) : 0;
+      const periodRate = periodRule ? parseFloat(periodRule.refundRate) : 0;
+
+      // 둘 중 높은 환불율 적용 (게스트에게 유리한 쪽)
+      refundRate = Math.max(sameDayRate, periodRate);
+
+      if (refundRate === periodRate && periodRate > sameDayRate) {
+        applicableRuleDescription = periodRule.description || '해당 기간 환불 규칙 (당일 취소보다 유리)';
+      } else if (sameDayRule) {
+        applicableRuleDescription = sameDayRule.description || '결제 당일 취소';
       } else {
-        // DB에 결제 당일 취소 규칙이 없는 경우
-        // 먼저 기간별 규칙 확인 (무료 취소 기간인지 체크)
-        applicableRule = findApplicableRule(policy.rules, daysBeforeCheckin);
-        if (applicableRule && parseFloat(applicableRule.refundRate) === 100) {
-          // 무료 취소 기간에 해당 → 100% 환불
-          refundRate = 100;
-          applicableRuleDescription = applicableRule.description || '무료 취소 기간';
-        } else {
-          // 무료 취소 기간 아님 → 결제 당일 상위 정책 적용: 임대료 10% 위약금
-          refundRate = 90;
-          applicableRuleDescription = '결제 당일 취소 (상위 정책: 임대료 10% 위약금)';
-        }
+        applicableRuleDescription = '환불 불가';
       }
     } else {
       // 4-2. 계약 당일이 아닌 경우 기간별 규칙 적용
