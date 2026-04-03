@@ -88,13 +88,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Rate Limiting
 const { generalLimiter } = require('./middleware/rateLimiter');
-// 지도 API는 Rate Limiting 제외 (빈번한 요청 필요)
-app.use('/api/', (req, res, next) => {
-  if (req.path.startsWith('/rooms/map')) {
-    return next(); // Rate Limiter 건너뛰기
-  }
-  generalLimiter(req, res, next);
-});
+app.use('/api/', generalLimiter);
 
 // ========================================
 // 정적 파일 제공 (업로드된 이미지)
