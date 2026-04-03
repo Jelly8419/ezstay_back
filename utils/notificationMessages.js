@@ -117,27 +117,23 @@ const NotificationMessages = {
 
   /**
    * 입주 당일 - 호스트에게
-   * @param {Object} metadata - { guestName, guestPhoneNumber }
+   * @param {Object} metadata - { guestName }
    */
   checkinTodayHost: (metadata = {}) => {
-    const { guestName = '게스트', guestPhoneNumber = '' } = metadata;
-    const phoneInfo = guestPhoneNumber ? ` 또는 ${guestPhoneNumber}로` : '로';
+    const { guestName = '게스트' } = metadata;
     return {
       title: '입주 안내',
-      message: `오늘 ${guestName}님이 입주 예정입니다. 입주 안내를 하지 않았다면 메시지${phoneInfo} 안내해주세요.`
+      message: `오늘 ${guestName}님이 입주 예정입니다. 입주 안내를 하지 않았다면 메시지 또는 전화로 안내해주세요.`
     };
   },
 
   /**
    * 입주 당일 - 게스트에게
-   * @param {Object} metadata - { hostPhoneNumber }
    */
-  checkinTodayGuest: (metadata = {}) => {
-    const { hostPhoneNumber = '' } = metadata;
-    const phoneInfo = hostPhoneNumber ? ` 또는 ${hostPhoneNumber}로` : '로';
+  checkinTodayGuest: () => {
     return {
       title: '입주 안내',
-      message: `오늘은 입주일입니다. 입주 이후 이지스테이를 통해 입주 확정을 부탁드립니다. 입주 안내를 받지 못했다면 메시지${phoneInfo} 문의해주세요.`
+      message: `오늘은 입주일입니다. 입주 이후 이지스테이를 통해 입주 확정을 부탁드립니다. 입주 안내를 받지 못했다면 메시지 또는 전화로 문의해주세요.`
     };
   },
 
