@@ -1876,17 +1876,19 @@ const requestRefund = async (req, res) => {
 
       if (payment) {
         try {
-          const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+          const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(payment);
           const cancelamt = refundData.finalRefundAmount;
           const newBalance = payment.balanceAmount - cancelamt;
           const canceltype = newBalance === 0 ? '0' : '1';
 
-          const cancelResp = await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, cancelamt, canceltype });
+          const cancelResp = await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, loginid, cancelamt, canceltype });
 
           await payment.update({
             balanceAmount: newBalance,
             status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
           }, { transaction });
+
+          await refund.update({ pgResponse: cancelResp }, { transaction });
 
           console.log(`[requestRefund] PayTag 취소 완료: contractId=${contractId}, cancelamt=${cancelamt}, restamt=${cancelResp.restamt}`);
 
@@ -2861,7 +2863,7 @@ const confirmCheckout = async (req, res) => {
         });
 
         if (payment) {
-          const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+          const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(payment);
           const newBalance = payment.balanceAmount - refundableDeposit;
           const canceltype = newBalance === 0 ? '0' : '1';
 
@@ -2869,6 +2871,7 @@ const confirmCheckout = async (req, res) => {
             orderno,
             orgpaydate,
             orgtranamt,
+            loginid,
             cancelamt: refundableDeposit,
             canceltype
           });
@@ -3053,12 +3056,12 @@ const cancelContractByHost = async (req, res) => {
 
       if (payment) {
         try {
-          const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+          const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(payment);
           const cancelamt = refundData.finalRefundAmount;
           const newBalance = payment.balanceAmount - cancelamt;
           const canceltype = newBalance === 0 ? '0' : '1';
 
-          const cancelResp = await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, cancelamt, canceltype });
+          const cancelResp = await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, loginid, cancelamt, canceltype });
 
           await payment.update({
             balanceAmount: newBalance,
@@ -3751,7 +3754,7 @@ const acceptDepositAgreement = async (req, res) => {
     // refundableDeposit > 0 이고 payment가 있는 경우에만 실행
     if (refundableDeposit > 0 && payment) {
       try {
-        const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams(payment);
+        const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(payment);
         const newBalance = payment.balanceAmount - refundableDeposit;
         const canceltype = newBalance === 0 ? '0' : '1';
 
@@ -3759,6 +3762,7 @@ const acceptDepositAgreement = async (req, res) => {
           orderno,
           orgpaydate,
           orgtranamt,
+          loginid,
           cancelamt: refundableDeposit,
           canceltype
         });

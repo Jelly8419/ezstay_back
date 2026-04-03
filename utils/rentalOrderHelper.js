@@ -619,7 +619,7 @@ async function confirmRentalOrderPayment(rentalOrder, paymentKey, paymentMethod,
  * @param {Transaction} transaction - Sequelize 트랜잭션
  * @returns {Promise<Object>} 환불 정보
  */
-async function cancelPaidRentalOrder(rentalOrder, reason, actorId, actor, req, transaction) {
+async function cancelPaidRentalOrder(rentalOrder, reason, actorId, actor, req, transaction, options = {}) {
   if (!['PAID', 'PARTIAL_REFUND'].includes(rentalOrder.status)) {
     throw new Error('결제된 주문만 환불할 수 있습니다');
   }
@@ -733,7 +733,8 @@ async function cancelPaidRentalOrder(rentalOrder, reason, actorId, actor, req, t
       shippingDeduction,
       deliveryStatus: rentalOrder.deliveryStatus,
       reason,
-      paymentKey: rentalPayment.paymentKey
+      paymentKey: rentalPayment.paymentKey,
+      ...(options.pgResponse && { pgResponse: options.pgResponse })
     },
     description: shippingDeduction > 0
       ? `주문 전체 취소 및 환불 (배송비 ${shippingDeduction}원 차감): ${reason || '사유 없음'}`

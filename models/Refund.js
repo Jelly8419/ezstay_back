@@ -335,6 +335,12 @@ const Refund = sequelize.define('Refund', {
     field: 'refund_method',
     comment: '환불 방법'
   },
+  pgResponse: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    field: 'pg_response',
+    comment: 'PG 취소 응답 원문'
+  },
   refundAccountInfo: {
     type: DataTypes.JSON,
     allowNull: true,

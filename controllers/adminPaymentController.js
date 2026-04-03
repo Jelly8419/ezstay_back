@@ -747,6 +747,7 @@ exports.processAdminRefund = async (req, res) => {
         canceltype
       });
       pgReceiptUrl = pgResponse?.receipt_url || null;
+      await adminRefund.update({ pgResponse }, { transaction });
     } catch (pgErr) {
       await transaction.rollback();
       if (pgErr.paytagErrorCode === '1023') {
@@ -1364,8 +1365,9 @@ exports.processAdminRentalRefund = async (req, res) => {
 
     // ── 2단계: PG 취소 먼저 (트랜잭션 밖) ──
     const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(rentalPayment);
+    let pgCancelResp;
     try {
-      await paytagClient.cancelPayment({
+      pgCancelResp = await paytagClient.cancelPayment({
         orderno, orgpaydate, orgtranamt, loginid,
         cancelamt: finalRefundAmount,
         canceltype
@@ -1421,7 +1423,8 @@ exports.processAdminRentalRefund = async (req, res) => {
             id: orderItem.id,
             name: orderItem.rentalItem?.name,
             refundAmount: itemAmt
-          }))
+          })),
+          pgResponse: pgCancelResp
         },
         transaction
       });
@@ -1746,8 +1749,9 @@ exports.approveRentalRefundRequest = async (req, res) => {
     const newBalance = parseFloat(rentalPayment.balanceAmount) - finalRefundAmount;
     const canceltype = newBalance === 0 ? '0' : '1';
 
+    let pgCancelResp;
     try {
-      await paytagClient.cancelPayment({
+      pgCancelResp = await paytagClient.cancelPayment({
         orderno, orgpaydate, orgtranamt, loginid,
         cancelamt: finalRefundAmount,
         canceltype
@@ -1834,7 +1838,8 @@ exports.approveRentalRefundRequest = async (req, res) => {
           finalRefundAmount,
           deliveryStatusSnapshot: refundRequest.deliveryStatusSnapshot,
           retrievalStatus: newRetrievalStatus,
-          adminNotes: adminNotes || null
+          adminNotes: adminNotes || null,
+          pgResponse: pgCancelResp
         },
         description: shippingDeduction > 0
           ? `입주중 환불 요청 수락 (수거비 ${shippingDeduction}원 차감): ${refundRequest.cancelReason || ''}`
