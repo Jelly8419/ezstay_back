@@ -394,43 +394,6 @@ const changeNickname = async (req, res) => {
   }
 };
 
-// 연락처 변경
-const changePhoneNumber = async (req, res) => {
-  try {
-    const { phoneNumber } = req.body;
-    const userId = req.user.id;
-
-    // 필수 필드 검증
-    if (!phoneNumber) {
-      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
-    }
-
-    // 전화번호 형식 검증
-    const phoneValidation = validatePhoneNumber(phoneNumber);
-    if (!phoneValidation.valid) {
-      return error(res, { code: 4008, message: phoneValidation.message }, 400);
-    }
-
-    // 사용자 정보 업데이트
-    const [updated] = await User.update({
-      phoneNumber: phoneNumber,
-      phoneVerified: true,
-      phoneVerifiedAt: new Date()
-    }, {
-      where: { id: userId }
-    });
-
-    if (updated === 0) {
-      return error(res, ErrorCodes.USER_NOT_FOUND, 404);
-    }
-
-    return success(res, { phoneNumber }, '연락처가 성공적으로 변경되었습니다.');
-
-  } catch (err) {
-    console.error('연락처 변경 오류:', err);
-    return error(res, ErrorCodes.INTERNAL_ERROR, 500, process.env.NODE_ENV === 'development' ? err.message : undefined);
-  }
-};
 
 // 회원 탈퇴 (Soft Delete)
 const deleteAccount = async (req, res) => {
@@ -477,6 +440,5 @@ module.exports = {
   getProfile,
   changePassword,
   changeNickname,
-  changePhoneNumber,
   deleteAccount
 };
