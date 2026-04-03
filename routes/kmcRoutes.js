@@ -16,8 +16,10 @@ const kmcIpWhitelist = (req, res, next) => {
     return next(); // 환경변수 미설정 시 비활성화 (개발 환경)
   }
 
-  const clientIp = req.ip;
+  // Cloudflare 등 프록시 뒤에서는 x-forwarded-for 첫 번째 값이 실제 발신 IP
+  const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip;
   if (!allowedIps.includes(clientIp)) {
+    console.warn(`[KMC] whitelist 차단 - clientIp: ${clientIp}, x-forwarded-for: ${req.headers['x-forwarded-for'] || '없음'}`);
     return res.status(403).json({ success: false, message: 'Forbidden' });
   }
   next();
