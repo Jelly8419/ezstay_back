@@ -58,6 +58,7 @@ const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
     rentalFee = 0,
     maintenanceFee = 0,
     cleaningFee = 0,
+    discountAmount = 0,
     hostPlatformFee: storedHostPlatformFee
   } = contract;
 
@@ -66,17 +67,20 @@ const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
   // EZ청소서비스 사용 시 청소비는 플랫폼이 가져감 (호스트 정산에서 제외)
   const hostCleaningFee = hasEzCleaningService ? 0 : cleaningFee;
 
-  // 소계: 임대료 + 관리비 + 청소비(EZ서비스 미사용 시만)
-  const subtotal = rentalFee + maintenanceFee + hostCleaningFee;
+  // 총액 (할인 전, 수수료 전) — gross_amount 기준
+  const grossAmount = rentalFee + maintenanceFee + hostCleaningFee;
+
+  // 할인 적용 후 소계 — 수수료 계산 기준
+  const subtotal = grossAmount - discountAmount;
 
   // 호스트 플랫폼 수수료 (3.3%)
   // DB에 저장된 값 사용 (할인 적용 후 기준으로 계약 시 계산됨)
-  // 없으면 동적 계산 (이전 계약 호환, 할인 미반영)
+  // 없으면 동적 계산 (이전 계약 호환)
   const hostPlatformFee = storedHostPlatformFee != null
     ? storedHostPlatformFee
     : Math.floor(subtotal * HOST_PLATFORM_FEE_RATE);
 
-  // 기본 정산 금액 (호스트 수령액)
+  // 수수료 차감 후 정산 기준액
   const grossSettlement = subtotal - hostPlatformFee;
 
   // 환불 금액 계산 (완료된 환불만)
@@ -106,11 +110,13 @@ const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
     maintenanceFee,
     cleaningFee: hostCleaningFee,  // 호스트에게 정산되는 청소비
     originalCleaningFee: cleaningFee,  // 원래 청소비 (표시용)
+    discountAmount,
     hasEzCleaningService,
-    subtotal,
+    grossAmount,      // 할인/수수료 전 총액 → DB gross_amount
+    subtotal,         // 할인 적용 후 소계
     platformFee: hostPlatformFee,  // 호스트 수수료 (3.3%)
     platformFeeRate: HOST_PLATFORM_FEE_RATE * 100,  // 3.3%
-    grossSettlement,
+    grossSettlement,  // subtotal - hostPlatformFee (환불 전 호스트 수령 기준액)
     refund: {
       hasRefund: totalRefundAmount > 0,
       rentalFeeRefund,
@@ -118,7 +124,7 @@ const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
       cleaningFeeRefund,
       totalRefundAmount
     },
-    finalAmount
+    finalAmount       // grossSettlement - totalRefundAmount → DB net_amount
   };
 };
 

@@ -1,11 +1,12 @@
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
 
 /**
  * 인증된 유저는 userId 기준, 비인증은 IP 기준
  * generalLimiter, adminApiLimiter처럼 인증 후 라우트에만 사용
  */
 const userAwareKeyGenerator = (req) => {
-  return req.user?.id ? `user_${req.user.id}` : req.ip;
+  return req.user?.id ? `user_${req.user.id}` : ipKeyGenerator(req);
 };
 
 /**

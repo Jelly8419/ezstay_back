@@ -804,8 +804,19 @@ const getHostContracts = async (req, res) => {
           deposit: contract.deposit,
           finalTotalAmount: contract.finalTotalAmount,
 
-          // 📊 호스트 실수령액 (플랫폼 수수료 차감 후)
-          hostEarnings: contract.totalUsageFee - contract.platformFee,
+          // 📊 호스트 정산 내역 (렌탈아이템은 플랫폼 수익이므로 제외)
+          hostSettlement: (() => {
+            const hasEzCleaningService = contract.roomSnapshot?.ezService?.cleaningService || false;
+            const s = calculateSettlementAmount(contract, [], { hasEzCleaningService });
+            return {
+              rentalFee: s.rentalFee,
+              maintenanceFee: s.maintenanceFee,
+              cleaningFee: s.cleaningFee,
+              discountAmount: contract.discountAmount,
+              hostPlatformFee: s.platformFee,
+              hostEarnings: s.grossSettlement,
+            };
+          })(),
 
           // 렌탈 아이템
           rentalItems: contract.rentalItems,
@@ -826,7 +837,6 @@ const getHostContracts = async (req, res) => {
           // 퇴실/보증금 상태 (PRD v2)
           checkoutStatus: contract.checkoutStatus,
           checkoutStatusLabel: Contract.CHECKOUT_STATUS_LABELS[contract.checkoutStatus],
-          hostPlatformFee: contract.hostPlatformFee,
           depositStatus: contract.depositStatus,
           checkoutRequested: contract.checkoutRequested,
           hostCheckedOut: contract.hostCheckedOut,
@@ -1000,10 +1010,23 @@ const getContractDetail = async (req, res) => {
             email: contract.guest.email
           },
 
+          // 📊 호스트 정산 내역 (렌탈아이템은 플랫폼 수익이므로 제외)
+          hostSettlement: (() => {
+            const hasEzCleaningService = contract.roomSnapshot?.ezService?.cleaningService || false;
+            const s = calculateSettlementAmount(contract, [], { hasEzCleaningService });
+            return {
+              rentalFee: s.rentalFee,
+              maintenanceFee: s.maintenanceFee,
+              cleaningFee: s.cleaningFee,
+              discountAmount: contract.discountAmount,
+              hostPlatformFee: s.platformFee,
+              hostEarnings: s.grossSettlement,
+            };
+          })(),
+
           // 퇴실/보증금 상태 (PRD v2)
           checkoutStatus: contract.checkoutStatus,
           checkoutStatusLabel: Contract.CHECKOUT_STATUS_LABELS[contract.checkoutStatus],
-          hostPlatformFee: contract.hostPlatformFee,
           depositStatus: contract.depositStatus,
           depositDeduction: contract.depositDeduction,
           deductionReason: contract.deductionReason,
@@ -2414,7 +2437,8 @@ const confirmPayment = async (req, res) => {
     checkInNextDay.setHours(0, 0, 0, 0);
     const payoutAvailableDate = pgAvailableDate > checkInNextDay ? pgAvailableDate : checkInNextDay;
     const settlementExpectedDate = calculateSettlementDate(contract.checkInDate);
-    const settlementAmounts = calculateSettlementAmount(contract);
+    const hasEzCleaningService = contract.roomSnapshot?.ezService?.cleaningService || false;
+    const settlementAmounts = calculateSettlementAmount(contract, [], { hasEzCleaningService });
 
     const settlement = await Settlement.create({
       contractId: contract.id,
@@ -2425,8 +2449,8 @@ const confirmPayment = async (req, res) => {
       cleaningFee: settlementAmounts.cleaningFee,
       hostPlatformFee: settlementAmounts.platformFee,
       refundDeduction: 0,
-      grossAmount: settlementAmounts.grossSettlement,
-      netAmount: settlementAmounts.grossSettlement, // 환불 없으므로 동일
+      grossAmount: settlementAmounts.grossAmount,       // 할인/수수료 전 총액
+      netAmount: settlementAmounts.grossSettlement,     // 수수료 차감 후 (초기 환불 없음)
       expectedDate: settlementExpectedDate,
       payoutAvailableDate
     }, { transaction });
