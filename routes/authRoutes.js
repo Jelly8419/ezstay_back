@@ -4,7 +4,7 @@ const { register, login, refreshToken, logout, getProfile, devBypassLogin, reset
 const { kakaoLogin } = require('../controllers/oauthController');
 const { sendVerificationCode, verifyEmail, resendVerificationCode } = require('../controllers/emailVerificationController');
 const { authenticateToken } = require('../middleware/auth');
-const { authLimiter } = require('../middleware/rateLimiter');
+const { authLimiter, loginLimiter, passwordResetLimiter } = require('../middleware/rateLimiter');
 
 // === 이메일 인증 관련 라우트 (Rate Limiting 적용) ===
 router.post('/send-verification-code', authLimiter, sendVerificationCode);
@@ -13,10 +13,10 @@ router.post('/resend-verification-code', authLimiter, resendVerificationCode);
 
 // === 일반 회원가입/로그인 (Rate Limiting 적용) ===
 router.post('/register', authLimiter, register);
-router.post('/login', authLimiter, login);
+router.post('/login', loginLimiter, login);
 
 // === 비밀번호 재설정 (비로그인, 이메일 인증 후) ===
-router.post('/reset-password', authLimiter, resetPassword);
+router.post('/reset-password', passwordResetLimiter, resetPassword);
 router.post('/refresh', refreshToken);
 router.post('/logout', authenticateToken, logout);
 

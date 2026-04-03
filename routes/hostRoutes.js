@@ -37,7 +37,7 @@ const {
 } = require('../controllers/settlementController');
 const { authenticateToken } = require('../middleware/auth');
 const { uploadRoomPhotos } = require('../middleware/upload');
-const { uploadLimiter } = require('../middleware/rateLimiter');
+const { uploadLimiter, duplicateLimiter } = require('../middleware/rateLimiter');
 const { requireUserInfo } = require('../middleware/validation');
 
 // 인증 필요한 모든 라우트에 미들웨어 적용
@@ -86,7 +86,7 @@ router.get('/rooms/:roomId', getRoom);
 router.patch('/rooms/:roomId/status', updateRoomStatus);
 
 // 14. 방 복제
-router.post('/rooms/:roomId/duplicate', uploadLimiter, duplicateRoom);
+router.post('/rooms/:roomId/duplicate', duplicateLimiter, duplicateRoom);
 
 // 15. 방 삭제
 router.delete('/rooms/:roomId', deleteRoom);
