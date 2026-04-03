@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { requestVerification, verifyResult, handleCallback } = require('../controllers/kmcController');
 const { authLimiter } = require('../middleware/rateLimiter');
+const { optionalAuth } = require('../middleware/auth');
 
 /**
  * KMC 서버 IP 화이트리스트 미들웨어
@@ -31,7 +32,7 @@ router.post('/kmc/request', authLimiter, requestVerification);
 // KMC 본인인증 결과 콜백 (KMC 서버가 직접 POST, CORS 별도 허용)
 router.post('/kmc/callback', kmcIpWhitelist, handleCallback);
 
-// KMC 본인인증 결과 검증 (프론트에서 호출)
-router.post('/kmc/verify', authLimiter, verifyResult);
+// KMC 본인인증 결과 검증 (프론트에서 호출, 로그인 상태면 req.user 세팅)
+router.post('/kmc/verify', authLimiter, optionalAuth, verifyResult);
 
 module.exports = router;
