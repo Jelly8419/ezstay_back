@@ -2463,7 +2463,7 @@ const confirmPayment = async (req, res) => {
           include: [{ model: RentalItem, as: 'rentalItem', attributes: ['name'] }]
         });
         if (orderItems.length > 0) {
-          optionItems = orderItems.map(i => `${i.rentalItem?.name || '옵션'} ${i.quantity}개`).join(', ');
+          optionItems = orderItems.map(i => `${i.rentalItem?.name || '옵션'} ${i.quantity}개`).join('\n');
         }
       } catch (rentalErr) {
         console.error('렌탈 아이템 조회 실패 (무시됨):', rentalErr);
