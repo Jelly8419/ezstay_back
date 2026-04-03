@@ -697,6 +697,9 @@ const getGuestContracts = async (req, res) => {
           // 🛒 렌탈 아이템 정보
           rentalItems: rentalItemsData,
 
+          // 호스트 추천 옵션 상품 (APPROVED 상태일 때만)
+          recommendedItems: contract.status === 'APPROVED' ? (contract.recommendedItems || null) : undefined,
+
           // 퇴실/보증금 상태 (프론트 카드 액션 결정용)
           checkoutStatus: contract.checkoutStatus,
           depositStatus: contract.depositStatus,
