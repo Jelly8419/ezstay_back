@@ -833,7 +833,7 @@ const getAvailableRentalItems = async (req, res) => {
           }
         }) || 0;
 
-        const availableQuantity = Math.max(0, item.availableStock - reservedQuantity);
+        const availableQuantity = Math.max(0, item.totalStock - reservedQuantity);
 
         return {
           id: item.id,
@@ -950,6 +950,35 @@ const cancelRentalItemsByGuest = async (req, res) => {
             cancelReason: reason || '게스트 취소',
             refundAmount: parseFloat(item.totalPrice)
           }, { transaction: dbTx });
+        }
+
+        // 재고 복구: RENTAL → Reservation CANCELLED, SALE → 배송 전이면 totalStock 복구
+        const rentalTypeItemIds = [];
+        for (const item of items) {
+          if (item.rentalItem?.salesType === 'SALE') {
+            // SALE: 배송 전(PENDING)에만 재고 복구 (groupItemsByOrder에서 PENDING만 통과하므로 항상 해당)
+            await RentalItem.increment('totalStock', {
+              by: item.quantity,
+              where: { id: item.rentalItemId },
+              transaction: dbTx
+            });
+          } else {
+            rentalTypeItemIds.push(item.rentalItemId);
+          }
+        }
+
+        if (rentalTypeItemIds.length > 0) {
+          await RentalItemReservation.update(
+            { status: 'CANCELLED' },
+            {
+              where: {
+                rentalOrderId: rentalOrder.id,
+                rentalItemId: { [Op.in]: rentalTypeItemIds },
+                status: { [Op.ne]: 'CANCELLED' }
+              },
+              transaction: dbTx
+            }
+          );
         }
 
         await rentalPayment.update({

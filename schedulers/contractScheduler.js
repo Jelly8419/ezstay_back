@@ -8,6 +8,7 @@ const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { calculateSettlementDate, calculateSettlementAmount } = require('../services/settlementService');
 const { createReceiptsForReadySettlements } = require('../services/receiptService');
+const { cancelRentalItemReservations } = require('../utils/contractHelper');
 
 /**
  * 계약 상태 자동 업데이트 스케줄러
@@ -73,6 +74,9 @@ async function updateApprovalExpired() {
           transaction
         }
       );
+
+      // 렌탈 아이템 재고 점유 해제 (RENTAL: Reservation CANCELLED, SALE: totalStock 복구)
+      await cancelRentalItemReservations(contract.id, transaction);
 
       // 로그 기록
       await ContractStatusLog.createLog({
@@ -186,11 +190,14 @@ async function updatePaymentExpired() {
       );
     }
 
-    // 각 계약별 로그 기록
+    // 각 계약별 로그 기록 및 렌탈 재고 점유 해제
     for (const contract of expiredContracts) {
       const timeSinceApproval = now - new Date(contract.approvedAt);
       const hoursSinceApproval = Math.floor(timeSinceApproval / (1000 * 60 * 60));
       const isPaymentTimeExpired = hoursSinceApproval >= 24;
+
+      // 렌탈 아이템 재고 점유 해제 (RENTAL: Reservation CANCELLED, SALE: totalStock 복구)
+      await cancelRentalItemReservations(contract.id, transaction);
 
       await ContractStatusLog.createLog({
         contractId: contract.id,

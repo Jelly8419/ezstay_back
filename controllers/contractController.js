@@ -280,7 +280,6 @@ const createContractRequest = async (req, res) => {
 
     // 7. 렌탈 아이템 재고 확인
     const stockValidation = await validateRentalItemsStock(
-      roomId,
       rentalItems,
       checkInDate,
       checkOutDate,
@@ -454,8 +453,17 @@ const createContractRequest = async (req, res) => {
       { transaction }
     );
 
-    // 11. 렌탈 아이템은 contracts.rental_items JSON에만 저장
-    // rental_orders 테이블은 결제 시점(confirmPayment)에 생성됨
+    // 11. 렌탈 아이템 재고 점유 (결제 전 선점)
+    // RENTAL → RentalItemReservation INSERT, SALE → totalStock 차감
+    if (rentalItems && Array.isArray(rentalItems) && rentalItems.length > 0) {
+      await reserveRentalItems(
+        contract.id,
+        rentalItems,
+        contract.checkInDate,
+        contract.checkOutDate,
+        transaction
+      );
+    }
 
     // 12. 상태 변경 로그 기록
     await ContractStatusLog.createLog({
@@ -2618,8 +2626,10 @@ const updatePendingRentalItems = async (req, res) => {
       });
     }
 
-    // 5. 렌탈 아이템이 비어있으면 null로 저장
+    // 5. 렌탈 아이템이 비어있으면 기존 점유 해제 후 null로 저장
     if (!rentalItems || !Array.isArray(rentalItems) || rentalItems.length === 0) {
+      await cancelRentalItemReservations(contractId, transaction);
+
       const amounts = recalcRentalItemsAmounts(contract, 0);
 
       await contract.update({
@@ -2636,7 +2646,9 @@ const updatePendingRentalItems = async (req, res) => {
       }, '렌탈 아이템이 모두 삭제되었습니다');
     }
 
-    // 6. 재고 검증
+    // 6. 재고 검증 (기존 점유 제외를 위해 먼저 해제 후 검증)
+    await cancelRentalItemReservations(contractId, transaction);
+
     const stockValidation = await validateRentalItemsStock(
       rentalItems,
       contract.checkInDate,
@@ -2699,6 +2711,16 @@ const updatePendingRentalItems = async (req, res) => {
       rentalItems: itemDetails,
       ...amounts
     }, { transaction });
+
+    // 9. 새 아이템으로 재고 재점유
+    // (기존 점유는 6번 단계 시작 전 cancelRentalItemReservations()에서 이미 해제됨)
+    await reserveRentalItems(
+      contract.id,
+      rentalItems.map(item => ({ itemId: item.itemId, quantity: item.quantity })),
+      contract.checkInDate,
+      contract.checkOutDate,
+      transaction
+    );
 
     await transaction.commit();
 

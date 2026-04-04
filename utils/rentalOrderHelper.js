@@ -284,36 +284,43 @@ async function validateRentalStock(items, checkInDate, checkOutDate, transaction
       continue;
     }
 
-    // 해당 기간에 이미 예약된 수량 조회 (배송·회수 버퍼 적용)
-    const bufferMs = RENTAL_BUFFER_DAYS * 24 * 60 * 60 * 1000;
-    const bufferedFrom = new Date(checkInDate.getTime() - bufferMs);
-    const bufferedUntil = new Date(checkOutDate.getTime() + bufferMs);
+    let availableQuantity;
 
-    const reservedQuantity = await RentalItemReservation.sum('quantity', {
-      where: {
-        rentalItemId: item.itemId,
-        status: {
-          [Op.in]: ['RESERVED', 'CONFIRMED']
+    if (rentalItem.salesType === 'SALE') {
+      // SALE: 날짜 무관, totalStock 직접 비교
+      availableQuantity = rentalItem.totalStock;
+    } else {
+      // RENTAL: 해당 기간에 이미 예약된 수량 조회 (배송·회수 버퍼 적용)
+      const bufferMs = RENTAL_BUFFER_DAYS * 24 * 60 * 60 * 1000;
+      const bufferedFrom = new Date(checkInDate.getTime() - bufferMs);
+      const bufferedUntil = new Date(checkOutDate.getTime() + bufferMs);
+
+      const reservedQuantity = await RentalItemReservation.sum('quantity', {
+        where: {
+          rentalItemId: item.itemId,
+          status: {
+            [Op.in]: ['RESERVED', 'CONFIRMED']
+          },
+          [Op.or]: [
+            {
+              reservedFrom: { [Op.between]: [bufferedFrom, bufferedUntil] }
+            },
+            {
+              reservedUntil: { [Op.between]: [bufferedFrom, bufferedUntil] }
+            },
+            {
+              [Op.and]: [
+                { reservedFrom: { [Op.lte]: bufferedFrom } },
+                { reservedUntil: { [Op.gte]: bufferedUntil } }
+              ]
+            }
+          ]
         },
-        [Op.or]: [
-          {
-            reservedFrom: { [Op.between]: [bufferedFrom, bufferedUntil] }
-          },
-          {
-            reservedUntil: { [Op.between]: [bufferedFrom, bufferedUntil] }
-          },
-          {
-            [Op.and]: [
-              { reservedFrom: { [Op.lte]: bufferedFrom } },
-              { reservedUntil: { [Op.gte]: bufferedUntil } }
-            ]
-          }
-        ]
-      },
-      ...options
-    }) || 0;
+        ...options
+      }) || 0;
 
-    const availableQuantity = rentalItem.totalStock - reservedQuantity;
+      availableQuantity = rentalItem.totalStock - reservedQuantity;
+    }
 
     if (availableQuantity < item.quantity) {
       unavailableItems.push({
@@ -328,6 +335,7 @@ async function validateRentalStock(items, checkInDate, checkOutDate, transaction
     itemDetails.push({
       itemId: rentalItem.id,
       name: rentalItem.name,
+      salesType: rentalItem.salesType,
       price: parseFloat(rentalItem.price),
       quantity: item.quantity,
       totalPrice: parseFloat(rentalItem.price) * item.quantity,
@@ -406,19 +414,26 @@ async function createInitialRentalOrder(contractId, items, checkInDate, checkOut
     }, { transaction });
   }
 
-  // RentalItemReservation 생성
+  // 재고 처리
+  // SALE: 계약 생성 시 이미 totalStock 차감됨 → 변경 없음
+  // RENTAL: 계약 생성 시 생성된 RESERVED Reservation을 rentalOrderId 연결 후 CONFIRMED로 업데이트
   for (const itemDetail of stockValidation.itemDetails) {
-    await RentalItemReservation.create({
-      contractId,
-      rentalOrderId: rentalOrder.id,
-      rentalItemId: itemDetail.itemId,
-      quantity: itemDetail.quantity,
-      pricePerItem: itemDetail.price,
-      totalPrice: itemDetail.totalPrice,
-      reservedFrom: checkInDate,
-      reservedUntil: checkOutDate,
-      status: 'RESERVED'
-    }, { transaction });
+    if (itemDetail.salesType !== 'SALE') {
+      await RentalItemReservation.update(
+        {
+          rentalOrderId: rentalOrder.id,
+          status: 'CONFIRMED'
+        },
+        {
+          where: {
+            contractId,
+            rentalItemId: itemDetail.itemId,
+            status: 'RESERVED'
+          },
+          transaction
+        }
+      );
+    }
   }
 
   // 이력 로깅
@@ -508,19 +523,27 @@ async function createAdditionalRentalOrder(contract, items, guestId, req, transa
     }, { transaction });
   }
 
-  // RentalItemReservation 생성 (RESERVED 상태)
+  // 재고 처리: RENTAL → Reservation 생성, SALE → totalStock 차감
   for (const itemDetail of stockValidation.itemDetails) {
-    await RentalItemReservation.create({
-      contractId: contract.id,
-      rentalOrderId: rentalOrder.id,
-      rentalItemId: itemDetail.itemId,
-      quantity: itemDetail.quantity,
-      pricePerItem: itemDetail.price,
-      totalPrice: itemDetail.totalPrice,
-      reservedFrom: contract.checkInDate,
-      reservedUntil: contract.checkOutDate,
-      status: 'RESERVED'
-    }, { transaction });
+    if (itemDetail.salesType === 'SALE') {
+      await RentalItem.decrement('totalStock', {
+        by: itemDetail.quantity,
+        where: { id: itemDetail.itemId },
+        transaction
+      });
+    } else {
+      await RentalItemReservation.create({
+        contractId: contract.id,
+        rentalOrderId: rentalOrder.id,
+        rentalItemId: itemDetail.itemId,
+        quantity: itemDetail.quantity,
+        pricePerItem: itemDetail.price,
+        totalPrice: itemDetail.totalPrice,
+        reservedFrom: contract.checkInDate,
+        reservedUntil: contract.checkOutDate,
+        status: 'RESERVED'
+      }, { transaction });
+    }
   }
 
   // 이력 로깅
@@ -705,17 +728,36 @@ async function cancelPaidRentalOrder(rentalOrder, reason, actorId, actor, req, t
     status: 'FULLY_REFUNDED'
   }, { transaction });
 
-  // 해당 주문의 모든 RentalItemReservation 취소
-  await RentalItemReservation.update(
-    { status: 'CANCELLED' },
-    {
-      where: {
-        rentalOrderId: rentalOrder.id,
-        status: { [Op.ne]: 'CANCELLED' }
-      },
-      transaction
+  // 재고 복구: RENTAL → Reservation CANCELLED, SALE → 배송 전이면 totalStock 복구
+  const rentalTypeItemIds = [];
+  for (const item of activeItems) {
+    if (item.rentalItem?.salesType === 'SALE') {
+      // SALE: 배송 전(PENDING)에만 재고 복구
+      if (rentalOrder.deliveryStatus === 'PENDING') {
+        await RentalItem.increment('totalStock', {
+          by: item.quantity,
+          where: { id: item.rentalItemId },
+          transaction
+        });
+      }
+    } else {
+      rentalTypeItemIds.push(item.rentalItemId);
     }
-  );
+  }
+
+  if (rentalTypeItemIds.length > 0) {
+    await RentalItemReservation.update(
+      { status: 'CANCELLED' },
+      {
+        where: {
+          rentalOrderId: rentalOrder.id,
+          rentalItemId: { [Op.in]: rentalTypeItemIds },
+          status: { [Op.ne]: 'CANCELLED' }
+        },
+        transaction
+      }
+    );
+  }
 
   // 현재 잔액 계산
   const summary = await getContractRentalSummary(rentalOrder.contractId, transaction);
