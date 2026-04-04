@@ -1865,6 +1865,30 @@ exports.approveRentalRefundRequest = async (req, res) => {
     } catch (dbErr) {
       await transaction.rollback();
       console.error('환불 요청 수락 DB 오류 (PG는 이미 취소됨):', dbErr);
+      // PG는 이미 취소됐으나 DB 실패 → 트랜잭션 밖에서 별도 로그 저장
+      try {
+        await logRentalAction({
+          contractId: refundRequest.contractId,
+          rentalOrderId: refundRequest.rentalOrderId,
+          rentalOrderItemId: null,
+          action: 'PG_DB_MISMATCH',
+          actor: 'ADMIN',
+          actorId: adminId,
+          amountChange: -finalRefundAmount,
+          balanceAfter: null,
+          metadata: {
+            requestId: refundRequest.id,
+            orderId: rentalOrder.orderId,
+            finalRefundAmount,
+            pgResponse: pgCancelResp,
+            dbError: dbErr.message
+          },
+          description: `[긴급] PG 취소 완료 후 DB 업데이트 실패 - 수동 확인 필요`,
+          req
+        }, null);
+      } catch (logErr) {
+        console.error('PG-DB 불일치 로그 저장도 실패:', logErr);
+      }
       return error(res, { code: 4903, message: 'PG 취소는 완료됐으나 DB 업데이트에 실패했습니다. 관리자에게 문의하세요.' }, 500);
     }
   } catch (err) {
@@ -1911,13 +1935,6 @@ exports.rejectRentalRefundRequest = async (req, res) => {
         await item.update({
           status: 'ACTIVE',
           cancelReason: null
-        }, { transaction });
-      }
-
-      // rental_orders.delivery_status → 요청 시점 스냅샷으로 복원
-      if (refundRequest.rentalOrder) {
-        await refundRequest.rentalOrder.update({
-          deliveryStatus: refundRequest.deliveryStatusSnapshot
         }, { transaction });
       }
 
