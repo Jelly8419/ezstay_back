@@ -1,5 +1,6 @@
 const { sequelize, RentalItem, RentalItemReservation } = require('../models');
 const { Op } = require('sequelize');
+const { RENTAL_BUFFER_DAYS } = require('./rentalOrderHelper');
 
 /**
  * 렌탈 아이템 비용 계산
@@ -132,7 +133,11 @@ async function validateRentalItemsStock(roomId, rentalItems, checkInDate, checkO
       continue;
     }
 
-    // 해당 기간에 이미 예약된 수량 조회
+    // 해당 기간에 이미 예약된 수량 조회 (배송·회수 버퍼 적용)
+    const bufferMs = RENTAL_BUFFER_DAYS * 24 * 60 * 60 * 1000;
+    const bufferedFrom = new Date(checkInDate.getTime() - bufferMs);
+    const bufferedUntil = new Date(checkOutDate.getTime() + bufferMs);
+
     const reservedQuantity = await RentalItemReservation.sum('quantity', {
       where: {
         rentalItemId: item.itemId,
@@ -141,22 +146,15 @@ async function validateRentalItemsStock(roomId, rentalItems, checkInDate, checkO
         },
         [Op.or]: [
           {
-            // 새 예약의 시작일이 기존 예약 기간 내
-            reservedFrom: {
-              [Op.between]: [checkInDate, checkOutDate]
-            }
+            reservedFrom: { [Op.between]: [bufferedFrom, bufferedUntil] }
           },
           {
-            // 새 예약의 종료일이 기존 예약 기간 내
-            reservedUntil: {
-              [Op.between]: [checkInDate, checkOutDate]
-            }
+            reservedUntil: { [Op.between]: [bufferedFrom, bufferedUntil] }
           },
           {
-            // 새 예약이 기존 예약을 완전히 포함
             [Op.and]: [
-              { reservedFrom: { [Op.lte]: checkInDate } },
-              { reservedUntil: { [Op.gte]: checkOutDate } }
+              { reservedFrom: { [Op.lte]: bufferedFrom } },
+              { reservedUntil: { [Op.gte]: bufferedUntil } }
             ]
           }
         ]
@@ -164,7 +162,7 @@ async function validateRentalItemsStock(roomId, rentalItems, checkInDate, checkO
       transaction
     }) || 0;
 
-    const availableQuantity = rentalItem.availableStock - reservedQuantity;
+    const availableQuantity = rentalItem.totalStock - reservedQuantity;
 
     if (availableQuantity < item.quantity) {
       unavailableItems.push({

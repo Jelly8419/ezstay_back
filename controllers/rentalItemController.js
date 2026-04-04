@@ -1,6 +1,7 @@
 const { RentalItem } = require('../models');
 const { Op } = require('sequelize');
 const { ErrorCodes, success, error, created, updated, deleted } = require('../utils/responseHelper');
+const { RENTAL_BUFFER_DAYS } = require('../utils/rentalOrderHelper');
 
 // ============================================
 // 게스트용 공개 API (인증 불필요)
@@ -429,13 +430,17 @@ const getAllRentalItemsCalendar = async (req, res) => {
       const itemReservations = reservationsByItem[item.id];
       const calendar = {};
 
+      const bufferMs = RENTAL_BUFFER_DAYS * 24 * 60 * 60 * 1000;
+
       for (let d = 1; d <= lastDay; d++) {
         const dateStr = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
         const dayStart = new Date(`${dateStr}T00:00:00`);
         const dayEnd = new Date(`${dateStr}T23:59:59`);
 
         const reservedQuantity = itemReservations.reduce((sum, r) => {
-          if (r.reservedFrom <= dayEnd && r.reservedUntil >= dayStart) {
+          const bufferedFrom = new Date(r.reservedFrom.getTime() - bufferMs);
+          const bufferedUntil = new Date(r.reservedUntil.getTime() + bufferMs);
+          if (bufferedFrom <= dayEnd && bufferedUntil >= dayStart) {
             return sum + r.quantity;
           }
           return sum;
@@ -528,6 +533,7 @@ const getRentalItemCalendar = async (req, res) => {
     });
 
     // 날짜별 예약 수량 집계
+    const bufferMs = RENTAL_BUFFER_DAYS * 24 * 60 * 60 * 1000;
     const calendar = {};
     for (let d = 1; d <= lastDay; d++) {
       const dateStr = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -535,7 +541,9 @@ const getRentalItemCalendar = async (req, res) => {
       const dayEnd = new Date(`${dateStr}T23:59:59`);
 
       const reservedQuantity = reservations.reduce((sum, r) => {
-        if (r.reservedFrom <= dayEnd && r.reservedUntil >= dayStart) {
+        const bufferedFrom = new Date(r.reservedFrom.getTime() - bufferMs);
+        const bufferedUntil = new Date(r.reservedUntil.getTime() + bufferMs);
+        if (bufferedFrom <= dayEnd && bufferedUntil >= dayStart) {
           return sum + r.quantity;
         }
         return sum;

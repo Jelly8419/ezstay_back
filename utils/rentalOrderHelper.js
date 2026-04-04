@@ -1,6 +1,13 @@
 const { Op } = require('sequelize');
 const paytagClient = require('./paytagClient');
 const { toDateStrKST } = require('./dateHelper');
+
+/**
+ * 렌탈 물품 배송·회수 버퍼 일수
+ * 실제 계약 기간 앞뒤로 이 일수만큼 재고를 점유 중으로 간주한다.
+ * 배송/회수 시스템이 체계화되면 0으로 변경하거나 제거할 것.
+ */
+const RENTAL_BUFFER_DAYS = 3;
 const {
   sequelize,
   RentalOrder,
@@ -277,7 +284,11 @@ async function validateRentalStock(items, checkInDate, checkOutDate, transaction
       continue;
     }
 
-    // 해당 기간에 이미 예약된 수량 조회
+    // 해당 기간에 이미 예약된 수량 조회 (배송·회수 버퍼 적용)
+    const bufferMs = RENTAL_BUFFER_DAYS * 24 * 60 * 60 * 1000;
+    const bufferedFrom = new Date(checkInDate.getTime() - bufferMs);
+    const bufferedUntil = new Date(checkOutDate.getTime() + bufferMs);
+
     const reservedQuantity = await RentalItemReservation.sum('quantity', {
       where: {
         rentalItemId: item.itemId,
@@ -286,15 +297,15 @@ async function validateRentalStock(items, checkInDate, checkOutDate, transaction
         },
         [Op.or]: [
           {
-            reservedFrom: { [Op.between]: [checkInDate, checkOutDate] }
+            reservedFrom: { [Op.between]: [bufferedFrom, bufferedUntil] }
           },
           {
-            reservedUntil: { [Op.between]: [checkInDate, checkOutDate] }
+            reservedUntil: { [Op.between]: [bufferedFrom, bufferedUntil] }
           },
           {
             [Op.and]: [
-              { reservedFrom: { [Op.lte]: checkInDate } },
-              { reservedUntil: { [Op.gte]: checkOutDate } }
+              { reservedFrom: { [Op.lte]: bufferedFrom } },
+              { reservedUntil: { [Op.gte]: bufferedUntil } }
             ]
           }
         ]
@@ -302,7 +313,7 @@ async function validateRentalStock(items, checkInDate, checkOutDate, transaction
       ...options
     }) || 0;
 
-    const availableQuantity = rentalItem.availableStock - reservedQuantity;
+    const availableQuantity = rentalItem.totalStock - reservedQuantity;
 
     if (availableQuantity < item.quantity) {
       unavailableItems.push({
@@ -935,6 +946,7 @@ async function groupItemsByOrder(itemIds, contractId, transaction) {
 
 module.exports = {
   // 상수
+  RENTAL_BUFFER_DAYS,
   RENTAL_MODIFIABLE_DAYS_BEFORE,
   RENTAL_ROUND_TRIP_SHIPPING_COST,
   RENTAL_CANCEL_REQUEST_DAYS,
