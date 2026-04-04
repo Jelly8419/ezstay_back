@@ -392,6 +392,7 @@ const confirmRentalPayment = async (req, res) => {
 
     const now = new Date();
     const mappedMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
+    const easyPayProvider = paytagClient.mapEasyPayProvider(payType || 'CARD');
     const pgPaymentKey = paytagResponse.tran_key || paytagResponse.recv_orderno || orderId;
 
     console.log('🔍 PayTag 결제 응답:', JSON.stringify(paytagResponse, null, 2));
@@ -403,6 +404,7 @@ const confirmRentalPayment = async (req, res) => {
       paymentKey: pgPaymentKey,
       orderId: rentalOrder.orderId,
       method: mappedMethod,
+      easyPayProvider,
       status: 'DONE',
       requestedAt: now,
       approvedAt: now,

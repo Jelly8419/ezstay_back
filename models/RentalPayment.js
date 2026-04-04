@@ -95,6 +95,12 @@ module.exports = (sequelize) => {
       defaultValue: 'KRW',
       comment: '통화 (기본: KRW)'
     },
+    easyPayProvider: {
+      type: DataTypes.ENUM('KAKAO', 'NAVER', 'PAYCO'),
+      allowNull: true,
+      field: 'easy_pay_provider',
+      comment: '간편결제 제공사 (method=EASY_PAY일 때만 사용)'
+    },
     receiptUrl: {
       type: DataTypes.STRING(500),
       allowNull: true,

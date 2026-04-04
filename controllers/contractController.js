@@ -2324,6 +2324,7 @@ const confirmPayment = async (req, res) => {
 
     const now = new Date();
     const paymentMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
+    const easyPayProvider = paytagClient.mapEasyPayProvider(payType || 'CARD');
 
     // TODO: 가상계좌(VBANK) 결제 지원 - 오픈 스펙 제외, 추후 구현
     // - VBANK 선택 시 status: 'WAITING_FOR_DEPOSIT', Contract APPROVED 유지
@@ -2338,6 +2339,7 @@ const confirmPayment = async (req, res) => {
       paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
       orderId: contract.orderId,
       method: paymentMethod,
+      easyPayProvider,
       status: 'DONE',
       requestedAt: now,
       approvedAt: now,
@@ -4084,6 +4086,7 @@ const confirmHostBurdenPayment = async (req, res) => {
 
     const now = new Date();
     const paymentMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
+    const easyPayProvider = paytagClient.mapEasyPayProvider(payType || 'CARD');
 
     // Payment 레코드 생성
     const payment = await Payment.create({
@@ -4092,6 +4095,7 @@ const confirmHostBurdenPayment = async (req, res) => {
       paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
       orderId: contract.orderId,
       method: paymentMethod,
+      easyPayProvider,
       status: 'DONE',
       requestedAt: now,
       approvedAt: now,
