@@ -8,6 +8,14 @@ const { getFileUrl, deleteFromS3 } = require('../middleware/upload');
 const isProduction = process.env.NODE_ENV === 'production';
 const { toAbsoluteUrl } = require('../utils/urlHelper');
 
+// JSON 컬럼이 이중 직렬화된 경우를 대비한 안전 파싱 (문자열이면 파싱, 객체면 그대로)
+const safeParseJson = (val) => {
+  if (typeof val === 'string') {
+    try { return JSON.parse(val); } catch { return {}; }
+  }
+  return val ?? {};
+};
+
 // 1. 기본 정보 등록
 const createRoom = async (req, res) => {
   const transaction = await sequelize.transaction();
@@ -864,9 +872,9 @@ const getRoom = async (req, res) => {
 
       // 편의시설
       amenities: room.amenity ? {
-        basicOptions: room.amenity.basicOptions,
-        additionalOptions: room.amenity.additionalOptions,
-        convenienceOptions: room.amenity.convenienceOptions,
+        basicOptions: safeParseJson(room.amenity.basicOptions),
+        additionalOptions: safeParseJson(room.amenity.additionalOptions),
+        convenienceOptions: safeParseJson(room.amenity.convenienceOptions),
         petsAllowed: room.amenity.petsAllowed
       } : null,
 
@@ -1076,9 +1084,9 @@ const duplicateRoom = async (req, res) => {
     if (includeAmenities && originalRoom.amenity) {
       await RoomAmenity.create({
         roomId: newRoom.id,
-        basicOptions: originalRoom.amenity.basicOptions,
-        additionalOptions: originalRoom.amenity.additionalOptions,
-        convenienceOptions: originalRoom.amenity.convenienceOptions,
+        basicOptions: safeParseJson(originalRoom.amenity.basicOptions),
+        additionalOptions: safeParseJson(originalRoom.amenity.additionalOptions),
+        convenienceOptions: safeParseJson(originalRoom.amenity.convenienceOptions),
         petsAllowed: originalRoom.amenity.petsAllowed,
         wifiPassword: originalRoom.amenity.wifiPassword
       }, { transaction });
