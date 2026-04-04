@@ -350,11 +350,11 @@ async function getRefundPolicyInfo(policyType) {
     const formattedRules = policy.rules.filter(rule => !rule.isSameDayCancellation).map(rule => {
       let periodDescription;
       if (rule.daysBeforeMax === null) {
-        periodDescription = `입주일 ${rule.daysBeforeMin}일 이전`;
+        periodDescription = `입주일 ${rule.daysBeforeMin}일 이전 취소 시,`;
       } else if (rule.daysBeforeMin === 0 && rule.daysBeforeMax === 0) {
-        periodDescription = '입주일 당일';
+        periodDescription = '입주일 당일 이후 취소 시,';
       } else {
-        periodDescription = `입주일 ${rule.daysBeforeMax}~${rule.daysBeforeMin}일 이전`;
+        periodDescription = `입주일 ${rule.daysBeforeMin}일 이전 취소 시,`;
       }
 
       return {
