@@ -155,11 +155,11 @@ function mockPaymentKey() {
 // =====================================================
 
 const RENTAL_ITEMS_SEED = [
-  { itemType: 'hair_dryer', name: '프리미엄 헤어드라이어', description: '다이슨 에어랩 스타일', price: 15000, totalStock: 50, availableStock: 50 },
-  { itemType: 'bedding_set', name: '호텔급 침구 세트', description: '이집트산 면 600TC', price: 30000, totalStock: 100, availableStock: 100 },
-  { itemType: 'amenity_kit', name: '프리미엄 어메니티 키트', description: '로레알 & 록시땅', price: 10000, totalStock: 200, availableStock: 200 },
-  { itemType: 'towel_set', name: '수건 세트 (대+소)', description: '면 100% 호텔 타월', price: 8000, totalStock: 150, availableStock: 150 },
-  { itemType: 'other', name: '블루투스 스피커', description: 'JBL 포터블 스피커', price: 5000, totalStock: 30, availableStock: 30 },
+  { itemType: 'hair_dryer', name: '프리미엄 헤어드라이어', description: '다이슨 에어랩 스타일', price: 15000, totalStock: 50 },
+  { itemType: 'bedding_set', name: '호텔급 침구 세트', description: '이집트산 면 600TC', price: 30000, totalStock: 100 },
+  { itemType: 'amenity_kit', name: '프리미엄 어메니티 키트', description: '로레알 & 록시땅', price: 10000, totalStock: 200 },
+  { itemType: 'towel_set', name: '수건 세트 (대+소)', description: '면 100% 호텔 타월', price: 8000, totalStock: 150 },
+  { itemType: 'other', name: '블루투스 스피커', description: 'JBL 포터블 스피커', price: 5000, totalStock: 30 },
 ];
 
 const REFUND_POLICIES_SEED = [
