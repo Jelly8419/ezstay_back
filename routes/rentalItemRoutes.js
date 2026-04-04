@@ -12,8 +12,9 @@ const {
   createRentalItem,
   updateRentalItem,
   deleteRentalItem,
-  adjustStock,
-  getRentalItemStats
+  getRentalItemStats,
+  getAllRentalItemsCalendar,
+  getRentalItemCalendar
 } = require('../controllers/rentalItemController');
 const { authenticateToken, authenticateAdmin } = require('../middleware/auth');
 
@@ -61,14 +62,15 @@ const adminRouter = express.Router();
 // 통계 조회 (먼저 정의해야 /:id와 충돌 방지)
 adminRouter.get('/stats', authenticateAdmin, getRentalItemStats);
 
+// 캘린더 조회 (/:id보다 먼저 정의)
+adminRouter.get('/calendar', authenticateAdmin, getAllRentalItemsCalendar);
+adminRouter.get('/:id/calendar', authenticateAdmin, getRentalItemCalendar);
+
 // 대여 물품 CRUD
 adminRouter.get('/', authenticateAdmin, getAllRentalItems);
 adminRouter.get('/:id', authenticateAdmin, getRentalItemById);
 adminRouter.post('/', authenticateAdmin, createRentalItem);
 adminRouter.patch('/:id', authenticateAdmin, updateRentalItem);
 adminRouter.delete('/:id', authenticateAdmin, deleteRentalItem);
-
-// 재고 수동 조정
-adminRouter.patch('/:id/stock', authenticateAdmin, adjustStock);
 
 module.exports.adminRouter = adminRouter;

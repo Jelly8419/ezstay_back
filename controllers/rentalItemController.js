@@ -14,7 +14,7 @@ const { ErrorCodes, success, error, created, updated, deleted } = require('../ut
  */
 const getPublicRentalItems = async (req, res) => {
   try {
-    const { itemType, inStock = 'true' } = req.query;
+    const { itemType } = req.query;
     const where = {
       isActive: true
     };
@@ -23,13 +23,9 @@ const getPublicRentalItems = async (req, res) => {
       where.itemType = itemType;
     }
 
-    if (inStock === 'true') {
-      where.availableStock = { [Op.gt]: 0 };
-    }
-
     const items = await RentalItem.findAll({
       where,
-      attributes: ['id', 'itemType', 'name', 'description', 'price', 'availableStock', 'imageUrl'],
+      attributes: ['id', 'itemType', 'name', 'description', 'price', 'totalStock', 'imageUrl'],
       order: [
         ['itemType', 'ASC'],
         ['price', 'ASC']
@@ -60,7 +56,7 @@ const getPublicRentalItemById = async (req, res) => {
         id: req.params.id,
         isActive: true
       },
-      attributes: ['id', 'itemType', 'name', 'description', 'price', 'availableStock', 'imageUrl']
+      attributes: ['id', 'itemType', 'name', 'description', 'price', 'totalStock', 'imageUrl']
     });
 
     if (!item) {
@@ -168,8 +164,6 @@ const getAllRentalItems = async (req, res) => {
 
     const itemsWithMeta = items.map(item => ({
       ...item.toJSON(),
-      isOutOfStock: item.availableStock === 0,
-      rentedStock: item.totalStock - item.availableStock,
       salesTypeLabel: RentalItem.SALES_TYPE_LABELS[item.salesType] || item.salesType,
       itemTypeLabel: RentalItem.ITEM_TYPE_LABELS[item.itemType] || item.itemType
     }));
@@ -198,8 +192,6 @@ const getRentalItemById = async (req, res) => {
 
     const itemWithMeta = {
       ...item.toJSON(),
-      isOutOfStock: item.availableStock === 0,
-      rentedStock: item.totalStock - item.availableStock,
       salesTypeLabel: RentalItem.SALES_TYPE_LABELS[item.salesType] || item.salesType,
       itemTypeLabel: RentalItem.ITEM_TYPE_LABELS[item.itemType] || item.itemType
     };
@@ -258,7 +250,6 @@ const createRentalItem = async (req, res) => {
       description,
       price,
       totalStock,
-      availableStock: totalStock, // 초기 생성 시 전체 재고가 이용 가능
       imageUrl,
       isActive: isActive !== undefined ? isActive : true
     });
@@ -303,16 +294,11 @@ const updateRentalItem = async (req, res) => {
       }, 400);
     }
 
-    // totalStock 업데이트는 별도 메서드 사용
-    if (totalStock !== undefined && totalStock !== item.totalStock) {
-      try {
-        await item.updateTotalStock(totalStock);
-      } catch (stockError) {
-        return error(res, {
-          code: 4006,
-          message: stockError.message
-        }, 400);
+    if (totalStock !== undefined) {
+      if (totalStock < 0) {
+        return error(res, { code: 4006, message: '총 재고는 0 이상이어야 합니다.' }, 400);
       }
+      item.totalStock = totalStock;
     }
 
     // 나머지 필드 업데이트
@@ -355,12 +341,18 @@ const deleteRentalItem = async (req, res) => {
       }, 404);
     }
 
-    // 대여 중인 물품이 있는지 확인
-    const reservedQuantity = item.totalStock - item.availableStock;
-    if (reservedQuantity > 0) {
+    const { RentalItemReservation } = require('../models');
+    const { Op } = require('sequelize');
+    const activeReservations = await RentalItemReservation.count({
+      where: {
+        rentalItemId: item.id,
+        status: { [Op.in]: ['RESERVED', 'CONFIRMED'] }
+      }
+    });
+    if (activeReservations > 0) {
       return error(res, {
         code: 4007,
-        message: `현재 대여 중인 물품(${reservedQuantity}개)이 있어 삭제할 수 없습니다. 비활성화를 권장합니다.`
+        message: `활성 예약(${activeReservations}건)이 있어 삭제할 수 없습니다. 비활성화를 권장합니다.`
       }, 400);
     }
 
@@ -374,14 +366,131 @@ const deleteRentalItem = async (req, res) => {
 };
 
 /**
- * 대여 물품 재고 수동 조정 (관리자용)
- * @route PATCH /api/admin/rental-items/:id/stock
- * @body {number} availableStock - 새로운 이용 가능 수량
+ * 렌탈 아이템 전체 월별 캘린더 일괄 조회 (관리자용)
+ * salesType = RENTAL인 모든 아이템의 날짜별 예약 현황을 한 번에 반환
+ * @route GET /api/admin/rental-items/calendar
+ * @query {number} year - 연도 (필수)
+ * @query {number} month - 월 1-12 (필수)
  */
-const adjustStock = async (req, res) => {
+const getAllRentalItemsCalendar = async (req, res) => {
   try {
-    const item = await RentalItem.findByPk(req.params.id);
+    const { year, month } = req.query;
 
+    const yearNum = parseInt(year);
+    const monthNum = parseInt(month);
+    if (!year || !month || isNaN(yearNum) || isNaN(monthNum) || monthNum < 1 || monthNum > 12) {
+      return error(res, {
+        code: 4001,
+        message: 'year와 month는 필수이며 유효한 숫자여야 합니다. (month: 1-12)'
+      }, 400);
+    }
+
+    // RENTAL 타입 활성 아이템 전체 조회
+    const items = await RentalItem.findAll({
+      where: { salesType: 'RENTAL', isActive: true },
+      attributes: ['id', 'name', 'itemType', 'totalStock'],
+      order: [['item_type', 'ASC'], ['id', 'ASC']]
+    });
+
+    if (items.length === 0) {
+      return success(res, { year: yearNum, month: monthNum, items: [] }, '렌탈 아이템 캘린더를 조회했습니다.');
+    }
+
+    // 월 범위 (KST 기준)
+    const monthStart = new Date(`${yearNum}-${String(monthNum).padStart(2, '0')}-01T00:00:00`);
+    const lastDay = new Date(yearNum, monthNum, 0).getDate();
+    const monthEnd = new Date(`${yearNum}-${String(monthNum).padStart(2, '0')}-${lastDay}T23:59:59`);
+    const itemIds = items.map(i => i.id);
+
+    const { RentalItemReservation } = require('../models');
+    const reservations = await RentalItemReservation.findAll({
+      where: {
+        rentalItemId: { [Op.in]: itemIds },
+        status: { [Op.in]: ['RESERVED', 'CONFIRMED'] },
+        [Op.or]: [
+          { reservedFrom: { [Op.between]: [monthStart, monthEnd] } },
+          { reservedUntil: { [Op.between]: [monthStart, monthEnd] } },
+          {
+            reservedFrom: { [Op.lte]: monthStart },
+            reservedUntil: { [Op.gte]: monthEnd }
+          }
+        ]
+      },
+      attributes: ['rentalItemId', 'reservedFrom', 'reservedUntil', 'quantity']
+    });
+
+    // 아이템별로 예약 분류
+    const reservationsByItem = {};
+    for (const itemId of itemIds) reservationsByItem[itemId] = [];
+    for (const r of reservations) reservationsByItem[r.rentalItemId].push(r);
+
+    // 아이템별 날짜별 집계
+    const result = items.map(item => {
+      const itemReservations = reservationsByItem[item.id];
+      const calendar = {};
+
+      for (let d = 1; d <= lastDay; d++) {
+        const dateStr = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const dayStart = new Date(`${dateStr}T00:00:00`);
+        const dayEnd = new Date(`${dateStr}T23:59:59`);
+
+        const reservedQuantity = itemReservations.reduce((sum, r) => {
+          if (r.reservedFrom <= dayEnd && r.reservedUntil >= dayStart) {
+            return sum + r.quantity;
+          }
+          return sum;
+        }, 0);
+
+        calendar[dateStr] = {
+          reservedQuantity,
+          availableQuantity: item.totalStock - reservedQuantity
+        };
+      }
+
+      return {
+        rentalItemId: item.id,
+        name: item.name,
+        itemType: item.itemType,
+        itemTypeLabel: RentalItem.ITEM_TYPE_LABELS[item.itemType] || item.itemType,
+        totalStock: item.totalStock,
+        calendar
+      };
+    });
+
+    return success(res, {
+      year: yearNum,
+      month: monthNum,
+      items: result
+    }, '렌탈 아이템 캘린더를 조회했습니다.');
+  } catch (err) {
+    console.error('getAllRentalItemsCalendar Error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 렌탈 아이템 월별 캘린더 조회 (관리자용)
+ * salesType이 RENTAL인 아이템만 조회 가능
+ * @route GET /api/admin/rental-items/:id/calendar
+ * @query {number} year - 연도 (필수)
+ * @query {number} month - 월 1-12 (필수)
+ */
+const getRentalItemCalendar = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { year, month } = req.query;
+
+    // 파라미터 검증
+    const yearNum = parseInt(year);
+    const monthNum = parseInt(month);
+    if (!year || !month || isNaN(yearNum) || isNaN(monthNum) || monthNum < 1 || monthNum > 12) {
+      return error(res, {
+        code: 4001,
+        message: 'year와 month는 필수이며 유효한 숫자여야 합니다. (month: 1-12)'
+      }, 400);
+    }
+
+    const item = await RentalItem.findByPk(id);
     if (!item) {
       return error(res, {
         code: 3010,
@@ -389,28 +498,65 @@ const adjustStock = async (req, res) => {
       }, 404);
     }
 
-    const { availableStock } = req.body;
-
-    if (availableStock === undefined || availableStock < 0) {
+    if (item.salesType !== 'RENTAL') {
       return error(res, {
-        code: 4008,
-        message: '이용 가능한 재고는 0 이상이어야 합니다.'
+        code: 4010,
+        message: '판매형(SALE) 물품은 캘린더 조회를 지원하지 않습니다.'
       }, 400);
     }
 
-    if (availableStock > item.totalStock) {
-      return error(res, {
-        code: 4009,
-        message: `이용 가능한 재고는 총 재고(${item.totalStock}개)를 초과할 수 없습니다.`
-      }, 400);
+    // 해당 월 범위 (KST 기준)
+    const monthStart = new Date(`${yearNum}-${String(monthNum).padStart(2, '0')}-01T00:00:00`);
+    const lastDay = new Date(yearNum, monthNum, 0).getDate();
+    const monthEnd = new Date(`${yearNum}-${String(monthNum).padStart(2, '0')}-${lastDay}T23:59:59`);
+
+    const { RentalItemReservation } = require('../models');
+    const reservations = await RentalItemReservation.findAll({
+      where: {
+        rentalItemId: id,
+        status: { [Op.in]: ['RESERVED', 'CONFIRMED'] },
+        [Op.or]: [
+          { reservedFrom: { [Op.between]: [monthStart, monthEnd] } },
+          { reservedUntil: { [Op.between]: [monthStart, monthEnd] } },
+          {
+            reservedFrom: { [Op.lte]: monthStart },
+            reservedUntil: { [Op.gte]: monthEnd }
+          }
+        ]
+      },
+      attributes: ['reservedFrom', 'reservedUntil', 'quantity']
+    });
+
+    // 날짜별 예약 수량 집계
+    const calendar = {};
+    for (let d = 1; d <= lastDay; d++) {
+      const dateStr = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const dayStart = new Date(`${dateStr}T00:00:00`);
+      const dayEnd = new Date(`${dateStr}T23:59:59`);
+
+      const reservedQuantity = reservations.reduce((sum, r) => {
+        if (r.reservedFrom <= dayEnd && r.reservedUntil >= dayStart) {
+          return sum + r.quantity;
+        }
+        return sum;
+      }, 0);
+
+      calendar[dateStr] = {
+        reservedQuantity,
+        availableQuantity: item.totalStock - reservedQuantity
+      };
     }
 
-    item.availableStock = availableStock;
-    await item.save();
-
-    return updated(res, item, '재고가 조정되었습니다.');
+    return success(res, {
+      rentalItemId: item.id,
+      name: item.name,
+      totalStock: item.totalStock,
+      year: yearNum,
+      month: monthNum,
+      calendar
+    }, '렌탈 아이템 캘린더를 조회했습니다.');
   } catch (err) {
-    console.error('adjustStock Error:', err);
+    console.error('getRentalItemCalendar Error:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
 };
@@ -426,8 +572,7 @@ const getRentalItemStats = async (req, res) => {
         'itemType',
         'salesType',
         [require('sequelize').fn('COUNT', require('sequelize').col('id')), 'itemCount'],
-        [require('sequelize').fn('SUM', require('sequelize').col('total_stock')), 'totalStock'],
-        [require('sequelize').fn('SUM', require('sequelize').col('available_stock')), 'availableStock']
+        [require('sequelize').fn('SUM', require('sequelize').col('total_stock')), 'totalStock']
       ],
       group: ['itemType', 'salesType']
     });
@@ -438,9 +583,7 @@ const getRentalItemStats = async (req, res) => {
       salesType: stat.salesType,
       salesTypeLabel: RentalItem.SALES_TYPE_LABELS[stat.salesType] || stat.salesType,
       itemCount: parseInt(stat.dataValues.itemCount),
-      totalStock: parseInt(stat.dataValues.totalStock) || 0,
-      availableStock: parseInt(stat.dataValues.availableStock) || 0,
-      rentedStock: (parseInt(stat.dataValues.totalStock) || 0) - (parseInt(stat.dataValues.availableStock) || 0)
+      totalStock: parseInt(stat.dataValues.totalStock) || 0
     }));
 
     return success(res, formattedStats, '대여 물품 통계를 조회했습니다.');
@@ -462,6 +605,7 @@ module.exports = {
   createRentalItem,
   updateRentalItem,
   deleteRentalItem,
-  adjustStock,
-  getRentalItemStats
+  getRentalItemStats,
+  getAllRentalItemsCalendar,
+  getRentalItemCalendar
 };
