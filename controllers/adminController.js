@@ -1,6 +1,6 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
 const { toDateStrKST, toKSTString } = require('../utils/dateHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, ServiceTask, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, ServiceTask, ServiceTaskLog, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -4278,6 +4278,7 @@ const getServiceTasks = async (req, res) => {
         vendorName: task.vendorName,
         vendorContact: task.vendorContact,
         vendorRefNo: task.vendorRefNo,
+        issueNote: task.issueNote,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt
       };
@@ -4296,19 +4297,102 @@ const getServiceTasks = async (req, res) => {
 };
 
 /**
+ * 서비스 태스크 단건 조회 (변경 이력 포함)
+ * GET /api/admin/service-tasks/:id
+ */
+const getServiceTask = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const task = await ServiceTask.findByPk(id, {
+      include: [
+        {
+          model: Contract,
+          as: 'contract',
+          attributes: ['id', 'checkInDate', 'checkOutDate'],
+          include: [
+            {
+              model: Room,
+              as: 'room',
+              attributes: ['id', 'roomName']
+            }
+          ]
+        },
+        {
+          model: ServiceTaskLog,
+          as: 'logs',
+          attributes: [
+            'id', 'fromStatus', 'toStatus', 'changedBy',
+            'adminId', 'adminName',
+            'clearedVendorName', 'clearedVendorContact', 'clearedVendorRefNo',
+            'clearedReservedAmount', 'clearedActualAmount',
+            'note', 'createdAt'
+          ],
+          order: [['createdAt', 'DESC']]
+        }
+      ]
+    });
+
+    if (!task) {
+      return error(res, ErrorCodes.NOT_FOUND, 404, '서비스 태스크를 찾을 수 없습니다.');
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const refDate = new Date(task.referenceDate);
+    refDate.setHours(0, 0, 0, 0);
+    const dDay = Math.ceil((refDate - today) / (1000 * 60 * 60 * 24));
+
+    return success(res, {
+      id: task.id,
+      contractId: task.contractId,
+      roomName: task.contract?.room?.roomName ?? null,
+      checkInDate: toKSTString(task.contract?.checkInDate),
+      checkOutDate: toKSTString(task.contract?.checkOutDate),
+      taskType: task.taskType,
+      referenceDate: task.referenceDate,
+      dDay,
+      quantity: task.quantity,
+      status: task.status,
+      vendorName: task.vendorName,
+      vendorContact: task.vendorContact,
+      vendorRefNo: task.vendorRefNo,
+      reservedAmount: task.reservedAmount,
+      actualAmount: task.actualAmount,
+      issueNote: task.issueNote,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      logs: task.logs ?? []
+    });
+  } catch (err) {
+    console.error('서비스 태스크 단건 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
  * 서비스 태스크 상태 변경
  * PATCH /api/admin/service-tasks/:id/status
  *
  * Body:
- *   status       : PENDING | RESERVED | COMPLETED | ISSUE  (필수)
- *   vendorName   : string (선택, RESERVED 시 함께 저장)
- *   vendorContact: string (선택)
- *   vendorRefNo  : string (선택)
+ *   status         : PENDING | RESERVED | COMPLETED | ISSUE  (필수)
+ *   vendorName     : string  (선택, RESERVED 시 함께 저장)
+ *   vendorContact  : string  (선택)
+ *   vendorRefNo    : string  (선택)
+ *   reservedAmount : number  (선택, RESERVED 시 견적 금액)
+ *   actualAmount   : number  (선택, COMPLETED 시 실제 청구 금액)
+ *   note           : string  (선택, 관리자 메모)
  */
 const updateServiceTaskStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status: newStatus, vendorName, vendorContact, vendorRefNo } = req.body;
+    const {
+      status: newStatus,
+      vendorName, vendorContact, vendorRefNo,
+      reservedAmount, actualAmount,
+      issueNote,
+      note
+    } = req.body;
 
     if (!newStatus) {
       return error(res, ErrorCodes.VALIDATION_ERROR, 400, 'status는 필수입니다.');
@@ -4341,16 +4425,59 @@ const updateServiceTaskStatus = async (req, res) => {
       );
     }
 
+    const prevStatus = task.status;
     const updateData = { status: newStatus };
+    let clearedVendor = null;
 
-    // RESERVED 상태로 변경 시 업체 정보 저장 (전달된 값만 덮어씀)
+    // RESERVED: 업체 정보 + 견적 금액 저장
     if (newStatus === 'RESERVED') {
-      if (vendorName    !== undefined) updateData.vendorName    = vendorName;
-      if (vendorContact !== undefined) updateData.vendorContact = vendorContact;
-      if (vendorRefNo   !== undefined) updateData.vendorRefNo   = vendorRefNo;
+      if (vendorName      !== undefined) updateData.vendorName      = vendorName;
+      if (vendorContact   !== undefined) updateData.vendorContact   = vendorContact;
+      if (vendorRefNo     !== undefined) updateData.vendorRefNo     = vendorRefNo;
+      if (reservedAmount  !== undefined) updateData.reservedAmount  = reservedAmount;
+    }
+
+    // COMPLETED: 실제 청구 금액 저장
+    if (newStatus === 'COMPLETED') {
+      if (actualAmount !== undefined) updateData.actualAmount = actualAmount;
+    }
+
+    // ISSUE: 이슈 내용 메모 저장
+    if (newStatus === 'ISSUE') {
+      if (issueNote !== undefined) updateData.issueNote = issueNote;
+    }
+
+    // PENDING 복귀 시 업체 정보 + 금액 + 이슈 메모 초기화 (기존 값은 로그에 보존)
+    if (newStatus === 'PENDING') {
+      clearedVendor = {
+        name:           task.vendorName,
+        contact:        task.vendorContact,
+        refNo:          task.vendorRefNo,
+        reservedAmount: task.reservedAmount,
+        actualAmount:   task.actualAmount
+      };
+      updateData.vendorName      = null;
+      updateData.vendorContact   = null;
+      updateData.vendorRefNo     = null;
+      updateData.reservedAmount  = null;
+      updateData.actualAmount    = null;
+      updateData.issueNote       = null;
     }
 
     await task.update(updateData);
+
+    // 상태 변경 이력 기록
+    await ServiceTaskLog.createLog({
+      serviceTaskId: task.id,
+      contractId:    task.contractId,
+      fromStatus:    prevStatus,
+      toStatus:      newStatus,
+      adminId:       req.admin.id,
+      adminName:     req.admin.name,
+      clearedVendor,
+      note:          newStatus === 'ISSUE' ? (issueNote ?? note ?? null) : (note ?? null),
+      req
+    });
 
     return updated(res, {
       id: task.id,
@@ -4358,6 +4485,9 @@ const updateServiceTaskStatus = async (req, res) => {
       vendorName: task.vendorName,
       vendorContact: task.vendorContact,
       vendorRefNo: task.vendorRefNo,
+      reservedAmount: task.reservedAmount,
+      actualAmount: task.actualAmount,
+      issueNote: task.issueNote,
       updatedAt: task.updatedAt
     });
   } catch (err) {
@@ -4688,6 +4818,7 @@ module.exports = {
 
   // 서비스 태스크 관리
   getServiceTasks,
+  getServiceTask,
   updateServiceTaskStatus,
 
   // 알림톡 관리

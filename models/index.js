@@ -46,6 +46,7 @@ const UserSessionModel = require('./UserSession');
 const AdminRefund = require('./AdminRefund');
 const RentalOrderRefundRequest = require('./RentalOrderRefundRequest');
 const ServiceTaskModel = require('./ServiceTask');
+const ServiceTaskLogModel = require('./ServiceTaskLog');
 
 const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -97,6 +98,7 @@ const RentalPaymentFailureLog = RentalPaymentFailureLogModel(sequelize);
 
 // 서비스 태스크 모델 초기화
 const ServiceTask = ServiceTaskModel(sequelize);
+const ServiceTaskLog = ServiceTaskLogModel(sequelize);
 
 // 방 관리 모델 초기화
 const RoomMemoModel = require('./RoomMemo');
@@ -1029,6 +1031,16 @@ ServiceTask.belongsTo(Contract, {
   onDelete: 'CASCADE',
   onUpdate: 'CASCADE'
 });
+ServiceTask.hasMany(ServiceTaskLog, {
+  foreignKey: 'serviceTaskId',
+  as: 'logs',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+ServiceTaskLog.belongsTo(ServiceTask, {
+  foreignKey: 'serviceTaskId',
+  as: 'serviceTask'
+});
 
 module.exports = {
   sequelize,
@@ -1081,5 +1093,6 @@ module.exports = {
   UserSession,
   AdminRefund,
   RentalOrderRefundRequest,
-  ServiceTask
+  ServiceTask,
+  ServiceTaskLog
 };
