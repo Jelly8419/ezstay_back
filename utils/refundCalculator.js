@@ -346,8 +346,8 @@ async function getRefundPolicyInfo(policyType) {
       throw new Error(`환불 정책 '${policyType}'을 찾을 수 없습니다.`);
     }
 
-    // 규칙을 프론트엔드 친화적인 형태로 변환
-    const formattedRules = policy.rules.map(rule => {
+    // 규칙을 프론트엔드 친화적인 형태로 변환 (당일취소 상위정책 룰 제외)
+    const formattedRules = policy.rules.filter(rule => !rule.isSameDayCancellation).map(rule => {
       let periodDescription;
       if (rule.daysBeforeMax === null) {
         periodDescription = `입주일 ${rule.daysBeforeMin}일 이전`;
