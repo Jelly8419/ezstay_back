@@ -1,4 +1,4 @@
-const { sequelize, Contract, Room, User, RoomPhoto, RoomAmenity, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, RoomAmenity, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement, AdminRefund } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const paytagClient = require('../utils/paytagClient');
@@ -941,8 +941,140 @@ const getContractDetail = async (req, res) => {
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
+    const isHost = contract.hostId === userId;
+
     // 렌탈 주문 정보 조회
     const rentalSummary = await getContractRentalSummary(contract.id);
+
+    // === 결제/취소 내역 타임라인 ===
+    const paymentHistory = [];
+
+    if (isHost) {
+      // 호스트: HOST_BURDEN 결제/환불만
+      const hostPayments = await Payment.findAll({
+        where: { contractId: contract.id, paymentType: 'HOST_BURDEN' },
+        order: [['createdAt', 'ASC']]
+      });
+
+      hostPayments.forEach(p => {
+        if (p.status === 'READY') return;
+        paymentHistory.push({
+          occurredAt: toKSTString(p.approvedAt || p.createdAt),
+          amount: p.totalAmount,
+          description: '호스트 부담금 결제'
+        });
+        if (['CANCELED', 'PARTIAL_CANCELED'].includes(p.status)) {
+          const refunded = (p.totalAmount || 0) - (p.balanceAmount || 0);
+          if (refunded > 0) {
+            paymentHistory.push({
+              occurredAt: toKSTString(p.updatedAt),
+              amount: -refunded,
+              description: '호스트 부담금 환불'
+            });
+          }
+        }
+      });
+    } else {
+      // 게스트: 계약 결제 + 환불 + 관리자 환불 + ADDITIONAL 렌탈 결제/취소
+      const [guestPayments, refunds, adminRefunds, rentalLogs] = await Promise.all([
+        Payment.findAll({
+          where: { contractId: contract.id, paymentType: 'CONTRACT' },
+          order: [['approvedAt', 'ASC']]
+        }),
+        Refund.findAll({
+          where: { contractId: contract.id, refundStatus: 'COMPLETED' },
+          order: [['completedAt', 'ASC']]
+        }),
+        AdminRefund.findAll({
+          where: { contractId: contract.id, refundStatus: 'COMPLETED' },
+          order: [['completedAt', 'ASC']]
+        }),
+        RentalOrderLog.findAll({
+          where: {
+            contractId: contract.id,
+            action: { [Op.in]: ['PAYMENT_COMPLETED', 'REFUND_COMPLETED', 'ITEM_CANCELLED', 'ORDER_CANCELLED'] }
+          },
+          include: [{
+            model: RentalOrder,
+            as: 'order',
+            attributes: ['id', 'orderId', 'orderType'],
+            where: { orderType: 'ADDITIONAL' },
+            required: true,
+            include: [{
+              model: RentalOrderItem,
+              as: 'items',
+              include: [{ model: RentalItem, as: 'rentalItem', attributes: ['name'] }]
+            }]
+          }],
+          order: [['createdAt', 'ASC']]
+        })
+      ]);
+
+      guestPayments.forEach(p => {
+        if (p.status === 'READY') return;
+        paymentHistory.push({
+          occurredAt: toKSTString(p.approvedAt || p.createdAt),
+          amount: p.totalAmount,
+          description: '계약 결제'
+        });
+      });
+
+      refunds.forEach(r => {
+        const metadata = typeof r.metadata === 'string' ? JSON.parse(r.metadata) : (r.metadata || {});
+        let description;
+        if (metadata.depositRefund) {
+          description = '보증금 환급';
+        } else if (r.penaltyAmount > 0) {
+          description = `계약 취소 (위약금 ${Number(r.penaltyAmount).toLocaleString()}원)`;
+        } else {
+          description = '계약 취소';
+        }
+        paymentHistory.push({
+          occurredAt: toKSTString(r.completedAt || r.updatedAt),
+          amount: -(r.finalRefundAmount || 0),
+          description
+        });
+      });
+
+      adminRefunds.forEach(ar => {
+        const contractRefund = (ar.rentalFeeRefundAmount || 0) + (ar.maintenanceFeeRefundAmount || 0)
+          + (ar.cleaningFeeRefundAmount || 0) + (ar.platformFeeRefundAmount || 0)
+          + (ar.depositRefundAmount || 0);
+        const rentalRefund = ar.rentalItemsRefundAmount || 0;
+
+        if (contractRefund > 0) {
+          paymentHistory.push({
+            occurredAt: toKSTString(ar.completedAt || ar.updatedAt),
+            amount: -contractRefund,
+            description: '계약 취소 (관리자)'
+          });
+        }
+        if (rentalRefund > 0) {
+          paymentHistory.push({
+            occurredAt: toKSTString(ar.completedAt || ar.updatedAt),
+            amount: -rentalRefund,
+            description: '옵션 상품 취소 (관리자)'
+          });
+        }
+      });
+
+      rentalLogs.forEach(log => {
+        const ro = log.order;
+        const itemDesc = (ro?.items || [])
+          .map(i => `${i.rentalItem?.name || '아이템'} ${i.quantity}개`)
+          .join(', ');
+        const isPayment = log.action === 'PAYMENT_COMPLETED';
+        paymentHistory.push({
+          occurredAt: toKSTString(log.createdAt),
+          amount: log.amountChange || 0,
+          description: isPayment
+            ? (itemDesc ? `옵션 상품 추가 구매 (${itemDesc})` : '옵션 상품 추가 구매')
+            : (itemDesc ? `옵션 상품 취소 (${itemDesc})` : '옵션 상품 취소')
+        });
+      });
+
+      paymentHistory.sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt));
+    }
 
     return success(
       res,
@@ -1091,7 +1223,10 @@ const getContractDetail = async (req, res) => {
           checkedInAt: contract.checkedInAt,
           checkedOutAt: contract.checkedOutAt,
           cancelledAt: contract.cancelledAt,
-          checkoutRequestedAt: contract.checkoutRequestedAt
+          checkoutRequestedAt: contract.checkoutRequestedAt,
+
+          // 결제/취소 내역
+          paymentHistory
         }
       },
       '계약 상세 조회 성공'
