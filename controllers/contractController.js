@@ -80,7 +80,7 @@ const createContractRequest = async (req, res) => {
       );
     }
 
-    // 3. 방 존재 및 상태 확인 (이지서비스 정보 포함)
+    // 3. 방 존재 및 상태 확인 (이지서비스 + 사진 정보 포함)
     const { EzService } = require('../models');
     const room = await Room.findOne({
       where: { id: roomId, status: 'published' },
@@ -88,6 +88,12 @@ const createContractRequest = async (req, res) => {
         {
           model: EzService,
           as: 'ezService'
+        },
+        {
+          model: RoomPhoto,
+          as: 'photos',
+          attributes: ['url', 'order'],
+          order: [['order', 'ASC']]
         }
       ],
       transaction
@@ -144,6 +150,8 @@ const createContractRequest = async (req, res) => {
       ezService: room.ezService ? {
         cleaningService: room.ezService.cleaningService,
       } : null,
+      photos: (room.photos || []).map(p => ({ url: p.url, order: p.order })),
+      thumbnailUrl: room.photos?.[0]?.url || null,
       capturedAt: new Date().toISOString()
     };
 
@@ -581,20 +589,6 @@ const getGuestContracts = async (req, res) => {
       where: whereClause,
       include: [
         {
-          model: Room,
-          as: 'room',
-          attributes: ['id', 'roomName', 'address', 'area', 'buildingType'],
-          include: [
-            {
-              model: RoomPhoto,
-              as: 'photos',
-              attributes: ['id', 'url'],
-              limit: 1,
-              order: [['order', 'ASC']]
-            }
-          ]
-        },
-        {
           model: User,
           as: 'host',
           attributes: ['id', 'name', 'nickname', 'phoneNumber']
@@ -685,14 +679,14 @@ const getGuestContracts = async (req, res) => {
           // 💰 최종 금액만 표시 (리스트 간소화)
           finalTotalAmount: contract.finalTotalAmount,
 
-          // 방 정보
+          // 방 정보 (계약 시점 스냅샷 기반)
           room: {
-            id: contract.room.id,
-            roomName: contract.room.roomName,
-            address: contract.room.address,
-            area: contract.room.area,
-            buildingType: contract.room.buildingType,
-            thumbnailUrl: toAbsoluteUrl(contract.room.photos[0]?.url || null)
+            id: contract.roomSnapshot?.roomId || null,
+            roomName: contract.roomSnapshot?.roomName || null,
+            address: contract.roomSnapshot?.address || null,
+            area: contract.roomSnapshot?.area || null,
+            buildingType: contract.roomSnapshot?.buildingType || null,
+            thumbnailUrl: toAbsoluteUrl(contract.roomSnapshot?.thumbnailUrl || null)
           },
 
           // 호스트 정보
@@ -717,6 +711,9 @@ const getGuestContracts = async (req, res) => {
 
           // 보증금 합의 상태 (동의 버튼 분기용)
           depositAgreementStatus: contract.depositAgreement?.status || null,
+
+          // 계약 시점 스냅샷
+          roomSnapshot: contract.roomSnapshot,
 
           createdAt: contract.createdAt
         };
@@ -755,20 +752,6 @@ const getHostContracts = async (req, res) => {
     const contracts = await Contract.findAll({
       where: whereClause,
       include: [
-        {
-          model: Room,
-          as: 'room',
-          attributes: ['id', 'roomName', 'address', 'area', 'buildingType'],
-          include: [
-            {
-              model: RoomPhoto,
-              as: 'photos',
-              attributes: ['id', 'url'],
-              limit: 1,
-              order: [['order', 'ASC']]
-            }
-          ]
-        },
         {
           model: User,
           as: 'guest',
@@ -832,14 +815,14 @@ const getHostContracts = async (req, res) => {
           // 메시지
           guestMessage: contract.guestMessage,
 
-          // 방 정보
+          // 방 정보 (계약 시점 스냅샷 기반)
           room: {
-            id: contract.room.id,
-            roomName: contract.room.roomName,
-            address: contract.room.address,
-            area: contract.room.area,
-            buildingType: contract.room.buildingType,
-            thumbnailUrl: toAbsoluteUrl(contract.room.photos[0]?.url || null)
+            id: contract.roomSnapshot?.roomId || null,
+            roomName: contract.roomSnapshot?.roomName || null,
+            address: contract.roomSnapshot?.address || null,
+            area: contract.roomSnapshot?.area || null,
+            buildingType: contract.roomSnapshot?.buildingType || null,
+            thumbnailUrl: toAbsoluteUrl(contract.roomSnapshot?.thumbnailUrl || null)
           },
 
           // 퇴실/보증금 상태 (PRD v2)
@@ -861,6 +844,9 @@ const getHostContracts = async (req, res) => {
               ? contract.guest.phoneNumber : null,
             email: contract.guest.email
           },
+
+          // 계약 시점 스냅샷
+          roomSnapshot: contract.roomSnapshot,
 
           createdAt: contract.createdAt
         }))
@@ -887,13 +873,7 @@ const getContractDetail = async (req, res) => {
         {
           model: Room,
           as: 'room',
-          include: [
-            {
-              model: RoomPhoto,
-              as: 'photos',
-              order: [['order', 'ASC']]
-            }
-          ]
+          required: false
         },
         {
           model: User,
@@ -980,19 +960,18 @@ const getContractDetail = async (req, res) => {
           refundPolicyType: contract.refundPolicyType,
           refundPolicySnapshot: contract.refundPolicySnapshot,
 
-          // 방 정보
+          // 방 정보 (계약 시점 스냅샷 기반)
           room: {
-            id: contract.room.id,
-            roomName: contract.room.roomName,
-            address: contract.room.address,
+            id: contract.roomSnapshot?.roomId || null,
+            roomName: contract.roomSnapshot?.roomName || null,
+            address: contract.roomSnapshot?.address || null,
             detailAddress: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED', 'REFUNDED',
               'CANCELLED_BY_HOST', 'CANCELLED_BY_ADMIN_WITH_REFUND', 'CANCELLED_BY_ADMIN_NO_REFUND',
               'CANCEL_REQUESTED'
-            ].includes(contract.status) ? contract.room.detailAddress : null,
-            area: contract.room.area,
-            buildingType: contract.room.buildingType,
-            photos: contract.room.photos.map(photo => ({
-              id: photo.id,
+            ].includes(contract.status) ? (contract.roomSnapshot?.detailAddress || null) : null,
+            area: contract.roomSnapshot?.area || null,
+            buildingType: contract.roomSnapshot?.buildingType || null,
+            photos: (contract.roomSnapshot?.photos || []).map(photo => ({
               url: toAbsoluteUrl(photo.url),
               order: photo.order
             }))
