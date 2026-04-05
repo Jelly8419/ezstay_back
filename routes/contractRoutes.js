@@ -26,7 +26,8 @@ const {
   getDepositAgreement,
   acceptDepositAgreement,
   getHostBurdenPaymentInfo,
-  confirmHostBurdenPayment
+  confirmHostBurdenPayment,
+  getContractRoomDetail
 } = require('../controllers/contractController');
 const { confirmPaymentMock } = require('../controllers/mockPaymentController');
 
@@ -89,6 +90,12 @@ router.get('/host', authenticateToken, contractReadLimiter, getHostContracts);
  * GET /api/contracts/:contractId
  */
 router.get('/:contractId', authenticateToken, getContractDetail);
+
+/**
+ * 계약 시점 방 상세 조회
+ * GET /api/contracts/:contractId/room-detail
+ */
+router.get('/:contractId/room-detail', authenticateToken, getContractRoomDetail);
 
 /**
  * 승인 대기 중인 계약의 렌탈 아이템 수정 (장바구니)

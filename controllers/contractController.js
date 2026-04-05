@@ -1,4 +1,4 @@
-const { sequelize, Contract, Room, User, RoomPhoto, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, RoomAmenity, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const paytagClient = require('../utils/paytagClient');
@@ -80,24 +80,41 @@ const createContractRequest = async (req, res) => {
       );
     }
 
-    // 3. 방 존재 및 상태 확인 (이지서비스 + 사진 정보 포함)
+    // 3. 방 존재 및 상태 확인 (이지서비스 + 사진 + 편의시설 + 호스트 정보 포함)
     const { EzService } = require('../models');
-    const room = await Room.findOne({
-      where: { id: roomId, status: 'published' },
-      include: [
-        {
-          model: EzService,
-          as: 'ezService'
-        },
-        {
-          model: RoomPhoto,
-          as: 'photos',
-          attributes: ['url', 'order'],
-          order: [['order', 'ASC']]
-        }
-      ],
-      transaction
-    });
+    const [room, guest] = await Promise.all([
+      Room.findOne({
+        where: { id: roomId, status: 'published' },
+        include: [
+          {
+            model: EzService,
+            as: 'ezService'
+          },
+          {
+            model: RoomPhoto,
+            as: 'photos',
+            attributes: ['url', 'order'],
+            order: [['order', 'ASC']]
+          },
+          {
+            model: RoomAmenity,
+            as: 'amenity',
+            required: false
+          },
+          {
+            model: User,
+            as: 'host',
+            attributes: ['id', 'name', 'nickname', 'profileImageUrl', 'phoneVerified'],
+            required: false
+          }
+        ],
+        transaction
+      }),
+      User.findByPk(guestId, {
+        attributes: ['id', 'name', 'nickname', 'profileImageUrl', 'phoneVerified'],
+        transaction
+      })
+    ]);
 
     if (!room) {
       await transaction.rollback();
@@ -115,11 +132,13 @@ const createContractRequest = async (req, res) => {
     }
 
     // 3-1. 방 정보 스냅샷 (계약 시점의 방 상태 보존, 분쟁 대비)
-    const roomSnapshot = {
+    const snapshot = {
       roomId: room.id,
       roomName: room.roomName,
       address: room.address,
       detailAddress: room.detailAddress,
+      latitude: room.latitude,
+      longitude: room.longitude,
       buildingType: room.buildingType,
       floor: room.floor,
       area: room.area,
@@ -150,8 +169,28 @@ const createContractRequest = async (req, res) => {
       ezService: room.ezService ? {
         cleaningService: room.ezService.cleaningService,
       } : null,
+      amenity: room.amenity ? {
+        basicOptions: room.amenity.basicOptions,
+        additionalOptions: room.amenity.additionalOptions,
+        convenienceOptions: room.amenity.convenienceOptions,
+        petsAllowed: room.amenity.petsAllowed,
+      } : null,
       photos: (room.photos || []).map(p => ({ url: p.url, order: p.order })),
       thumbnailUrl: room.photos?.[0]?.url || null,
+      host: room.host ? {
+        id: room.host.id,
+        name: room.host.name,
+        nickname: room.host.nickname,
+        profileImageUrl: room.host.profileImageUrl,
+        phoneVerified: room.host.phoneVerified,
+      } : null,
+      guest: guest ? {
+        id: guest.id,
+        name: guest.name,
+        nickname: guest.nickname,
+        profileImageUrl: guest.profileImageUrl,
+        phoneVerified: guest.phoneVerified,
+      } : null,
       capturedAt: new Date().toISOString()
     };
 
@@ -445,7 +484,7 @@ const createContractRequest = async (req, res) => {
         status: 'PENDING_APPROVAL',
 
         // 스냅샷 (분쟁 대비)
-        roomSnapshot,
+        snapshot,
         pricingSnapshot: pricingSnapshot || {},
 
         // 환불정책 스냅샷 (계약 시점의 정책 보존)
@@ -681,12 +720,12 @@ const getGuestContracts = async (req, res) => {
 
           // 방 정보 (계약 시점 스냅샷 기반)
           room: {
-            id: contract.roomSnapshot?.roomId || null,
-            roomName: contract.roomSnapshot?.roomName || null,
-            address: contract.roomSnapshot?.address || null,
-            area: contract.roomSnapshot?.area || null,
-            buildingType: contract.roomSnapshot?.buildingType || null,
-            thumbnailUrl: toAbsoluteUrl(contract.roomSnapshot?.thumbnailUrl || null)
+            id: contract.snapshot?.roomId || null,
+            roomName: contract.snapshot?.roomName || null,
+            address: contract.snapshot?.address || null,
+            area: contract.snapshot?.area || null,
+            buildingType: contract.snapshot?.buildingType || null,
+            thumbnailUrl: toAbsoluteUrl(contract.snapshot?.thumbnailUrl || null)
           },
 
           // 호스트 정보
@@ -713,7 +752,7 @@ const getGuestContracts = async (req, res) => {
           depositAgreementStatus: contract.depositAgreement?.status || null,
 
           // 계약 시점 스냅샷
-          roomSnapshot: contract.roomSnapshot,
+          snapshot: contract.snapshot,
 
           createdAt: contract.createdAt
         };
@@ -797,7 +836,7 @@ const getHostContracts = async (req, res) => {
 
           // 📊 호스트 정산 내역 (렌탈아이템은 플랫폼 수익이므로 제외)
           hostSettlement: (() => {
-            const hasEzCleaningService = contract.roomSnapshot?.ezService?.cleaningService || false;
+            const hasEzCleaningService = contract.snapshot?.ezService?.cleaningService || false;
             const s = calculateSettlementAmount(contract, [], { hasEzCleaningService });
             return {
               rentalFee: s.rentalFee,
@@ -817,12 +856,12 @@ const getHostContracts = async (req, res) => {
 
           // 방 정보 (계약 시점 스냅샷 기반)
           room: {
-            id: contract.roomSnapshot?.roomId || null,
-            roomName: contract.roomSnapshot?.roomName || null,
-            address: contract.roomSnapshot?.address || null,
-            area: contract.roomSnapshot?.area || null,
-            buildingType: contract.roomSnapshot?.buildingType || null,
-            thumbnailUrl: toAbsoluteUrl(contract.roomSnapshot?.thumbnailUrl || null)
+            id: contract.snapshot?.roomId || null,
+            roomName: contract.snapshot?.roomName || null,
+            address: contract.snapshot?.address || null,
+            area: contract.snapshot?.area || null,
+            buildingType: contract.snapshot?.buildingType || null,
+            thumbnailUrl: toAbsoluteUrl(contract.snapshot?.thumbnailUrl || null)
           },
 
           // 퇴실/보증금 상태 (PRD v2)
@@ -846,7 +885,7 @@ const getHostContracts = async (req, res) => {
           },
 
           // 계약 시점 스냅샷
-          roomSnapshot: contract.roomSnapshot,
+          snapshot: contract.snapshot,
 
           createdAt: contract.createdAt
         }))
@@ -956,22 +995,33 @@ const getContractDetail = async (req, res) => {
           termsAgreed: contract.termsAgreed,
 
           // 계약 시점 스냅샷
-          roomSnapshot: contract.roomSnapshot,
+          snapshot: contract.snapshot ? {
+            ...contract.snapshot,
+            photos: (contract.snapshot.photos || []).map(p => ({
+              ...p,
+              url: toAbsoluteUrl(p.url)
+            })),
+            thumbnailUrl: toAbsoluteUrl(contract.snapshot.thumbnailUrl),
+            host: contract.snapshot.host ? {
+              ...contract.snapshot.host,
+              profileImageUrl: toAbsoluteUrl(contract.snapshot.host.profileImageUrl)
+            } : null
+          } : null,
           refundPolicyType: contract.refundPolicyType,
           refundPolicySnapshot: contract.refundPolicySnapshot,
 
           // 방 정보 (계약 시점 스냅샷 기반)
           room: {
-            id: contract.roomSnapshot?.roomId || null,
-            roomName: contract.roomSnapshot?.roomName || null,
-            address: contract.roomSnapshot?.address || null,
+            id: contract.snapshot?.roomId || null,
+            roomName: contract.snapshot?.roomName || null,
+            address: contract.snapshot?.address || null,
             detailAddress: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED', 'REFUNDED',
               'CANCELLED_BY_HOST', 'CANCELLED_BY_ADMIN_WITH_REFUND', 'CANCELLED_BY_ADMIN_NO_REFUND',
               'CANCEL_REQUESTED'
-            ].includes(contract.status) ? (contract.roomSnapshot?.detailAddress || null) : null,
-            area: contract.roomSnapshot?.area || null,
-            buildingType: contract.roomSnapshot?.buildingType || null,
-            photos: (contract.roomSnapshot?.photos || []).map(photo => ({
+            ].includes(contract.status) ? (contract.snapshot?.detailAddress || null) : null,
+            area: contract.snapshot?.area || null,
+            buildingType: contract.snapshot?.buildingType || null,
+            photos: (contract.snapshot?.photos || []).map(photo => ({
               url: toAbsoluteUrl(photo.url),
               order: photo.order
             }))
@@ -999,7 +1049,7 @@ const getContractDetail = async (req, res) => {
 
           // 📊 호스트 정산 내역 (렌탈아이템은 플랫폼 수익이므로 제외)
           hostSettlement: (() => {
-            const hasEzCleaningService = contract.roomSnapshot?.ezService?.cleaningService || false;
+            const hasEzCleaningService = contract.snapshot?.ezService?.cleaningService || false;
             const s = calculateSettlementAmount(contract, [], { hasEzCleaningService });
             return {
               rentalFee: s.rentalFee,
@@ -2426,7 +2476,7 @@ const confirmPayment = async (req, res) => {
     checkInNextDay.setHours(0, 0, 0, 0);
     const payoutAvailableDate = pgAvailableDate > checkInNextDay ? pgAvailableDate : checkInNextDay;
     const settlementExpectedDate = calculateSettlementDate(contract.checkInDate);
-    const hasEzCleaningService = contract.roomSnapshot?.ezService?.cleaningService || false;
+    const hasEzCleaningService = contract.snapshot?.ezService?.cleaningService || false;
     const settlementAmounts = calculateSettlementAmount(contract, [], { hasEzCleaningService });
 
     const settlement = await Settlement.create({
@@ -4138,6 +4188,169 @@ const confirmHostBurdenPayment = async (req, res) => {
   }
 };
 
+/**
+ * 계약 시점 방 상세 조회
+ * GET /api/contracts/:contractId/room-detail
+ *
+ * 게스트가 계약 요청 전 봤던 방 상세 페이지를 snapshot 기반으로 재현
+ * /api/rooms/:roomId 응답 포맷과 동일하게 반환
+ */
+const getContractRoomDetail = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const userId = req.user.id;
+
+    const contract = await Contract.findByPk(contractId, {
+      attributes: ['id', 'hostId', 'guestId', 'status', 'checkInDate', 'checkOutDate', 'snapshot', 'discountAmount', 'discountType']
+    });
+
+    if (!contract) {
+      return error(res, { code: 3005, message: '계약을 찾을 수 없습니다' }, 404);
+    }
+
+    if (contract.hostId !== userId && contract.guestId !== userId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    const snap = contract.snapshot;
+    if (!snap) {
+      return error(res, { code: 3006, message: '방 스냅샷 정보가 없습니다' }, 404);
+    }
+
+    // amenity JSON 파싱 (DB에 문자열로 저장된 경우 대비)
+    const parseJson = (val) => {
+      if (!val || typeof val !== 'string') return val;
+      try { return JSON.parse(val); } catch { return val; }
+    };
+
+    const amenity = snap.amenity ? {
+      basicOptions: parseJson(snap.amenity.basicOptions),
+      additionalOptions: parseJson(snap.amenity.additionalOptions),
+      convenienceOptions: parseJson(snap.amenity.convenienceOptions),
+      petsAllowed: snap.amenity.petsAllowed
+    } : null;
+
+    // detailAddress: 결제 완료 이상 상태에서만 노출
+    const detailAddressVisible = [
+      'PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED', 'REFUNDED',
+      'CANCEL_REQUESTED', 'CANCELLED_BY_HOST',
+      'CANCELLED_BY_ADMIN_WITH_REFUND', 'CANCELLED_BY_ADMIN_NO_REFUND'
+    ].includes(contract.status);
+
+    // 할인 정보: 계약 체결 시점 기준으로 재구성
+    // 계약 당시 적용된 할인은 discountAmount/discountType으로 확정됨
+    const discountType = contract.discountType; // 'quick' | 'longTerm' | 'both' | null
+    const discountAmount = contract.discountAmount || 0;
+    const dailyRent = snap.dailyRent || 0;
+    const totalDays = contract.checkInDate && contract.checkOutDate
+      ? Math.round((new Date(contract.checkOutDate) - new Date(contract.checkInDate)) / (1000 * 60 * 60 * 24))
+      : null;
+    const stayWeeks = totalDays ? Math.floor(totalDays / 7) : null;
+    const finalDailyRent = totalDays ? Math.round((dailyRent * totalDays - discountAmount) / totalDays) : dailyRent;
+
+    const roomDetail = {
+      // 기본 정보
+      id: snap.roomId,
+      roomName: snap.roomName,
+      address: snap.address,
+      detailAddress: detailAddressVisible ? (snap.detailAddress || null) : null,
+      latitude: snap.latitude || null,
+      longitude: snap.longitude || null,
+      area: snap.area,
+      floor: snap.floor,
+      buildingType: snap.buildingType,
+
+      // 구조 정보
+      roomCount: snap.roomCount,
+      bathroomCount: snap.bathroomCount,
+      isDuplex: snap.isDuplex,
+      elevatorAvailable: snap.elevatorAvailable,
+      parkingAvailable: snap.parkingAvailable,
+      parkingInfo: snap.parkingInfo,
+
+      // 상세 정보
+      maxGuests: snap.maxGuests,
+      description: snap.description,
+      checkInTime: snap.checkInTime,
+      checkOutTime: snap.checkOutTime,
+
+      // 요금 정보
+      dailyRent: snap.dailyRent,
+      dailyMaintenanceFee: snap.dailyMaintenanceFee,
+      maintenanceDetail: snap.maintenanceDetail,
+      includeElectricity: snap.includeElectricity,
+      includeWater: snap.includeWater,
+      includeGas: snap.includeGas,
+      includeInternet: snap.includeInternet,
+      cleaningFee: snap.cleaningFee,
+      minContractDays: snap.minContractDays,
+      refundPolicy: snap.refundPolicy,
+      deposit: appConfig.deposit.DEFAULT,
+      weeklyRent: snap.dailyRent ? snap.dailyRent * 7 : null,
+
+      // 할인 정보 (계약 당시 적용 기준)
+      longTermWeeks: snap.longTermWeeks,
+      longTermDiscount: snap.longTermDiscount,
+      quickMoveIn: snap.quickMoveIn,
+      quickMoveInDiscount: snap.quickMoveInDiscount,
+      finalDailyRent,
+      totalDiscountAmount: discountAmount,
+      appliedDiscounts: discountType === 'both' ? ['quick', 'longTerm']
+        : discountType ? [discountType] : [],
+      discounts: {
+        quick: {
+          quickMoveIn: snap.quickMoveIn,
+          quickMoveInDiscount: snap.quickMoveInDiscount,
+          isApplicable: discountType === 'quick' || discountType === 'both',
+          discountAmount: (discountType === 'quick' || discountType === 'both')
+            ? Math.round(dailyRent * (snap.quickMoveInDiscount || 0) / 100) : 0,
+          daysUntilCheckIn: null  // 계약 당시 시점 재현 불가
+        },
+        longTerm: {
+          longTermWeeks: snap.longTermWeeks,
+          longTermDiscount: snap.longTermDiscount,
+          isApplicable: discountType === 'longTerm' || discountType === 'both',
+          discountAmount: (discountType === 'longTerm' || discountType === 'both')
+            ? Math.round(dailyRent * (snap.longTermDiscount || 0) / 100) : 0,
+          stayWeeks
+        }
+      },
+
+      // 사진
+      photos: (snap.photos || []).map(p => ({
+        url: toAbsoluteUrl(p.url),
+        order: p.order
+      })),
+
+      // 편의시설
+      amenity,
+
+      // 이지서비스
+      ezService: snap.ezService || null,
+
+      // 호스트 정보
+      host: snap.host ? {
+        ...snap.host,
+        profileImageUrl: toAbsoluteUrl(snap.host.profileImageUrl)
+      } : null,
+
+      // 게스트 정보
+      guest: snap.guest ? {
+        ...snap.guest,
+        profileImageUrl: toAbsoluteUrl(snap.guest.profileImageUrl)
+      } : null,
+
+      // 스냅샷 메타
+      capturedAt: snap.capturedAt || null
+    };
+
+    return success(res, roomDetail);
+  } catch (err) {
+    console.error('계약 시점 방 상세 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   createContractRequest,
   getGuestContracts,
@@ -4161,5 +4374,6 @@ module.exports = {
   getDepositAgreement,
   acceptDepositAgreement,
   getHostBurdenPaymentInfo,
-  confirmHostBurdenPayment
+  confirmHostBurdenPayment,
+  getContractRoomDetail
 };

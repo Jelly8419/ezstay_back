@@ -292,18 +292,18 @@ const Contract = sequelize.define('Contract', {
     }
   },
 
-  // 방 정보 스냅샷 (계약 시점의 방 상태 보존, 분쟁 대비)
-  roomSnapshot: {
+  // 계약 시점 스냅샷 (방·호스트·게스트 정보 보존, 분쟁 대비)
+  snapshot: {
     type: DataTypes.TEXT('medium'),
     allowNull: true,
-    field: 'room_snapshot',
-    comment: '계약 시점 방 정보 스냅샷 (JSON)',
+    field: 'snapshot',
+    comment: '계약 시점 스냅샷 (방·호스트·게스트 정보 JSON)',
     get() {
-      const rawValue = this.getDataValue('roomSnapshot');
+      const rawValue = this.getDataValue('snapshot');
       return rawValue ? JSON.parse(rawValue) : null;
     },
     set(value) {
-      this.setDataValue('roomSnapshot', value ? JSON.stringify(value) : null);
+      this.setDataValue('snapshot', value ? JSON.stringify(value) : null);
     }
   },
 
