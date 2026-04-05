@@ -351,12 +351,12 @@ async function updateInProgress() {
 
         if (!existingSettlement) {
           const fullContract = await Contract.findByPk(contract.id, {
-            attributes: ['id', 'hostId', 'checkInDate', 'rentalFee', 'maintenanceFee', 'cleaningFee', 'discountAmount', 'hostPlatformFee', 'roomSnapshot'],
+            attributes: ['id', 'hostId', 'checkInDate', 'rentalFee', 'maintenanceFee', 'cleaningFee', 'discountAmount', 'hostPlatformFee', 'snapshot'],
             transaction
           });
 
           const expectedDate = calculateSettlementDate(fullContract.checkInDate);
-          const hasEzCleaningService = fullContract.roomSnapshot?.ezService?.cleaningService || false;
+          const hasEzCleaningService = fullContract.snapshot?.ezService?.cleaningService || false;
           const settlementCalc = calculateSettlementAmount(fullContract, [], { hasEzCleaningService });
 
           await Settlement.create({
