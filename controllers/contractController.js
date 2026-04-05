@@ -80,7 +80,7 @@ const createContractRequest = async (req, res) => {
       );
     }
 
-    // 3. 방 존재 및 상태 확인 (이지서비스 정보 포함)
+    // 3. 방 존재 및 상태 확인 (이지서비스 + 사진 정보 포함)
     const { EzService } = require('../models');
     const room = await Room.findOne({
       where: { id: roomId, status: 'published' },
@@ -88,6 +88,12 @@ const createContractRequest = async (req, res) => {
         {
           model: EzService,
           as: 'ezService'
+        },
+        {
+          model: RoomPhoto,
+          as: 'photos',
+          attributes: ['url', 'order'],
+          order: [['order', 'ASC']]
         }
       ],
       transaction
@@ -144,6 +150,8 @@ const createContractRequest = async (req, res) => {
       ezService: room.ezService ? {
         cleaningService: room.ezService.cleaningService,
       } : null,
+      photos: (room.photos || []).map(p => ({ url: p.url, order: p.order })),
+      thumbnailUrl: room.photos?.[0]?.url || null,
       capturedAt: new Date().toISOString()
     };
 
@@ -280,7 +288,6 @@ const createContractRequest = async (req, res) => {
 
     // 7. 렌탈 아이템 재고 확인
     const stockValidation = await validateRentalItemsStock(
-      roomId,
       rentalItems,
       checkInDate,
       checkOutDate,
@@ -454,8 +461,17 @@ const createContractRequest = async (req, res) => {
       { transaction }
     );
 
-    // 11. 렌탈 아이템은 contracts.rental_items JSON에만 저장
-    // rental_orders 테이블은 결제 시점(confirmPayment)에 생성됨
+    // 11. 렌탈 아이템 재고 점유 (결제 전 선점)
+    // RENTAL → RentalItemReservation INSERT, SALE → totalStock 차감
+    if (rentalItems && Array.isArray(rentalItems) && rentalItems.length > 0) {
+      await reserveRentalItems(
+        contract.id,
+        rentalItems,
+        contract.checkInDate,
+        contract.checkOutDate,
+        transaction
+      );
+    }
 
     // 12. 상태 변경 로그 기록
     await ContractStatusLog.createLog({
@@ -573,20 +589,6 @@ const getGuestContracts = async (req, res) => {
       where: whereClause,
       include: [
         {
-          model: Room,
-          as: 'room',
-          attributes: ['id', 'roomName', 'address', 'area', 'buildingType'],
-          include: [
-            {
-              model: RoomPhoto,
-              as: 'photos',
-              attributes: ['id', 'url'],
-              limit: 1,
-              order: [['order', 'ASC']]
-            }
-          ]
-        },
-        {
           model: User,
           as: 'host',
           attributes: ['id', 'name', 'nickname', 'phoneNumber']
@@ -677,14 +679,14 @@ const getGuestContracts = async (req, res) => {
           // 💰 최종 금액만 표시 (리스트 간소화)
           finalTotalAmount: contract.finalTotalAmount,
 
-          // 방 정보
+          // 방 정보 (계약 시점 스냅샷 기반)
           room: {
-            id: contract.room.id,
-            roomName: contract.room.roomName,
-            address: contract.room.address,
-            area: contract.room.area,
-            buildingType: contract.room.buildingType,
-            thumbnailUrl: toAbsoluteUrl(contract.room.photos[0]?.url || null)
+            id: contract.roomSnapshot?.roomId || null,
+            roomName: contract.roomSnapshot?.roomName || null,
+            address: contract.roomSnapshot?.address || null,
+            area: contract.roomSnapshot?.area || null,
+            buildingType: contract.roomSnapshot?.buildingType || null,
+            thumbnailUrl: toAbsoluteUrl(contract.roomSnapshot?.thumbnailUrl || null)
           },
 
           // 호스트 정보
@@ -709,6 +711,9 @@ const getGuestContracts = async (req, res) => {
 
           // 보증금 합의 상태 (동의 버튼 분기용)
           depositAgreementStatus: contract.depositAgreement?.status || null,
+
+          // 계약 시점 스냅샷
+          roomSnapshot: contract.roomSnapshot,
 
           createdAt: contract.createdAt
         };
@@ -747,20 +752,6 @@ const getHostContracts = async (req, res) => {
     const contracts = await Contract.findAll({
       where: whereClause,
       include: [
-        {
-          model: Room,
-          as: 'room',
-          attributes: ['id', 'roomName', 'address', 'area', 'buildingType'],
-          include: [
-            {
-              model: RoomPhoto,
-              as: 'photos',
-              attributes: ['id', 'url'],
-              limit: 1,
-              order: [['order', 'ASC']]
-            }
-          ]
-        },
         {
           model: User,
           as: 'guest',
@@ -824,14 +815,14 @@ const getHostContracts = async (req, res) => {
           // 메시지
           guestMessage: contract.guestMessage,
 
-          // 방 정보
+          // 방 정보 (계약 시점 스냅샷 기반)
           room: {
-            id: contract.room.id,
-            roomName: contract.room.roomName,
-            address: contract.room.address,
-            area: contract.room.area,
-            buildingType: contract.room.buildingType,
-            thumbnailUrl: toAbsoluteUrl(contract.room.photos[0]?.url || null)
+            id: contract.roomSnapshot?.roomId || null,
+            roomName: contract.roomSnapshot?.roomName || null,
+            address: contract.roomSnapshot?.address || null,
+            area: contract.roomSnapshot?.area || null,
+            buildingType: contract.roomSnapshot?.buildingType || null,
+            thumbnailUrl: toAbsoluteUrl(contract.roomSnapshot?.thumbnailUrl || null)
           },
 
           // 퇴실/보증금 상태 (PRD v2)
@@ -853,6 +844,9 @@ const getHostContracts = async (req, res) => {
               ? contract.guest.phoneNumber : null,
             email: contract.guest.email
           },
+
+          // 계약 시점 스냅샷
+          roomSnapshot: contract.roomSnapshot,
 
           createdAt: contract.createdAt
         }))
@@ -879,13 +873,7 @@ const getContractDetail = async (req, res) => {
         {
           model: Room,
           as: 'room',
-          include: [
-            {
-              model: RoomPhoto,
-              as: 'photos',
-              order: [['order', 'ASC']]
-            }
-          ]
+          required: false
         },
         {
           model: User,
@@ -972,19 +960,18 @@ const getContractDetail = async (req, res) => {
           refundPolicyType: contract.refundPolicyType,
           refundPolicySnapshot: contract.refundPolicySnapshot,
 
-          // 방 정보
+          // 방 정보 (계약 시점 스냅샷 기반)
           room: {
-            id: contract.room.id,
-            roomName: contract.room.roomName,
-            address: contract.room.address,
+            id: contract.roomSnapshot?.roomId || null,
+            roomName: contract.roomSnapshot?.roomName || null,
+            address: contract.roomSnapshot?.address || null,
             detailAddress: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED', 'REFUNDED',
               'CANCELLED_BY_HOST', 'CANCELLED_BY_ADMIN_WITH_REFUND', 'CANCELLED_BY_ADMIN_NO_REFUND',
               'CANCEL_REQUESTED'
-            ].includes(contract.status) ? contract.room.detailAddress : null,
-            area: contract.room.area,
-            buildingType: contract.room.buildingType,
-            photos: contract.room.photos.map(photo => ({
-              id: photo.id,
+            ].includes(contract.status) ? (contract.roomSnapshot?.detailAddress || null) : null,
+            area: contract.roomSnapshot?.area || null,
+            buildingType: contract.roomSnapshot?.buildingType || null,
+            photos: (contract.roomSnapshot?.photos || []).map(photo => ({
               url: toAbsoluteUrl(photo.url),
               order: photo.order
             }))
@@ -2316,6 +2303,7 @@ const confirmPayment = async (req, res) => {
 
     const now = new Date();
     const paymentMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
+    const easyPayProvider = paytagClient.mapEasyPayProvider(payType || 'CARD');
 
     // TODO: 가상계좌(VBANK) 결제 지원 - 오픈 스펙 제외, 추후 구현
     // - VBANK 선택 시 status: 'WAITING_FOR_DEPOSIT', Contract APPROVED 유지
@@ -2330,6 +2318,7 @@ const confirmPayment = async (req, res) => {
       paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
       orderId: contract.orderId,
       method: paymentMethod,
+      easyPayProvider,
       status: 'DONE',
       requestedAt: now,
       approvedAt: now,
@@ -2618,8 +2607,10 @@ const updatePendingRentalItems = async (req, res) => {
       });
     }
 
-    // 5. 렌탈 아이템이 비어있으면 null로 저장
+    // 5. 렌탈 아이템이 비어있으면 기존 점유 해제 후 null로 저장
     if (!rentalItems || !Array.isArray(rentalItems) || rentalItems.length === 0) {
+      await cancelRentalItemReservations(contractId, transaction);
+
       const amounts = recalcRentalItemsAmounts(contract, 0);
 
       await contract.update({
@@ -2636,7 +2627,9 @@ const updatePendingRentalItems = async (req, res) => {
       }, '렌탈 아이템이 모두 삭제되었습니다');
     }
 
-    // 6. 재고 검증
+    // 6. 재고 검증 (기존 점유 제외를 위해 먼저 해제 후 검증)
+    await cancelRentalItemReservations(contractId, transaction);
+
     const stockValidation = await validateRentalItemsStock(
       rentalItems,
       contract.checkInDate,
@@ -2699,6 +2692,16 @@ const updatePendingRentalItems = async (req, res) => {
       rentalItems: itemDetails,
       ...amounts
     }, { transaction });
+
+    // 9. 새 아이템으로 재고 재점유
+    // (기존 점유는 6번 단계 시작 전 cancelRentalItemReservations()에서 이미 해제됨)
+    await reserveRentalItems(
+      contract.id,
+      rentalItems.map(item => ({ itemId: item.itemId, quantity: item.quantity })),
+      contract.checkInDate,
+      contract.checkOutDate,
+      transaction
+    );
 
     await transaction.commit();
 
@@ -4062,6 +4065,7 @@ const confirmHostBurdenPayment = async (req, res) => {
 
     const now = new Date();
     const paymentMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
+    const easyPayProvider = paytagClient.mapEasyPayProvider(payType || 'CARD');
 
     // Payment 레코드 생성
     const payment = await Payment.create({
@@ -4070,6 +4074,7 @@ const confirmHostBurdenPayment = async (req, res) => {
       paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
       orderId: contract.orderId,
       method: paymentMethod,
+      easyPayProvider,
       status: 'DONE',
       requestedAt: now,
       approvedAt: now,

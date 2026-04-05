@@ -565,6 +565,9 @@ router.get('/notification-queue/contract/:contractId', adminController.getContra
 // 목록 조회 (?tab=pending|all &task_type= &status= &date_from= &date_to= &page= &limit=)
 router.get('/service-tasks', adminController.getServiceTasks);
 
+// 단건 조회 (변경 이력 포함)
+router.get('/service-tasks/:id', adminController.getServiceTask);
+
 // 상태 변경 + 업체 정보 입력
 router.patch(
   '/service-tasks/:id/status',

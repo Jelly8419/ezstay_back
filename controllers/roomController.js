@@ -247,7 +247,7 @@ const getRoomById = async (req, res) => {
           name: item.name,
           description: item.description,
           price: parseFloat(item.price),
-          availableStock: item.availableStock,
+          totalStock: item.totalStock,
           imageUrl: item.imageUrl
         }));
       }

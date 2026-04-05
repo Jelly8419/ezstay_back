@@ -2,7 +2,7 @@ const { User, UserBankAccount, LocalUser, UserSession, sequelize } = require('..
 const { Op } = require('sequelize');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 const bcrypt = require('bcryptjs');
-const { validatePassword, validatePhoneNumber } = require('../utils/validator');
+const { validatePassword, validatePhoneNumber, validateNickname } = require('../utils/validator');
 
 // 게스트 본인인증정보 저장
 const saveGuestVerification = async (req, res) => {
@@ -363,17 +363,12 @@ const changeNickname = async (req, res) => {
     const { nickname } = req.body;
     const userId = req.user.id;
 
-    // 필수 필드 검증
-    if (!nickname || !nickname.trim()) {
-      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    const validation = validateNickname(nickname);
+    if (!validation.valid) {
+      return error(res, { code: 4009, message: validation.message }, 400);
     }
 
     const trimmedNickname = nickname.trim();
-
-    // 닉네임 길이 검증 (2~20자)
-    if (trimmedNickname.length < 2 || trimmedNickname.length > 20) {
-      return error(res, { code: 4009, message: '닉네임은 2~20자 사이여야 합니다.' }, 400);
-    }
 
     // 사용자 정보 업데이트
     const [updated] = await User.update({

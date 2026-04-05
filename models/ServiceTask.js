@@ -67,6 +67,27 @@ module.exports = (sequelize) => {
       allowNull: true,
       defaultValue: null,
       comment: '예약번호'
+    },
+
+    reservedAmount: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: null,
+      comment: '예약 시 견적 금액 (RESERVED 시 입력)'
+    },
+
+    actualAmount: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: null,
+      comment: '완료 후 실제 청구 금액 (COMPLETED 시 입력)'
+    },
+
+    issueNote: {
+      type: DataTypes.STRING(500),
+      allowNull: true,
+      defaultValue: null,
+      comment: 'ISSUE 상태 시 이슈 내용 메모'
     }
   }, {
     tableName: 'service_tasks',

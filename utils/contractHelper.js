@@ -1,5 +1,6 @@
 const { sequelize, RentalItem, RentalItemReservation } = require('../models');
 const { Op } = require('sequelize');
+const { RENTAL_BUFFER_DAYS } = require('./rentalOrderHelper');
 
 /**
  * 렌탈 아이템 비용 계산
@@ -102,7 +103,7 @@ async function calculateDiscount(baseRent, totalDays, checkInDate, room) {
  * @param {Transaction} transaction - Sequelize 트랜잭션
  * @returns {Promise<Object>} { available, unavailableItems }
  */
-async function validateRentalItemsStock(roomId, rentalItems, checkInDate, checkOutDate, transaction) {
+async function validateRentalItemsStock(rentalItems, checkInDate, checkOutDate, transaction) {
   // 배열 형식 체크
   if (!rentalItems || !Array.isArray(rentalItems) || rentalItems.length === 0) {
     return { available: true, unavailableItems: [] };
@@ -132,39 +133,43 @@ async function validateRentalItemsStock(roomId, rentalItems, checkInDate, checkO
       continue;
     }
 
-    // 해당 기간에 이미 예약된 수량 조회
-    const reservedQuantity = await RentalItemReservation.sum('quantity', {
-      where: {
-        rentalItemId: item.itemId,
-        status: {
-          [Op.in]: ['RESERVED', 'CONFIRMED']
-        },
-        [Op.or]: [
-          {
-            // 새 예약의 시작일이 기존 예약 기간 내
-            reservedFrom: {
-              [Op.between]: [checkInDate, checkOutDate]
-            }
-          },
-          {
-            // 새 예약의 종료일이 기존 예약 기간 내
-            reservedUntil: {
-              [Op.between]: [checkInDate, checkOutDate]
-            }
-          },
-          {
-            // 새 예약이 기존 예약을 완전히 포함
-            [Op.and]: [
-              { reservedFrom: { [Op.lte]: checkInDate } },
-              { reservedUntil: { [Op.gte]: checkOutDate } }
-            ]
-          }
-        ]
-      },
-      transaction
-    }) || 0;
+    let availableQuantity;
 
-    const availableQuantity = rentalItem.availableStock - reservedQuantity;
+    if (rentalItem.salesType === 'SALE') {
+      // SALE: 날짜 무관, totalStock 직접 비교
+      availableQuantity = rentalItem.totalStock;
+    } else {
+      // RENTAL: 해당 기간에 이미 예약된 수량 조회 (배송·회수 버퍼 적용)
+      const bufferMs = RENTAL_BUFFER_DAYS * 24 * 60 * 60 * 1000;
+      const bufferedFrom = new Date(checkInDate.getTime() - bufferMs);
+      const bufferedUntil = new Date(checkOutDate.getTime() + bufferMs);
+
+      const reservedQuantity = await RentalItemReservation.sum('quantity', {
+        where: {
+          rentalItemId: item.itemId,
+          status: {
+            [Op.in]: ['RESERVED', 'CONFIRMED']
+          },
+          [Op.or]: [
+            {
+              reservedFrom: { [Op.between]: [bufferedFrom, bufferedUntil] }
+            },
+            {
+              reservedUntil: { [Op.between]: [bufferedFrom, bufferedUntil] }
+            },
+            {
+              [Op.and]: [
+                { reservedFrom: { [Op.lte]: bufferedFrom } },
+                { reservedUntil: { [Op.gte]: bufferedUntil } }
+              ]
+            }
+          ]
+        },
+        transaction
+      }) || 0;
+
+      availableQuantity = rentalItem.totalStock - reservedQuantity;
+    }
 
     if (availableQuantity < item.quantity) {
       unavailableItems.push({
@@ -208,19 +213,28 @@ async function reserveRentalItems(contractId, rentalItems, checkInDate, checkOut
       throw new Error(`렌탈 아이템을 찾을 수 없습니다. (ID: ${item.itemId})`);
     }
 
-    // 예약 레코드 생성
-    const reservation = await RentalItemReservation.create({
-      contractId,
-      rentalItemId: item.itemId,
-      quantity: item.quantity,
-      pricePerItem: rentalItem.price,
-      totalPrice: parseFloat(rentalItem.price) * item.quantity,
-      reservedFrom: checkInDate,
-      reservedUntil: checkOutDate,
-      status: 'RESERVED'
-    }, { transaction });
+    if (rentalItem.salesType === 'SALE') {
+      // SALE: totalStock 직접 차감
+      await RentalItem.decrement('totalStock', {
+        by: item.quantity,
+        where: { id: item.itemId },
+        transaction
+      });
+    } else {
+      // RENTAL: Reservation 레코드 생성
+      const reservation = await RentalItemReservation.create({
+        contractId,
+        rentalItemId: item.itemId,
+        quantity: item.quantity,
+        pricePerItem: rentalItem.price,
+        totalPrice: parseFloat(rentalItem.price) * item.quantity,
+        reservedFrom: checkInDate,
+        reservedUntil: checkOutDate,
+        status: 'RESERVED'
+      }, { transaction });
 
-    reservations.push(reservation);
+      reservations.push(reservation);
+    }
   }
 
   return reservations;
@@ -233,6 +247,9 @@ async function reserveRentalItems(contractId, rentalItems, checkInDate, checkOut
  * @returns {Promise<boolean>} 성공 여부
  */
 async function cancelRentalItemReservations(contractId, transaction) {
+  const { Contract } = require('../models');
+
+  // RENTAL: Reservation CANCELLED 처리
   const reservations = await RentalItemReservation.findAll({
     where: {
       contractId,
@@ -246,6 +263,25 @@ async function cancelRentalItemReservations(contractId, transaction) {
   for (const reservation of reservations) {
     reservation.status = 'CANCELLED';
     await reservation.save({ transaction });
+  }
+
+  // SALE: contracts.rentalItems JSON에서 수량 읽어 totalStock 복구
+  const contract = await Contract.findByPk(contractId, {
+    attributes: ['id', 'rentalItems'],
+    transaction
+  });
+
+  if (contract && Array.isArray(contract.rentalItems) && contract.rentalItems.length > 0) {
+    for (const item of contract.rentalItems) {
+      const rentalItem = await RentalItem.findByPk(item.itemId, { transaction });
+      if (rentalItem && rentalItem.salesType === 'SALE') {
+        await RentalItem.increment('totalStock', {
+          by: item.quantity,
+          where: { id: item.itemId },
+          transaction
+        });
+      }
+    }
   }
 
   return true;

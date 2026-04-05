@@ -57,7 +57,8 @@ const RentalOrderLog = sequelize.define('RentalOrderLog', {
       'CANCEL_REQUESTED',     // 반품/취소 요청 (게스트)
       'DELIVERY_STARTED',     // 배송 시작
       'DELIVERY_COMPLETED',   // 배송 완료
-      'ADMIN_REFUND'          // 관리자 직접 환불
+      'ADMIN_REFUND',         // 관리자 직접 환불
+      'PG_DB_MISMATCH'        // [긴급] PG 취소 성공 후 DB 업데이트 실패 - 수동 확인 필요
     ),
     allowNull: false,
     comment: '액션 유형'

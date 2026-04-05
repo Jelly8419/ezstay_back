@@ -392,6 +392,7 @@ const confirmRentalPayment = async (req, res) => {
 
     const now = new Date();
     const mappedMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
+    const easyPayProvider = paytagClient.mapEasyPayProvider(payType || 'CARD');
     const pgPaymentKey = paytagResponse.tran_key || paytagResponse.recv_orderno || orderId;
 
     console.log('🔍 PayTag 결제 응답:', JSON.stringify(paytagResponse, null, 2));
@@ -403,6 +404,7 @@ const confirmRentalPayment = async (req, res) => {
       paymentKey: pgPaymentKey,
       orderId: rentalOrder.orderId,
       method: mappedMethod,
+      easyPayProvider,
       status: 'DONE',
       requestedAt: now,
       approvedAt: now,
@@ -833,7 +835,7 @@ const getAvailableRentalItems = async (req, res) => {
           }
         }) || 0;
 
-        const availableQuantity = Math.max(0, item.availableStock - reservedQuantity);
+        const availableQuantity = Math.max(0, item.totalStock - reservedQuantity);
 
         return {
           id: item.id,
@@ -952,6 +954,35 @@ const cancelRentalItemsByGuest = async (req, res) => {
           }, { transaction: dbTx });
         }
 
+        // 재고 복구: RENTAL → Reservation CANCELLED, SALE → 배송 전이면 totalStock 복구
+        const rentalTypeItemIds = [];
+        for (const item of items) {
+          if (item.rentalItem?.salesType === 'SALE') {
+            // SALE: 배송 전(PENDING)에만 재고 복구 (groupItemsByOrder에서 PENDING만 통과하므로 항상 해당)
+            await RentalItem.increment('totalStock', {
+              by: item.quantity,
+              where: { id: item.rentalItemId },
+              transaction: dbTx
+            });
+          } else {
+            rentalTypeItemIds.push(item.rentalItemId);
+          }
+        }
+
+        if (rentalTypeItemIds.length > 0) {
+          await RentalItemReservation.update(
+            { status: 'CANCELLED' },
+            {
+              where: {
+                rentalOrderId: rentalOrder.id,
+                rentalItemId: { [Op.in]: rentalTypeItemIds },
+                status: { [Op.ne]: 'CANCELLED' }
+              },
+              transaction: dbTx
+            }
+          );
+        }
+
         await rentalPayment.update({
           balanceAmount: newBalance,
           status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
@@ -1059,7 +1090,9 @@ const requestRentalItemsReturn = async (req, res) => {
     // 7일 기간 체크 (입주 중일 때만 적용)
     const now = new Date();
     if (contract.status === 'IN_PROGRESS') {
-      const stayStartedAt = contract.checkedInAt ? new Date(contract.checkedInAt) : new Date(contract.checkInDate);
+      // checkedInAt은 DATE 컬럼 → 그대로 파싱
+      // checkInDate는 DATEONLY 컬럼 → 'T00:00:00' 붙여서 KST 자정으로 파싱
+      const stayStartedAt = contract.checkedInAt ? new Date(contract.checkedInAt) : new Date(contract.checkInDate + 'T00:00:00');
       const cancelRequestDeadline = new Date(stayStartedAt.getTime() + RENTAL_CANCEL_REQUEST_DAYS * 24 * 60 * 60 * 1000);
       if (now > cancelRequestDeadline) {
         await transaction.rollback();
@@ -1093,6 +1126,25 @@ const requestRentalItemsReturn = async (req, res) => {
       if (pendingCount > 0) {
         await transaction.rollback();
         return error(res, { code: 4424, message: `주문(${rentalOrder.orderId})에 이미 처리 중인 반품 요청이 있습니다.` }, 400);
+      }
+    }
+
+    // 환불 예정 금액 마이너스 체크
+    // 수거비(7000원) 차감 후 환불액이 0 이하인 주문은 신청 불가
+    const pendingRetrievalCount = await RentalOrderRefundRequest.count({
+      where: {
+        contractId: parseInt(contractId),
+        retrievalStatus: 'RETRIEVAL_PENDING'
+      },
+      transaction
+    });
+    for (const [, { rentalOrder, items }] of groups) {
+      const itemTotalAmount = items.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
+      const needsRetrieval = ['IN_TRANSIT', 'DELIVERED'].includes(rentalOrder.deliveryStatus);
+      const shippingDeduction = needsRetrieval && pendingRetrievalCount === 0 ? RETRIEVAL_SHIPPING_COST : 0;
+      if (itemTotalAmount - shippingDeduction <= 0) {
+        await transaction.rollback();
+        return error(res, { code: 4425, message: `주문(${rentalOrder.orderId})의 환불 예정 금액(${itemTotalAmount}원)이 수거비(${shippingDeduction}원) 이하로 반품 신청이 불가합니다.` }, 400);
       }
     }
 

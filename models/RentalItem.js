@@ -63,21 +63,6 @@ const RentalItem = sequelize.define('RentalItem', {
       min: 0
     }
   },
-  availableStock: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    defaultValue: 0,
-    field: 'available_stock',
-    comment: '현재 이용 가능한 수량',
-    validate: {
-      min: 0,
-      isLessThanOrEqualTotal(value) {
-        if (value > this.totalStock) {
-          throw new Error('이용 가능한 수량은 총 재고 수량을 초과할 수 없습니다.');
-        }
-      }
-    }
-  },
   imageUrl: {
     type: DataTypes.STRING(255),
     allowNull: true,
@@ -116,10 +101,6 @@ const RentalItem = sequelize.define('RentalItem', {
       fields: ['is_active'],
       name: 'idx_is_active'
     },
-    {
-      fields: ['available_stock'],
-      name: 'idx_available_stock'
-    }
   ]
 });
 
@@ -153,63 +134,6 @@ RentalItem.FREE_SERVICE_MAPPING = {
   towel_set_rental: 'towel_set'
 };
 
-/**
- * 재고 차감 (예약 시 호출)
- * @param {number} quantity - 차감할 수량
- * @returns {boolean} 성공 여부
- */
-RentalItem.prototype.decreaseStock = async function(quantity) {
-  if (!this.isActive) {
-    throw new Error(`${this.name}은(는) 현재 대여 불가능합니다.`);
-  }
-
-  if (this.availableStock < quantity) {
-    throw new Error(`재고가 부족합니다. 현재 재고: ${this.availableStock}개`);
-  }
-
-  this.availableStock -= quantity;
-  await this.save();
-  return true;
-};
-
-/**
- * 재고 복구 (예약 취소 시 호출)
- * @param {number} quantity - 복구할 수량
- * @returns {boolean} 성공 여부
- */
-RentalItem.prototype.increaseStock = async function(quantity) {
-  const newStock = this.availableStock + quantity;
-
-  if (newStock > this.totalStock) {
-    throw new Error(`총 재고를 초과할 수 없습니다. 총 재고: ${this.totalStock}개`);
-  }
-
-  this.availableStock = newStock;
-  await this.save();
-  return true;
-};
-
-/**
- * 총 재고 업데이트 (관리자가 재고 수정 시)
- * @param {number} newTotal - 새로운 총 재고
- * @returns {boolean} 성공 여부
- */
-RentalItem.prototype.updateTotalStock = async function(newTotal) {
-  if (newTotal < 0) {
-    throw new Error('총 재고는 0 이상이어야 합니다.');
-  }
-
-  const reservedQuantity = this.totalStock - this.availableStock;
-
-  if (newTotal < reservedQuantity) {
-    throw new Error(`현재 대여 중인 수량(${reservedQuantity}개)보다 적게 설정할 수 없습니다.`);
-  }
-
-  this.totalStock = newTotal;
-  this.availableStock = newTotal - reservedQuantity;
-  await this.save();
-  return true;
-};
 
 /**
  * 특정 카테고리의 활성화된 물품 목록 조회
@@ -220,10 +144,7 @@ RentalItem.getAvailableItemsByType = async function(itemType) {
   return await RentalItem.findAll({
     where: {
       itemType,
-      isActive: true,
-      availableStock: {
-        [require('sequelize').Op.gt]: 0
-      }
+      isActive: true
     },
     order: [['price', 'ASC']]
   });

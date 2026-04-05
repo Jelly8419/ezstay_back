@@ -240,6 +240,19 @@ function mapPaymentMethod(paytagPayType) {
 }
 
 /**
+ * PayTag 결제 수단 → 간편결제 제공사 매핑
+ * EASY_PAY일 때만 의미 있음, 그 외는 null
+ */
+function mapEasyPayProvider(paytagPayType) {
+  const providerMap = {
+    'KAKAO': 'KAKAO',
+    'NAVER': 'NAVER',
+    'PAYCO': 'PAYCO'
+  };
+  return providerMap[paytagPayType] || null;
+}
+
+/**
  * PayTag 결제 수단 → Contract paymentMethod 매핑
  */
 function mapContractPaymentMethod(paytagPayType) {
@@ -301,6 +314,7 @@ module.exports = {
   extractCancelParams,
   mapPaymentMethod,
   mapContractPaymentMethod,
+  mapEasyPayProvider,
   validateConfig,
   getTestAmount,
   isTestAmountMode,
