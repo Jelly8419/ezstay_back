@@ -89,6 +89,29 @@ const validateName = (name) => {
 };
 
 /**
+ * 닉네임 유효성 검증
+ * - 2~20자
+ * - 한글, 영문, 숫자만 허용 (공백·특수문자 불가)
+ */
+const validateNickname = (nickname) => {
+  if (!nickname || !nickname.trim()) {
+    return { valid: false, message: '닉네임을 입력해주세요.' };
+  }
+
+  const trimmed = nickname.trim();
+
+  if (trimmed.length < 2 || trimmed.length > 20) {
+    return { valid: false, message: '닉네임은 2~20자 사이여야 합니다.' };
+  }
+
+  if (!/^[가-힣a-zA-Z0-9]+$/.test(trimmed)) {
+    return { valid: false, message: '닉네임은 한글, 영문, 숫자만 입력 가능합니다.' };
+  }
+
+  return { valid: true };
+};
+
+/**
  * URL 유효성 검증
  */
 const validateURL = (url) => {
@@ -193,6 +216,7 @@ module.exports = {
   validatePassword,
   validatePhoneNumber,
   validateName,
+  validateNickname,
   validateURL,
   validateNumberRange,
   validateStringLength,
