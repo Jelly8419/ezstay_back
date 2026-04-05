@@ -31,27 +31,15 @@ async function migrate() {
   console.log(`소급 대상 필드: ${REQUIRED_FIELDS.join(', ')}\n`);
 
   // snapshot이 null이거나 필수 필드 중 하나라도 없는 계약 조회
-  // JSON_EXTRACT로 각 필드 존재 여부 체크
+  // JSON_EXTRACT로 각 필드 존재 여부 체크 (literal 사용 - sequelize.fn이 $를 이스케이프하는 문제 방지)
   const contracts = await Contract.findAll({
     where: {
       [Op.or]: [
         { snapshot: null },
-        sequelize.where(
-          sequelize.fn('JSON_EXTRACT', sequelize.col('snapshot'), '$.photos'),
-          { [Op.is]: null }
-        ),
-        sequelize.where(
-          sequelize.fn('JSON_EXTRACT', sequelize.col('snapshot'), '$.latitude'),
-          { [Op.is]: null }
-        ),
-        sequelize.where(
-          sequelize.fn('JSON_EXTRACT', sequelize.col('snapshot'), '$.host'),
-          { [Op.is]: null }
-        ),
-        sequelize.where(
-          sequelize.fn('JSON_EXTRACT', sequelize.col('snapshot'), '$.guest'),
-          { [Op.is]: null }
-        ),
+        sequelize.literal("JSON_EXTRACT(`snapshot`, '$.photos') IS NULL"),
+        sequelize.literal("JSON_EXTRACT(`snapshot`, '$.latitude') IS NULL"),
+        sequelize.literal("JSON_EXTRACT(`snapshot`, '$.host') IS NULL"),
+        sequelize.literal("JSON_EXTRACT(`snapshot`, '$.guest') IS NULL"),
       ]
     },
     attributes: ['id', 'roomId', 'guestId', 'snapshot']
