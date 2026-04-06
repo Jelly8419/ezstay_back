@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { Contract, ChatRoom, Room, EzService, User, ContractStatusLog, Settlement, Payout, DepositAgreement, RentalOrder, RentalOrderItem, RentalItem, ServiceTask, sequelize } = require('../models');
+const { Contract, ChatRoom, Room, EzService, User, ContractStatusLog, Settlement, Payout, DepositAgreement, RentalOrder, RentalOrderItem, RentalItem, ServiceTask, Payment, PaymentFailureLog, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { sendSystemMessage, setChatWritableUntil } = require('../config/firebaseAdmin');
 const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/systemMessageTypes');
@@ -9,6 +9,7 @@ const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { calculateSettlementDate, calculateSettlementAmount } = require('../services/settlementService');
 const { createReceiptsForReadySettlements } = require('../services/receiptService');
 const { cancelRentalItemReservations } = require('../utils/contractHelper');
+const paytagClient = require('../utils/paytagClient');
 
 /**
  * 계약 상태 자동 업데이트 스케줄러
@@ -888,9 +889,61 @@ async function autoReturnDepositOnDeadline() {
 
     await transaction.commit();
 
-    // 알림 발송 (트랜잭션 외부에서 비동기 실행)
+    // 트랜잭션 외부: PG 취소 + 알림 발송
     if (overdueContracts.length > 0) {
       for (const contract of overdueContracts) {
+        const depositAmount = contract.deposit || 0;
+
+        // PG 취소 (보증금 전액 환급)
+        if (depositAmount > 0) {
+          try {
+            const payment = await Payment.findOne({
+              where: { contractId: contract.id, paymentType: 'CONTRACT', status: 'DONE' },
+              order: [['createdAt', 'DESC']]
+            });
+
+            if (payment) {
+              const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(payment);
+              const newBalance = payment.balanceAmount - depositAmount;
+              const canceltype = newBalance === 0 ? '0' : '1';
+
+              await paytagClient.cancelPayment({
+                orderno, orgpaydate, orgtranamt, loginid,
+                cancelamt: depositAmount,
+                canceltype
+              });
+
+              await payment.update({
+                balanceAmount: newBalance,
+                status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+              });
+
+              await Contract.update(
+                { depositStatus: 'RETURNED', depositReturnedAt: now },
+                { where: { id: contract.id } }
+              );
+
+              console.log(`[스케줄러] 합의 데드라인 보증금 PG 환급 완료: contractId=${contract.id}, amount=${depositAmount}`);
+            }
+          } catch (pgErr) {
+            console.error(`[스케줄러] 합의 데드라인 보증금 PG 환급 실패 (contractId=${contract.id}):`, pgErr.message);
+
+            await Contract.update(
+              { depositStatus: 'REFUND_FAILED' },
+              { where: { id: contract.id } }
+            );
+
+            await PaymentFailureLog.create({
+              contractId: contract.id,
+              orderId: `DEPOSIT_DEADLINE_REFUND_${contract.id}`,
+              failureCode: pgErr.paytagErrorCode || 'PG_CANCEL_FAILED',
+              failureMessage: pgErr.paytagErrorMessage || pgErr.message,
+              requestData: { type: 'DEPOSIT_DEADLINE_AUTO_REFUND', cancelamt: depositAmount },
+              responseData: pgErr.paytagResponse || null
+            });
+          }
+        }
+
         // 채팅 시스템 메시지
         if (contract.chatRoom) {
           sendSystemMessage(

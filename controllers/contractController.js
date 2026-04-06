@@ -1073,6 +1073,21 @@ const getContractDetail = async (req, res) => {
         });
       });
 
+      // 보증금 환급 (퇴실 보증금 프로세스 경유 — 계약 취소와 별도)
+      // 계약 취소(refunds)는 finalRefundAmount에 보증금 포함되어 있으므로 여기선 제외
+      if (contract.depositReturnedAt && (contract.refundableDeposit || 0) > 0) {
+        const isDepositIncludedInRefund = refunds.some(r => r.depositRefundAmount > 0);
+        if (!isDepositIncludedInRefund) {
+          paymentHistory.push({
+            occurredAt: toKSTString(contract.depositReturnedAt),
+            amount: -(contract.refundableDeposit),
+            description: contract.depositDeduction > 0
+              ? `보증금 환급 (${Number(contract.depositDeduction).toLocaleString()}원 차감)`
+              : '보증금 환급'
+          });
+        }
+      }
+
       paymentHistory.sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt));
     }
 
@@ -2051,7 +2066,11 @@ const requestRefund = async (req, res) => {
             status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
           }, { transaction });
 
-          await refund.update({ pgResponse: cancelResp }, { transaction });
+          await refund.update({
+            pgResponse: cancelResp,
+            refundStatus: 'COMPLETED',
+            completedAt: new Date()
+          }, { transaction });
 
           console.log(`[requestRefund] PayTag 취소 완료: contractId=${contractId}, cancelamt=${cancelamt}, restamt=${cancelResp.restamt}`);
 
@@ -3062,7 +3081,8 @@ const confirmCheckout = async (req, res) => {
           });
 
           await contract.update({
-            depositStatus: 'RETURNED'
+            depositStatus: 'RETURNED',
+            depositReturnedAt: now
           });
 
           // 채팅 쓰기 마감 설정 (보증금 반환 완료 시점 + 24H)
@@ -3951,6 +3971,8 @@ const acceptDepositAgreement = async (req, res) => {
           balanceAmount: newBalance,
           status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
         });
+
+        await contract.update({ depositReturnedAt: new Date() });
 
         console.log(`[acceptDepositAgreement] 보증금 부분환불 완료: contractId=${contractId}, refundableDeposit=${refundableDeposit}`);
       } catch (pgErr) {
