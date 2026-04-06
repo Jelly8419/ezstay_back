@@ -231,14 +231,49 @@ async function ensureMasterData(transaction) {
   return rentalItems;
 }
 
+/**
+ * 방의 환불정책으로 refundInfo 구성 ({ policyType, snapshot })
+ * 정책이 없으면 { policyType: null, snapshot: null } 반환
+ */
+async function buildRefundInfo(room) {
+  if (!room?.refundPolicy) return { policyType: null, snapshot: null };
+
+  const policyType = room.refundPolicy;
+  const [policyTypeRow, rules] = await Promise.all([
+    RefundPolicyType.findOne({ where: { policyType } }),
+    RefundPolicyRule.findAll({ where: { policyType }, order: [['daysBeforeMin', 'DESC']] })
+  ]);
+
+  if (!policyTypeRow) return { policyType, snapshot: null };
+
+  return {
+    policyType,
+    snapshot: {
+      policyType: policyTypeRow.policyType,
+      displayName: policyTypeRow.displayName,
+      description: policyTypeRow.description,
+      specialRules: policyTypeRow.specialRules,
+      rules: rules.map(r => ({
+        daysBeforeMin: r.daysBeforeMin,
+        daysBeforeMax: r.daysBeforeMax,
+        refundRate: parseFloat(r.refundRate),
+        isSameDayCancellation: r.isSameDayCancellation,
+        description: r.description
+      })),
+      capturedAt: new Date().toISOString()
+    }
+  };
+}
+
 // =====================================================
 // 시나리오 정의
 // =====================================================
 
 /**
  * 공통 Contract 데이터 생성
+ * @param {Object} refundInfo - { policyType, snapshot } — room에서 추출한 정책 정보
  */
-function buildContractData(orderId, hostId, guestId, roomId, baseDate, overrides = {}) {
+function buildContractData(orderId, hostId, guestId, roomId, baseDate, overrides = {}, refundInfo = {}) {
   const checkIn = daysAfter(baseDate, 7);
   const checkOut = daysAfter(baseDate, 37); // 30일 계약
   const totalDays = 30;
@@ -280,8 +315,8 @@ function buildContractData(orderId, hostId, guestId, roomId, baseDate, overrides
     termsAgreed: JSON.stringify({ service: true, privacy: true, refund: true }),
     specialRequests: JSON.stringify({ earlyCheckin: false, lateCheckout: false }),
     pricingSnapshot: JSON.stringify({ weeklyRent: 225000, dailyMaintenance: 5000, cleaningFee: 50000 }),
-    refundPolicyType: 'flexible',
-    refundPolicySnapshot: JSON.stringify(REFUND_POLICIES_SEED[0]),
+    refundPolicyType: refundInfo.policyType || null,
+    refundPolicySnapshot: refundInfo.snapshot ? JSON.stringify(refundInfo.snapshot) : null,
     status: 'PENDING_APPROVAL',
     ...overrides,
   };
@@ -383,9 +418,10 @@ const SCENARIOS = {
     description: 'Contract만 생성, 로그 1건',
     needsRental: false,
     async create(ctx) {
-      const { orderId, hostId, guestId, roomId, baseDate, transaction } = ctx;
+      const { orderId, hostId, guestId, roomId, room, baseDate, transaction } = ctx;
+      const refundInfo = await buildRefundInfo(room);
       const contract = await Contract.create(
-        buildContractData(orderId, hostId, guestId, roomId, baseDate),
+        buildContractData(orderId, hostId, guestId, roomId, baseDate, {}, refundInfo),
         { transaction }
       );
       await createStatusLog(contract.id, null, 'PENDING_APPROVAL', 'GUEST', guestId, baseDate, transaction);
@@ -401,13 +437,14 @@ const SCENARIOS = {
     description: 'Contract + StatusLog 2건',
     needsRental: false,
     async create(ctx) {
-      const { orderId, hostId, guestId, roomId, baseDate, transaction } = ctx;
+      const { orderId, hostId, guestId, roomId, room, baseDate, transaction } = ctx;
+      const refundInfo = await buildRefundInfo(room);
       const approvedAt = daysAfter(baseDate, 1);
       const contract = await Contract.create(
         buildContractData(orderId, hostId, guestId, roomId, baseDate, {
           status: 'APPROVED',
           approvedAt,
-        }),
+        }, refundInfo),
         { transaction }
       );
       await createStatusLog(contract.id, null, 'PENDING_APPROVAL', 'GUEST', guestId, baseDate, transaction);
@@ -425,7 +462,8 @@ const SCENARIOS = {
     description: 'Contract + Payment(DONE) + StatusLog 3건',
     needsRental: false,
     async create(ctx) {
-      const { orderId, hostId, guestId, roomId, baseDate, transaction } = ctx;
+      const { orderId, hostId, guestId, roomId, room, baseDate, transaction } = ctx;
+      const refundInfo = await buildRefundInfo(room);
       const approvedAt = daysAfter(baseDate, 1);
       const paidAt = daysAfter(baseDate, 2);
 
@@ -433,7 +471,7 @@ const SCENARIOS = {
         status: 'PAYMENT_COMPLETED',
         approvedAt,
         paidAt,
-      });
+      }, refundInfo);
       const contract = await Contract.create(contractData, { transaction });
 
       await createStatusLog(contract.id, null, 'PENDING_APPROVAL', 'GUEST', guestId, baseDate, transaction);
@@ -455,7 +493,8 @@ const SCENARIOS = {
     description: 'Contract + Payment(DONE) + StatusLog 4건',
     needsRental: false,
     async create(ctx) {
-      const { orderId, hostId, guestId, roomId, baseDate, transaction } = ctx;
+      const { orderId, hostId, guestId, roomId, room, baseDate, transaction } = ctx;
+      const refundInfo = await buildRefundInfo(room);
       const approvedAt = daysAfter(baseDate, 1);
       const paidAt = daysAfter(baseDate, 2);
       const checkedInAt = daysAfter(baseDate, 7);
@@ -465,7 +504,7 @@ const SCENARIOS = {
         approvedAt,
         paidAt,
         checkedInAt,
-      });
+      }, refundInfo);
       const contract = await Contract.create(contractData, { transaction });
 
       await createStatusLog(contract.id, null, 'PENDING_APPROVAL', 'GUEST', guestId, baseDate, transaction);
@@ -488,7 +527,8 @@ const SCENARIOS = {
     description: 'Contract + Payment(DONE) + StatusLog 5건',
     needsRental: false,
     async create(ctx) {
-      const { orderId, hostId, guestId, roomId, baseDate, transaction } = ctx;
+      const { orderId, hostId, guestId, roomId, room, baseDate, transaction } = ctx;
+      const refundInfo = await buildRefundInfo(room);
       const approvedAt = daysAfter(baseDate, 1);
       const paidAt = daysAfter(baseDate, 2);
       const checkedInAt = daysAfter(baseDate, 7);
@@ -500,7 +540,7 @@ const SCENARIOS = {
         paidAt,
         checkedInAt,
         checkedOutAt,
-      });
+      }, refundInfo);
       const contract = await Contract.create(contractData, { transaction });
 
       await createStatusLog(contract.id, null, 'PENDING_APPROVAL', 'GUEST', guestId, baseDate, transaction);
@@ -524,7 +564,8 @@ const SCENARIOS = {
     description: 'Contract + StatusLog 2건',
     needsRental: false,
     async create(ctx) {
-      const { orderId, hostId, guestId, roomId, baseDate, transaction } = ctx;
+      const { orderId, hostId, guestId, roomId, room, baseDate, transaction } = ctx;
+      const refundInfo = await buildRefundInfo(room);
       const rejectedAt = daysAfter(baseDate, 1);
 
       const contract = await Contract.create(
@@ -533,7 +574,7 @@ const SCENARIOS = {
           rejectedAt,
           hostMessage: '죄송합니다. 해당 기간에 이미 예약이 있습니다.',
           cancellationReason: '기간 중복',
-        }),
+        }, refundInfo),
         { transaction }
       );
 
@@ -554,7 +595,8 @@ const SCENARIOS = {
     description: 'Contract + Payment(CANCELED) + Refund(COMPLETED) + StatusLog 5건',
     needsRental: false,
     async create(ctx) {
-      const { orderId, hostId, guestId, roomId, baseDate, transaction } = ctx;
+      const { orderId, hostId, guestId, roomId, room, baseDate, transaction } = ctx;
+      const refundInfo = await buildRefundInfo(room);
       const approvedAt = daysAfter(baseDate, 1);
       const paidAt = daysAfter(baseDate, 2);
       const cancelledAt = daysAfter(baseDate, 3);
@@ -566,7 +608,7 @@ const SCENARIOS = {
         cancelledAt,
         cancellationType: 'AFTER_PAYMENT',
         cancellationReason: '개인 사정으로 취소합니다.',
-      });
+      }, refundInfo);
       const contract = await Contract.create(contractData, { transaction });
 
       // StatusLogs
@@ -591,7 +633,7 @@ const SCENARIOS = {
       await Refund.create({
         contractId: contract.id,
         refundStatus: 'COMPLETED',
-        policyTypeUsed: 'flexible',
+        policyTypeUsed: refundInfo.policyType || null,
         cancellationDate: cancelledAt,
         checkInDate: contractData.checkInDate,
         daysBeforeCheckin,
@@ -632,7 +674,8 @@ const SCENARIOS = {
     description: 'Contract + Payment + RentalOrder(PAID) + Items + Reservation + RentalPayment + Logs',
     needsRental: true,
     async create(ctx) {
-      const { orderId, hostId, guestId, roomId, baseDate, transaction, rentalItems, rentalOrderSeq } = ctx;
+      const { orderId, hostId, guestId, roomId, room, baseDate, transaction, rentalItems, rentalOrderSeq } = ctx;
+      const refundInfo = await buildRefundInfo(room);
       const approvedAt = daysAfter(baseDate, 1);
       const paidAt = daysAfter(baseDate, 2);
       const checkedInAt = daysAfter(baseDate, 7);
@@ -648,7 +691,7 @@ const SCENARIOS = {
         checkedInAt,
         rentalItemsFee,
         rentalItems: JSON.stringify(selectedItems.map(i => ({ id: i.id, name: i.name, price: Number(i.price), quantity: 1 }))),
-      });
+      }, refundInfo);
       // finalTotalAmount 재계산 (subtotal/totalUsageFee는 VIRTUAL)
       contractData.rentalItemsFee = rentalItemsFee;
       contractData.finalTotalAmount =
@@ -783,7 +826,8 @@ const SCENARIOS = {
     description: 'Contract + Payment + RentalOrder x2 + 부분환불 이력 포함',
     needsRental: true,
     async create(ctx) {
-      const { orderId, hostId, guestId, roomId, baseDate, transaction, rentalItems, rentalOrderSeq } = ctx;
+      const { orderId, hostId, guestId, roomId, room, baseDate, transaction, rentalItems, rentalOrderSeq } = ctx;
+      const refundInfo = await buildRefundInfo(room);
       const approvedAt = daysAfter(baseDate, 1);
       const paidAt = daysAfter(baseDate, 2);
       const checkedInAt = daysAfter(baseDate, 7);
@@ -809,7 +853,7 @@ const SCENARIOS = {
         checkedInAt,
         checkedOutAt,
         rentalItemsFee: totalRentalFee,
-      });
+      }, refundInfo);
       // finalTotalAmount 재계산 (subtotal/totalUsageFee는 VIRTUAL)
       contractData.rentalItemsFee = totalRentalFee;
       contractData.finalTotalAmount =
@@ -1247,6 +1291,7 @@ async function seedCommand(opts) {
           hostId,
           guestId,
           roomId,
+          room,
           baseDate,
           transaction,
           rentalItems,

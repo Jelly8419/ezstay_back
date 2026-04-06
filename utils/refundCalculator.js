@@ -26,38 +26,60 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
   try {
     const faultType = options.faultType || 'GUEST';
 
-    // 1. 방 정보 및 EZ클리닝 여부 로드
-    const room = await Room.findByPk(contract.roomId, {
-      include: [{
-        model: EzService,
-        as: 'ezService',
-        required: false
-      }]
-    });
-    if (!room) {
-      throw new Error('방 정보를 찾을 수 없습니다.');
+    // 1. EZ클리닝 여부 확인 (스냅샷 우선, 없으면 현재 방 조회)
+    let hasEzCleaningService = false;
+    const snapshot = contract.refundPolicySnapshot;
+
+    if (snapshot) {
+      // 스냅샷이 있으면 현재 방/정책 조회 불필요
+      hasEzCleaningService = contract.snapshot?.ezService?.cleaningService || false;
+    } else {
+      // 스냅샷 없음 → 현재 방 정보로 fallback
+      const room = await Room.findByPk(contract.roomId, {
+        include: [{ model: EzService, as: 'ezService', required: false }]
+      });
+      if (!room) {
+        throw new Error('방 정보를 찾을 수 없습니다.');
+      }
+      hasEzCleaningService = room.ezService?.cleaningService || false;
     }
 
-    const policyType = room.refundPolicy;
-    if (!policyType) {
-      throw new Error('환불 정책이 설정되지 않았습니다.');
-    }
+    // 2. 환불 정책 결정 (스냅샷 우선, 없으면 현재 DB 조회)
+    let policy;
+    let policyType;
 
-    const hasEzCleaningService = room.ezService?.cleaningService || false;
+    if (snapshot) {
+      // 스냅샷 기반: 계약 시점의 정책 그대로 사용
+      policyType = snapshot.policyType;
+      policy = {
+        displayName: snapshot.displayName,
+        rules: snapshot.rules
+      };
+    } else {
+      // fallback: 현재 방의 정책 조회
+      const room = await Room.findByPk(contract.roomId);
+      if (!room) {
+        throw new Error('방 정보를 찾을 수 없습니다.');
+      }
+      policyType = room.refundPolicy;
+      if (!policyType) {
+        throw new Error('환불 정책이 설정되지 않았습니다.');
+      }
 
-    // 2. 환불 정책 및 규칙 조회
-    const policy = await RefundPolicyType.findOne({
-      where: { policyType },
-      include: [{
-        model: RefundPolicyRule,
-        as: 'rules',
-        required: false,
-        order: [['days_before_min', 'DESC']]
-      }]
-    });
+      const dbPolicy = await RefundPolicyType.findOne({
+        where: { policyType },
+        include: [{
+          model: RefundPolicyRule,
+          as: 'rules',
+          required: false,
+          order: [['days_before_min', 'DESC']]
+        }]
+      });
 
-    if (!policy) {
-      throw new Error(`환불 정책 '${policyType}'을 찾을 수 없습니다.`);
+      if (!dbPolicy) {
+        throw new Error(`환불 정책 '${policyType}'을 찾을 수 없습니다.`);
+      }
+      policy = dbPolicy;
     }
 
     // 3. 취소 시점 분석
@@ -348,19 +370,12 @@ async function getRefundPolicyInfo(policyType) {
 
     // 규칙을 프론트엔드 친화적인 형태로 변환 (당일취소 상위정책 룰 제외)
     const formattedRules = policy.rules.filter(rule => !rule.isSameDayCancellation).map(rule => {
-      let periodDescription;
-      if (rule.daysBeforeMax === null) {
-        periodDescription = `입주일 ${rule.daysBeforeMin}일 이전 취소 시,`;
-      } else if (rule.daysBeforeMin === 0 && rule.daysBeforeMax === 0) {
-        periodDescription = '입주일 당일 이후 취소 시,';
-      } else {
-        periodDescription = `입주일 ${rule.daysBeforeMin}일 이전 취소 시,`;
-      }
-
       return {
-        period: periodDescription,
+        daysBeforeMin: rule.daysBeforeMin,
+        daysBeforeMax: rule.daysBeforeMax,
         refundRate: parseFloat(rule.refundRate),
-        description: rule.description || periodDescription
+        isSameDayCancellation: rule.isSameDayCancellation,
+        description: rule.description
       };
     });
 

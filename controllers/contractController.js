@@ -27,7 +27,7 @@ const {
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { calculateSettlementDate, calculatePayoutAvailableDate, calculateSettlementAmount } = require('../services/settlementService');
-const { toKSTString } = require('../utils/dateHelper');
+const { toKSTString, nowKSTString } = require('../utils/dateHelper');
 
 /**
  * 계약 요청 생성 (게스트 -> 호스트)
@@ -191,7 +191,7 @@ const createContractRequest = async (req, res) => {
         profileImageUrl: guest.profileImageUrl,
         phoneVerified: guest.phoneVerified,
       } : null,
-      capturedAt: new Date().toISOString()
+      capturedAt: nowKSTString()
     };
 
     // 3-2. 환불정책 스냅샷 조회 (계약 시점의 정책 보존)
@@ -221,7 +221,7 @@ const createContractRequest = async (req, res) => {
             isSameDayCancellation: rule.isSameDayCancellation,
             description: rule.description
           })),
-          capturedAt: new Date().toISOString()
+          capturedAt: nowKSTString()
         };
       }
     }
@@ -1673,43 +1673,7 @@ const cancelContractByGuest = async (req, res) => {
       transaction
     });
 
-    // 채팅방이 있다면 시스템 메시지 발송 (승인 대기 중 취소 시 채팅방이 없을 수 있음)
-    const chatRoom = await ChatRoom.findOne({
-      where: { contractId },
-      transaction
-    });
-
-    if (chatRoom) {
-      sendSystemMessage(
-        chatRoom.firebaseChatRoomId,
-        getSystemMessageTemplate(SystemMessageTypes.CONTRACT_CANCELED_BY_GUEST),
-        SystemMessageTypes.CONTRACT_CANCELED_BY_GUEST,
-        {
-          contractId: contract.id,
-          cancelledBy: 'guest',
-          cancellationReason: cancellationReason || null
-        }
-      ).catch(err => {
-        console.error('시스템 메시지 발송 실패 (계약 취소는 완료됨):', err);
-      });
-    }
-
-    // 호스트/게스트 모두에게 취소 알림 전송
-    try {
-      const [cancelGuest, cancelHost, cancelRoom] = await Promise.all([
-        User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
-        User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
-        Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
-      ]);
-      await NotificationService.notifyContractCanceled(contract, CANCEL_TYPES.GUEST_CANCEL, {
-        guest: cancelGuest,
-        host: cancelHost,
-        room: cancelRoom,
-        refundData: { guestPenalty: 0, refundAmount: 0, hostPenalty: 0, settlementAmount: 0 }
-      });
-    } catch (notifyErr) {
-      console.error('계약 취소 알림 전송 실패 (무시됨):', notifyErr);
-    }
+    // 승인 대기 중 취소: 채팅방 없음(호스트 승인 시점에 생성), 앱 알림/알림톡 미발송
 
     await transaction.commit();
 
@@ -2147,9 +2111,9 @@ const requestRefund = async (req, res) => {
         host: refundHost,
         room: refundRoom,
         refundData: {
-          guestPenalty: refund.penaltyAmount || 0,
+          guestPenalty: (refund.penaltyAmount || 0) + (refund.platformFeeDeducted || 0),
           refundAmount: refund.finalRefundAmount || 0,
-          hostPenalty: refund.hostPenaltyAmount || 0,
+          hostPenalty: refund.penaltyAmount || 0,
           settlementAmount: refund.hostPenaltyAmount || 0
         }
       }).catch(err => console.error('환불 취소 알림 전송 실패 (무시됨):', err));
@@ -3366,13 +3330,13 @@ const cancelContractByHost = async (req, res) => {
         User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
         Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
       ]);
-      await NotificationService.notifyContractCanceled(contract, 'host', {
+      await NotificationService.notifyContractCanceled(contract, CANCEL_TYPES.HOST_CANCEL, {
         guest: cancelGuest,
         host: cancelHost,
         room: cancelRoom,
         refundData: {
-          penaltyAmount: refund.penaltyAmount,
-          refundAmount: refund.totalRefundAmount
+          guestCompensationAmount: refund.guestCompensationAmount,
+          hostBurdenAmount: refund.hostBurdenAmount
         }
       });
     } catch (notifyErr) {
