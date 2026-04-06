@@ -482,6 +482,13 @@ const Contract = sequelize.define('Contract', {
     comment: '보증금 상태 (HOLDING=보관중, RETURN_PENDING=반환대기, RETURN_HOLD=반환보류, RETURN_CONFIRMED=반환확정, DEDUCTION_CONFIRMED=차감확정, RETURNED=반환완료, REFUND_FAILED=환불실패)'
   },
 
+  depositReturnedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    field: 'deposit_returned_at',
+    comment: '보증금 환급 완료 시각 (PG 취소 성공 시점)'
+  },
+
   // 퇴실 세부 상태 (PRD v2)
   checkoutStatus: {
     type: DataTypes.ENUM('NOT_STARTED', 'GUEST_COMPLETED', 'HOST_CONFIRMED', 'HOLD_REQUESTED', 'HOST_PENDING'),
