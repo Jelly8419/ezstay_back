@@ -3972,7 +3972,7 @@ const acceptDepositAgreement = async (req, res) => {
           status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
         });
 
-        await contract.update({ depositReturnedAt: new Date() });
+        await contract.update({ depositStatus: 'RETURNED', depositReturnedAt: new Date() });
 
         console.log(`[acceptDepositAgreement] 보증금 부분환불 완료: contractId=${contractId}, refundableDeposit=${refundableDeposit}`);
       } catch (pgErr) {
