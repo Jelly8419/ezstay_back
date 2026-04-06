@@ -211,6 +211,15 @@ const validateReceiptNumber = (number, type) => {
   return { valid: true };
 };
 
+/**
+ * 회원가입용 닉네임 자동 생성
+ * 형식: ez + 6자리 숫자 (e.g. ez132435)
+ */
+const generateNickname = () => {
+  const digits = Math.floor(100000 + Math.random() * 900000);
+  return `ez${digits}`;
+};
+
 module.exports = {
   validateEmail,
   validatePassword,
@@ -220,5 +229,6 @@ module.exports = {
   validateURL,
   validateNumberRange,
   validateStringLength,
-  validateReceiptNumber
+  validateReceiptNumber,
+  generateNickname
 };

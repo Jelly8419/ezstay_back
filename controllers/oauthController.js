@@ -14,6 +14,7 @@ const getRefreshExpiresAt = () => {
   return new Date(Date.now() + ms);
 };
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
+const { generateNickname } = require('../utils/validator');
 const axios = require('axios');
 
 const kakaoLogin = async (req, res) => {
@@ -130,7 +131,7 @@ const kakaoLogin = async (req, res) => {
         user = await User.create({
           email: email,
           name: kakaoName || kakaoNickname,
-          nickname: kakaoNickname || kakaoName,
+          nickname: generateNickname(),
           profileImageUrl: profile?.profile_image_url,
           userType: 'social'
         }, { transaction });
