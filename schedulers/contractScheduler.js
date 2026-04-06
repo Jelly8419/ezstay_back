@@ -281,40 +281,18 @@ async function updateInProgress() {
   try {
     const now = new Date();
 
-    // Room JOIN으로 checkInTime 포함하여 체크인 대상 조회
-    const checkInContracts = await Contract.findAll({
+    // check_in_date에 이미 입실 시각이 포함되어 있으므로 DB 레벨에서 바로 필터링
+    const eligibleContracts = await Contract.findAll({
       where: {
-        status: 'PAYMENT_COMPLETED'
+        status: 'PAYMENT_COMPLETED',
+        checkInDate: { [Op.lte]: now }
       },
-      attributes: ['id', 'checkInDate', 'roomId'],
-      include: [
-        {
-          model: Room,
-          as: 'room',
-          attributes: ['id', 'checkInTime']
-        }
-      ],
+      attributes: ['id', 'checkInDate'],
       transaction
-    });
-
-    // 입실시간이 지난 계약만 필터링
-    const eligibleContracts = checkInContracts.filter(contract => {
-      const checkInTime = contract.room ? contract.room.checkInTime : 14; // 기본값 14시
-      const checkInDate = new Date(contract.checkInDate);
-      // checkInDate의 날짜 + checkInTime 시간으로 정확한 입실 datetime 생성
-      const exactCheckInDatetime = new Date(
-        checkInDate.getFullYear(),
-        checkInDate.getMonth(),
-        checkInDate.getDate(),
-        checkInTime, 0, 0
-      );
-      return now >= exactCheckInDatetime;
     });
 
     // 각 계약별 상태 업데이트 및 로그 기록
     for (const contract of eligibleContracts) {
-      const checkInTime = contract.room ? contract.room.checkInTime : 14;
-
       await Contract.update(
         {
           status: 'IN_PROGRESS',
@@ -336,7 +314,6 @@ async function updateInProgress() {
         reason: '입실 시간이 도래하여 자동으로 계약 진행 중 상태로 변경',
         metadata: {
           scheduledCheckInDate: contract.checkInDate,
-          roomCheckInTime: checkInTime,
           actualCheckInAt: now
         },
         transaction
@@ -419,39 +396,18 @@ async function updateCompleted() {
   try {
     const now = new Date();
 
-    // Room JOIN으로 checkOutTime 포함하여 체크아웃 대상 조회
-    const checkOutContracts = await Contract.findAll({
+    // check_out_date에 이미 퇴실 시각이 포함되어 있으므로 DB 레벨에서 바로 필터링
+    const eligibleContracts = await Contract.findAll({
       where: {
-        status: 'IN_PROGRESS'
+        status: 'IN_PROGRESS',
+        checkOutDate: { [Op.lte]: now }
       },
-      attributes: ['id', 'checkInDate', 'checkOutDate', 'totalDays', 'roomId'],
-      include: [
-        {
-          model: Room,
-          as: 'room',
-          attributes: ['id', 'checkOutTime']
-        }
-      ],
+      attributes: ['id', 'checkInDate', 'checkOutDate', 'totalDays'],
       transaction
-    });
-
-    // 퇴실시간이 지난 계약만 필터링
-    const eligibleContracts = checkOutContracts.filter(contract => {
-      const checkOutTime = contract.room ? contract.room.checkOutTime : 11; // 기본값 11시
-      const checkOutDate = new Date(contract.checkOutDate);
-      const exactCheckOutDatetime = new Date(
-        checkOutDate.getFullYear(),
-        checkOutDate.getMonth(),
-        checkOutDate.getDate(),
-        checkOutTime, 0, 0
-      );
-      return now >= exactCheckOutDatetime;
     });
 
     // 각 계약별 상태 업데이트 및 로그 기록 (상태만 COMPLETED로 전환)
     for (const contract of eligibleContracts) {
-      const checkOutTime = contract.room ? contract.room.checkOutTime : 11;
-
       await Contract.update(
         {
           status: 'COMPLETED',
@@ -474,7 +430,6 @@ async function updateCompleted() {
         metadata: {
           checkInDate: contract.checkInDate,
           scheduledCheckOutDate: contract.checkOutDate,
-          roomCheckOutTime: checkOutTime,
           actualCheckOutAt: now,
           totalDays: contract.totalDays
         },
