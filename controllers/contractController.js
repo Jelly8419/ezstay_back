@@ -2051,7 +2051,11 @@ const requestRefund = async (req, res) => {
             status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
           }, { transaction });
 
-          await refund.update({ pgResponse: cancelResp }, { transaction });
+          await refund.update({
+            pgResponse: cancelResp,
+            refundStatus: 'COMPLETED',
+            completedAt: new Date()
+          }, { transaction });
 
           console.log(`[requestRefund] PayTag 취소 완료: contractId=${contractId}, cancelamt=${cancelamt}, restamt=${cancelResp.restamt}`);
 
