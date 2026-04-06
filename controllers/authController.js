@@ -1,7 +1,7 @@
 const { User, LocalUser, SocialUser, UserBankAccount, EmailVerificationCode, UserSession, sequelize } = require('../models');
 const { generateTokens, hashPassword, comparePassword, verifyToken } = require('../utils/auth');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
-const { validateEmail, validatePassword } = require('../utils/validator');
+const { validateEmail, validatePassword, generateNickname } = require('../utils/validator');
 const { withTransaction } = require('../utils/transactionHelper');
 const { Op } = require('sequelize');
 
@@ -91,7 +91,8 @@ const register = async (req, res) => {
     const newUser = await User.create({
       email,
       userType: 'local',
-      ...(name && { name, nickname: name }),
+      ...(name && { name }),
+      nickname: generateNickname(),
       ...(phoneNumber && { phoneNumber, phoneVerified: true, phoneVerifiedAt: new Date() }),
       ...(birth !== undefined && birth !== null && birth !== '' && { birth }),
       ...(gender !== undefined && gender !== null && { gender }),
