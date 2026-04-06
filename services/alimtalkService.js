@@ -313,13 +313,13 @@ class AlimtalkService {
       // 호스트 취소 → 게스트에게
       await this.send('contract_canceled_host_to_guest', guest, {
         ...commonData,
-        penaltyAmount: this._formatNumber(refundData.penaltyAmount || 0)
+        penaltyAmount: this._formatNumber(refundData.guestCompensationAmount || 0)
       }, { contractId: contract.id });
 
       // 호스트 취소 → 호스트에게
       await this.send('contract_canceled_host_to_host', host, {
         ...commonData,
-        penaltyAmount: this._formatNumber(refundData.penaltyAmount || 0)
+        penaltyAmount: this._formatNumber(refundData.hostBurdenAmount || 0)
       }, { contractId: contract.id });
     }
   }

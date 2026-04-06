@@ -2111,9 +2111,9 @@ const requestRefund = async (req, res) => {
         host: refundHost,
         room: refundRoom,
         refundData: {
-          guestPenalty: refund.penaltyAmount || 0,
+          guestPenalty: (refund.penaltyAmount || 0) + (refund.platformFeeDeducted || 0),
           refundAmount: refund.finalRefundAmount || 0,
-          hostPenalty: refund.hostPenaltyAmount || 0,
+          hostPenalty: refund.penaltyAmount || 0,
           settlementAmount: refund.hostPenaltyAmount || 0
         }
       }).catch(err => console.error('환불 취소 알림 전송 실패 (무시됨):', err));
@@ -3330,13 +3330,13 @@ const cancelContractByHost = async (req, res) => {
         User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
         Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
       ]);
-      await NotificationService.notifyContractCanceled(contract, 'host', {
+      await NotificationService.notifyContractCanceled(contract, CANCEL_TYPES.HOST_CANCEL, {
         guest: cancelGuest,
         host: cancelHost,
         room: cancelRoom,
         refundData: {
-          penaltyAmount: refund.penaltyAmount,
-          refundAmount: refund.totalRefundAmount
+          guestCompensationAmount: refund.guestCompensationAmount,
+          hostBurdenAmount: refund.hostBurdenAmount
         }
       });
     } catch (notifyErr) {
