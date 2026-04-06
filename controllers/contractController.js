@@ -27,7 +27,7 @@ const {
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { calculateSettlementDate, calculatePayoutAvailableDate, calculateSettlementAmount } = require('../services/settlementService');
-const { toKSTString } = require('../utils/dateHelper');
+const { toKSTString, nowKSTString } = require('../utils/dateHelper');
 
 /**
  * 계약 요청 생성 (게스트 -> 호스트)
@@ -191,7 +191,7 @@ const createContractRequest = async (req, res) => {
         profileImageUrl: guest.profileImageUrl,
         phoneVerified: guest.phoneVerified,
       } : null,
-      capturedAt: new Date().toISOString()
+      capturedAt: nowKSTString()
     };
 
     // 3-2. 환불정책 스냅샷 조회 (계약 시점의 정책 보존)
@@ -221,7 +221,7 @@ const createContractRequest = async (req, res) => {
             isSameDayCancellation: rule.isSameDayCancellation,
             description: rule.description
           })),
-          capturedAt: new Date().toISOString()
+          capturedAt: nowKSTString()
         };
       }
     }
