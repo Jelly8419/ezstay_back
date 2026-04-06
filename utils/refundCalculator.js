@@ -370,19 +370,12 @@ async function getRefundPolicyInfo(policyType) {
 
     // 규칙을 프론트엔드 친화적인 형태로 변환 (당일취소 상위정책 룰 제외)
     const formattedRules = policy.rules.filter(rule => !rule.isSameDayCancellation).map(rule => {
-      let periodDescription;
-      if (rule.daysBeforeMax === null) {
-        periodDescription = `입주일 ${rule.daysBeforeMin}일 이전 취소 시,`;
-      } else if (rule.daysBeforeMin === 0 && rule.daysBeforeMax === 0) {
-        periodDescription = '입주일 당일 이후 취소 시,';
-      } else {
-        periodDescription = `입주일 ${rule.daysBeforeMin}일 이전 취소 시,`;
-      }
-
       return {
-        period: periodDescription,
+        daysBeforeMin: rule.daysBeforeMin,
+        daysBeforeMax: rule.daysBeforeMax,
         refundRate: parseFloat(rule.refundRate),
-        description: rule.description || periodDescription
+        isSameDayCancellation: rule.isSameDayCancellation,
+        description: rule.description
       };
     });
 
