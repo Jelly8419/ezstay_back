@@ -1024,10 +1024,12 @@ const getContractDetail = async (req, res) => {
         let description;
         if (metadata.depositRefund) {
           description = '보증금 환급';
-        } else if (r.penaltyAmount > 0) {
-          description = `계약 취소 (위약금 ${Number(r.penaltyAmount).toLocaleString()}원)`;
         } else {
-          description = '계약 취소';
+          const feeDeducted = !r.guestServiceFeeRefunded ? (r.originalPlatformFee || 0) : 0;
+          const totalPenalty = (r.penaltyAmount || 0) + feeDeducted;
+          description = totalPenalty > 0
+            ? `계약 취소 (위약금 ${Number(totalPenalty).toLocaleString()}원)`
+            : '계약 취소';
         }
         paymentHistory.push({
           occurredAt: toKSTString(r.completedAt || r.updatedAt),
