@@ -46,9 +46,15 @@ const {
   ChatRoom,
   Settlement,
   DepositAgreement,
+  Payout,
 } = require('../../models');
 
 const { Op } = require('sequelize');
+const {
+  calculateSettlementDate,
+  calculatePayoutAvailableDate,
+} = require('../../utils/businessDayHelper');
+const { calculateSettlementAmount } = require('../../services/settlementService');
 const { createChatRoomMetadata } = require('../../config/firebaseAdmin');
 
 // =====================================================
@@ -109,6 +115,8 @@ function getBaseDateForScenario(scenarioKey) {
 
     // 완료/취소: checkOut < 오늘
     case 'completed':
+    case 'completed_deposit_returned':
+    case 'completed_deposit_deducted':
       return daysAfter(now, -38);                     // 체크아웃(baseDate+37): 어제
     case 'completed_with_full_rental':
       return daysAfter(now, -38);                     // 동일
@@ -405,6 +413,48 @@ async function createPayment(contractId, orderId, totalAmount, requestedAt, appr
   }, { transaction });
 }
 
+/**
+ * Settlement + CONTRACT_SETTLEMENT Payout 생성 헬퍼
+ */
+async function createSettlementAndPayout(contract, contractData, hostId, paidAt, checkedInAt, transaction) {
+  const s = calculateSettlementAmount(contractData, []);
+  const settlementDate = calculateSettlementDate(checkedInAt);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const settlementStatus = settlementDate <= today ? 'COMPLETED' : 'PENDING';
+
+  const settlement = await Settlement.create({
+    contractId: contract.id,
+    hostId,
+    status: settlementStatus,
+    rentalFee: s.rentalFee,
+    maintenanceFee: s.maintenanceFee,
+    cleaningFee: s.cleaningFee,
+    hostPlatformFee: s.platformFee,
+    refundDeduction: 0,
+    grossAmount: s.grossAmount,
+    netAmount: s.finalAmount,
+    expectedDate: settlementDate,
+    completedAt: settlementStatus === 'COMPLETED' ? settlementDate : null,
+    note: '[SEED] 테스트 정산 데이터',
+  }, { transaction });
+
+  const payoutAvailableDate = calculatePayoutAvailableDate(paidAt);
+  const payout = await Payout.create({
+    contractId: contract.id,
+    settlementId: settlement.id,
+    payoutType: 'CONTRACT_SETTLEMENT',
+    recipientType: 'HOST',
+    recipientId: hostId,
+    amount: s.finalAmount,
+    status: settlementStatus === 'COMPLETED' ? 'PAYABLE' : 'PENDING',
+    payableAfter: payoutAvailableDate,
+    processedAt: null,
+  }, { transaction });
+
+  return { settlement, payout };
+}
+
 // =====================================================
 // 시나리오 구현
 // =====================================================
@@ -524,7 +574,7 @@ const SCENARIOS = {
    */
   completed: {
     label: '계약 완료 (COMPLETED)',
-    description: 'Contract + Payment(DONE) + StatusLog 5건',
+    description: 'Contract + Payment(DONE) + StatusLog 5건 + Settlement + Payout(CONTRACT_SETTLEMENT)',
     needsRental: false,
     async create(ctx) {
       const { orderId, hostId, guestId, roomId, room, baseDate, transaction } = ctx;
@@ -540,6 +590,8 @@ const SCENARIOS = {
         paidAt,
         checkedInAt,
         checkedOutAt,
+        checkoutStatus: 'HOST_CONFIRMED',
+        depositStatus: 'RETURNED',
       }, refundInfo);
       const contract = await Contract.create(contractData, { transaction });
 
@@ -552,7 +604,158 @@ const SCENARIOS = {
       await createPayment(contract.id, orderId, contractData.finalTotalAmount, approvedAt, paidAt, 'DONE', transaction);
       await createChatRoom(contract.id, hostId, guestId, roomId, approvedAt, false, transaction);
 
-      return { contract, logs: 5, payments: 1, chatRooms: 1 };
+      const { settlement, payout } = await createSettlementAndPayout(contract, contractData, hostId, paidAt, checkedInAt, transaction);
+
+      return { contract, logs: 5, payments: 1, chatRooms: 1, settlements: 1, payouts: 1 };
+    }
+  },
+
+  /**
+   * 5-a. 계약 완료 + 보증금 전액 반환 (차감 없음)
+   */
+  completed_deposit_returned: {
+    label: '계약 완료 + 보증금 전액 반환 (COMPLETED)',
+    description: 'Contract + Settlement + Payout + DepositAgreement(ACCEPTED, 차감 0원)',
+    needsRental: false,
+    async create(ctx) {
+      const { orderId, hostId, guestId, roomId, room, baseDate, transaction } = ctx;
+      const refundInfo = await buildRefundInfo(room);
+      const approvedAt = daysAfter(baseDate, 1);
+      const paidAt = daysAfter(baseDate, 2);
+      const checkedInAt = daysAfter(baseDate, 7);
+      const checkedOutAt = daysAfter(baseDate, 37);
+      const holdRequestedAt = daysAfter(checkedOutAt, 1);
+      const adminApprovedAt = daysAfter(checkedOutAt, 2);
+      const submittedAt = daysAfter(checkedOutAt, 3);
+      const acceptedAt = daysAfter(checkedOutAt, 4);
+
+      const contractData = buildContractData(orderId, hostId, guestId, roomId, baseDate, {
+        status: 'COMPLETED',
+        approvedAt,
+        paidAt,
+        checkedInAt,
+        checkedOutAt,
+        checkoutStatus: 'HOST_CONFIRMED',
+        depositDeduction: 0,
+        deductionReason: null,
+        refundableDeposit: 500000,  // deposit 전액
+        depositStatus: 'RETURNED',
+      }, refundInfo);
+      const contract = await Contract.create(contractData, { transaction });
+
+      await createStatusLog(contract.id, null, 'PENDING_APPROVAL', 'GUEST', guestId, baseDate, transaction);
+      await createStatusLog(contract.id, 'PENDING_APPROVAL', 'APPROVED', 'HOST', hostId, approvedAt, transaction);
+      await createStatusLog(contract.id, 'APPROVED', 'PAYMENT_COMPLETED', 'SYSTEM', null, paidAt, transaction);
+      await createStatusLog(contract.id, 'PAYMENT_COMPLETED', 'IN_PROGRESS', 'SYSTEM', null, checkedInAt, transaction);
+      await createStatusLog(contract.id, 'IN_PROGRESS', 'COMPLETED', 'SYSTEM', null, checkedOutAt, transaction);
+
+      await createPayment(contract.id, orderId, contractData.finalTotalAmount, approvedAt, paidAt, 'DONE', transaction);
+      await createChatRoom(contract.id, hostId, guestId, roomId, approvedAt, false, transaction);
+
+      // 보류 신청 → 승인 → 합의 제출(0원) → 게스트 동의 이력
+      await DepositAgreement.create({
+        contractId: contract.id,
+        status: 'ACCEPTED',
+        holdReason: '퇴실 상태 점검 필요',
+        requestedAt: holdRequestedAt,
+        adminApprovedAt,
+        deductAmount: 0,
+        agreementText: '점검 결과 이상 없음. 전액 반환 동의합니다.',
+        submittedAt,
+        acceptedAt,
+      }, { transaction });
+
+      const { settlement, payout } = await createSettlementAndPayout(contract, contractData, hostId, paidAt, checkedInAt, transaction);
+
+      return { contract, logs: 5, payments: 1, chatRooms: 1, settlements: 1, payouts: 1, depositAgreements: 1 };
+    }
+  },
+
+  /**
+   * 5-b. 계약 완료 + 보증금 일부 차감 확정
+   */
+  completed_deposit_deducted: {
+    label: '계약 완료 + 보증금 차감 (COMPLETED)',
+    description: 'Contract + Settlement + Payout x2(정산+차감) + DepositAgreement(ACCEPTED, 차감 150,000원)',
+    needsRental: false,
+    async create(ctx) {
+      const { orderId, hostId, guestId, roomId, room, baseDate, transaction } = ctx;
+      const refundInfo = await buildRefundInfo(room);
+      const approvedAt = daysAfter(baseDate, 1);
+      const paidAt = daysAfter(baseDate, 2);
+      const checkedInAt = daysAfter(baseDate, 7);
+      const checkedOutAt = daysAfter(baseDate, 37);
+      const holdRequestedAt = daysAfter(checkedOutAt, 1);
+      const adminApprovedAt = daysAfter(checkedOutAt, 2);
+      const submittedAt = daysAfter(checkedOutAt, 3);
+      const acceptedAt = daysAfter(checkedOutAt, 4);
+
+      const deductAmount = 150000;
+      const deposit = 500000;
+      const refundableDeposit = deposit - deductAmount;  // 350,000
+
+      const contractData = buildContractData(orderId, hostId, guestId, roomId, baseDate, {
+        status: 'COMPLETED',
+        approvedAt,
+        paidAt,
+        checkedInAt,
+        checkedOutAt,
+        checkoutStatus: 'HOST_CONFIRMED',
+        depositDeduction: deductAmount,
+        deductionReason: '벽면 훼손 및 청소 불량으로 인한 수리비',
+        refundableDeposit,
+        depositStatus: 'RETURNED',
+      }, refundInfo);
+      const contract = await Contract.create(contractData, { transaction });
+
+      await createStatusLog(contract.id, null, 'PENDING_APPROVAL', 'GUEST', guestId, baseDate, transaction);
+      await createStatusLog(contract.id, 'PENDING_APPROVAL', 'APPROVED', 'HOST', hostId, approvedAt, transaction);
+      await createStatusLog(contract.id, 'APPROVED', 'PAYMENT_COMPLETED', 'SYSTEM', null, paidAt, transaction);
+      await createStatusLog(contract.id, 'PAYMENT_COMPLETED', 'IN_PROGRESS', 'SYSTEM', null, checkedInAt, transaction);
+      await createStatusLog(contract.id, 'IN_PROGRESS', 'COMPLETED', 'SYSTEM', null, checkedOutAt, transaction);
+
+      await createPayment(contract.id, orderId, contractData.finalTotalAmount, approvedAt, paidAt, 'DONE', transaction);
+      await createChatRoom(contract.id, hostId, guestId, roomId, approvedAt, false, transaction);
+
+      // 보류 신청 → 승인 → 합의 제출 → 게스트 동의 이력 (반려 1건 포함)
+      await DepositAgreement.create({
+        contractId: contract.id,
+        status: 'REJECTED',
+        holdReason: '벽 훼손',
+        requestedAt: daysAfter(checkedOutAt, 0),
+        rejectedAt: holdRequestedAt,
+        rejectedReason: '사진 증빙 자료 없음',
+      }, { transaction });
+
+      await DepositAgreement.create({
+        contractId: contract.id,
+        status: 'ACCEPTED',
+        holdReason: '벽면 훼손 및 청소 불량',
+        requestedAt: holdRequestedAt,
+        adminApprovedAt,
+        deductAmount,
+        agreementText: '벽면 훼손 및 청소 불량으로 인한 수리비 청구',
+        submittedAt,
+        acceptedAt,
+      }, { transaction });
+
+      // 계약 정산 Payout
+      const { settlement, payout } = await createSettlementAndPayout(contract, contractData, hostId, paidAt, checkedInAt, transaction);
+
+      // 보증금 차감 Payout (호스트 수령)
+      const payoutAvailableDate = calculatePayoutAvailableDate(acceptedAt);
+      await Payout.create({
+        contractId: contract.id,
+        settlementId: settlement.id,
+        payoutType: 'DEPOSIT_DEDUCTION',
+        recipientType: 'HOST',
+        recipientId: hostId,
+        amount: deductAmount,
+        status: 'PENDING',
+        payableAfter: payoutAvailableDate,
+      }, { transaction });
+
+      return { contract, logs: 5, payments: 1, chatRooms: 1, settlements: 1, payouts: 2, depositAgreements: 2 };
     }
   },
 
@@ -1311,6 +1514,9 @@ async function seedCommand(opts) {
         if (result.payments) console.log(`      ✅ Payment ${result.payments}건`);
         if (result.chatRooms) console.log(`      ✅ ChatRoom ${result.chatRooms}건`);
         if (result.refunds) console.log(`      ✅ Refund ${result.refunds}건`);
+        if (result.settlements) console.log(`      ✅ Settlement ${result.settlements}건`);
+        if (result.payouts) console.log(`      ✅ Payout ${result.payouts}건`);
+        if (result.depositAgreements) console.log(`      ✅ DepositAgreement ${result.depositAgreements}건`);
         if (result.rentalOrders) {
           console.log(`      ✅ RentalOrder ${result.rentalOrders}건`);
           console.log(`      ✅ RentalOrderItem ${result.rentalOrderItems}건`);
@@ -1419,6 +1625,9 @@ async function cleanCommand() {
 
     const delLogs = await ContractStatusLog.destroy({ where: { contractId: { [Op.in]: contractIds } }, transaction });
     console.log(`  🗑️ ContractStatusLog ${delLogs}건 삭제`);
+
+    const delPayouts = await Payout.destroy({ where: { contractId: { [Op.in]: contractIds } }, transaction });
+    console.log(`  🗑️ Payout ${delPayouts}건 삭제`);
 
     const delSettlements = await Settlement.destroy({ where: { contractId: { [Op.in]: contractIds } }, transaction });
     console.log(`  🗑️ Settlement ${delSettlements}건 삭제`);

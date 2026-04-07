@@ -58,14 +58,37 @@ const getSettlements = async (req, res) => {
 
     // 탭에 따른 조건 분기 (입주일 기준)
     if (tab === 'pending') {
-      // 정산 대기: 입주일 + 3영업일이 아직 안 지난 계약
-      whereCondition.checkInDate = {
-        [Op.gte]: settlementCutoffDate
-      };
+      // 정산 대기:
+      //   1) 계약 정산 미완료 (입주일 + 3영업일 미경과)
+      //   OR
+      //   2) 보증금 차감 Payout이 아직 미지급 (PENDING/PAYABLE) 상태
+      whereCondition[Op.or] = [
+        { checkInDate: { [Op.gte]: settlementCutoffDate } },
+        {
+          id: {
+            [Op.in]: literal(
+              `(SELECT contract_id FROM payouts
+                WHERE payout_type = 'DEPOSIT_DEDUCTION'
+                  AND recipient_type = 'HOST'
+                  AND recipient_id = ${hostId}
+                  AND status IN ('PENDING', 'PAYABLE'))`
+            )
+          }
+        }
+      ];
     } else if (tab === 'completed') {
-      // 정산 완료: 입주일 + 3영업일 경과
-      whereCondition.checkInDate = {
-        [Op.lt]: settlementCutoffDate
+      // 정산 완료:
+      //   계약 정산 완료 (입주일 + 3영업일 경과)
+      //   AND 차감 Payout이 없거나 모두 완료/취소된 상태
+      whereCondition.checkInDate = { [Op.lt]: settlementCutoffDate };
+      whereCondition.id = {
+        [Op.notIn]: literal(
+          `(SELECT contract_id FROM payouts
+            WHERE payout_type = 'DEPOSIT_DEDUCTION'
+              AND recipient_type = 'HOST'
+              AND recipient_id = ${hostId}
+              AND status IN ('PENDING', 'PAYABLE'))`
+        )
       };
 
       // 완료 탭에서만 필터 적용
@@ -183,12 +206,25 @@ const getSettlements = async (req, res) => {
 
     // 전체 통계 조회 (탭과 관계없이, 입주일 기준)
     const [pendingStats, completedStats] = await Promise.all([
-      // 정산 대기 통계
+      // 정산 대기 통계: 계약 정산 미완료 OR 차감 Payout 미지급
       Contract.findAll({
         where: {
           hostId,
           status: 'COMPLETED',
-          checkInDate: { [Op.gte]: settlementCutoffDate }
+          [Op.or]: [
+            { checkInDate: { [Op.gte]: settlementCutoffDate } },
+            {
+              id: {
+                [Op.in]: literal(
+                  `(SELECT contract_id FROM payouts
+                    WHERE payout_type = 'DEPOSIT_DEDUCTION'
+                      AND recipient_type = 'HOST'
+                      AND recipient_id = ${hostId}
+                      AND status IN ('PENDING', 'PAYABLE'))`
+                )
+              }
+            }
+          ]
         },
         attributes: [
           [fn('COUNT', col('id')), 'count'],
@@ -204,7 +240,16 @@ const getSettlements = async (req, res) => {
         where: {
           hostId,
           status: 'COMPLETED',
-          checkInDate: { [Op.lt]: settlementCutoffDate }
+          checkInDate: { [Op.lt]: settlementCutoffDate },
+          id: {
+            [Op.notIn]: literal(
+              `(SELECT contract_id FROM payouts
+                WHERE payout_type = 'DEPOSIT_DEDUCTION'
+                  AND recipient_type = 'HOST'
+                  AND recipient_id = ${hostId}
+                  AND status IN ('PENDING', 'PAYABLE'))`
+            )
+          }
         },
         attributes: [
           [fn('COUNT', col('id')), 'count'],
