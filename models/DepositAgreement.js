@@ -12,14 +12,15 @@ const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process
 });
 
 /**
- * DepositAgreement 모델 - 보증금 합의 정보
- * 퇴실 보류(HOST_PENDING) 상태에서 호스트가 제출하는 보증금 차감 합의 내용
+ * DepositAgreement 모델 - 보증금 보류 신청 및 합의 이력
+ * 보류 신청마다 1 row 생성, 재신청 시 새 row 추가 (1:N)
  *
  * 플로우:
- * 1. 호스트가 퇴실 확인 보류 (checkoutStatus → HOST_PENDING)
- * 2. 호스트가 합의 내용 제출 (DepositAgreement 생성, checkoutStatus는 HOST_PENDING 유지)
- * 3. 게스트가 합의 동의 (acceptedAt 기록, checkoutStatus → HOST_CONFIRMED → COMPLETED)
- * 4. 퇴실+10일 데드라인 초과 시 자동 전액 반환 (스케줄러)
+ * 1. 호스트 보류 신청 → status: REQUESTED (row 생성)
+ * 2. 관리자 승인 → status: APPROVED / 거절 → status: REJECTED
+ * 3. 호스트 합의 내용 제출 → status: SUBMITTED (APPROVED row 업데이트)
+ * 4. 게스트 합의 동의 → status: ACCEPTED
+ * 5. 10일 데드라인 초과 → status: AUTO_RETURNED (스케줄러)
  */
 const DepositAgreement = sequelize.define('DepositAgreement', {
   id: {
@@ -35,34 +36,65 @@ const DepositAgreement = sequelize.define('DepositAgreement', {
     // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
   },
 
-  // 합의 내용
+  // 보류 신청 정보
+  holdReason: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    field: 'hold_reason',
+    comment: '퇴실 확인 보류 사유 (호스트 작성)'
+  },
+  requestedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    field: 'requested_at',
+    comment: '보류 신청 시각'
+  },
+
+  // 관리자 거절 정보
+  rejectedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    field: 'rejected_at',
+    comment: '관리자 거절 시각'
+  },
+  rejectedReason: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    field: 'rejected_reason',
+    comment: '거절 사유'
+  },
+  rejectedByAdminId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    field: 'rejected_by_admin_id',
+    comment: '거절 관리자 ID'
+  },
+
+  // 합의 내용 (APPROVED 후 호스트 제출)
   deductAmount: {
     type: DataTypes.INTEGER,
-    allowNull: false,
+    allowNull: true,
     defaultValue: 0,
     field: 'deduct_amount',
     comment: '보증금 차감 요청 금액'
   },
   agreementText: {
     type: DataTypes.TEXT,
-    allowNull: false,
+    allowNull: true,
     field: 'agreement_text',
     comment: '합의 내용 (호스트 작성)'
   },
 
-  // 보류 사유 (퇴실 확인 보류 시 입력한 사유)
-  holdReason: {
-    type: DataTypes.TEXT,
-    allowNull: true,
-    field: 'hold_reason',
-    comment: '퇴실 확인 보류 사유'
-  },
-
   // 시간 기록
+  adminApprovedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    field: 'admin_approved_at',
+    comment: '관리자 승인 시각'
+  },
   submittedAt: {
     type: DataTypes.DATE,
-    allowNull: false,
-    defaultValue: DataTypes.NOW,
+    allowNull: true,
     field: 'submitted_at',
     comment: '합의 내용 제출 시각'
   },
@@ -70,25 +102,22 @@ const DepositAgreement = sequelize.define('DepositAgreement', {
     type: DataTypes.DATE,
     allowNull: true,
     field: 'accepted_at',
-    comment: '게스트 합의 동의 시각 (NULL이면 미동의)'
-  },
-  adminApprovedAt: {
-    type: DataTypes.DATE,
-    allowNull: true,
-    field: 'admin_approved_at',
-    comment: '관리자 보류 승인 시점 (합의 프로세스 시작 시점)'
+    comment: '게스트 합의 동의 시각'
   },
 
   // 상태
   status: {
     type: DataTypes.ENUM(
-      'SUBMITTED',    // 호스트가 합의 내용 제출
-      'ACCEPTED',     // 게스트가 합의 동의
-      'AUTO_RETURNED' // 데드라인 초과로 전액 자동 반환
+      'REQUESTED',    // 호스트 보류 신청
+      'APPROVED',     // 관리자 승인 (합의 진행 중)
+      'REJECTED',     // 관리자 거절
+      'SUBMITTED',    // 호스트 합의 내용 제출
+      'ACCEPTED',     // 게스트 합의 동의
+      'AUTO_RETURNED' // 데드라인 초과 자동 반환
     ),
     allowNull: false,
-    defaultValue: 'SUBMITTED',
-    comment: '합의 상태'
+    defaultValue: 'REQUESTED',
+    comment: '보류/합의 상태'
   },
 
   createdAt: {
@@ -110,9 +139,7 @@ const DepositAgreement = sequelize.define('DepositAgreement', {
   indexes: [
     {
       fields: ['contract_id'],
-      unique: true,
-      name: 'idx_deposit_agreement_contract_id',
-      comment: '계약당 1개의 보증금 합의 레코드'
+      name: 'idx_deposit_agreement_contract_id'
     },
     {
       fields: ['status'],
@@ -125,6 +152,9 @@ const DepositAgreement = sequelize.define('DepositAgreement', {
  * 합의 상태 한글명 매핑
  */
 DepositAgreement.STATUS_LABELS = {
+  REQUESTED: '보류 신청',
+  APPROVED: '보류 승인',
+  REJECTED: '보류 거절',
   SUBMITTED: '합의 내용 제출됨',
   ACCEPTED: '합의 동의 완료',
   AUTO_RETURNED: '자동 전액 반환'

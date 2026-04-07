@@ -634,8 +634,8 @@ const getGuestContracts = async (req, res) => {
         },
         {
           model: DepositAgreement,
-          as: 'depositAgreement',
-          attributes: ['id', 'status', 'deductAmount'],
+          as: 'depositAgreements',
+          attributes: ['id', 'status', 'deductAmount', 'rejectedReason', 'rejectedAt', 'createdAt'],
           required: false
         }
       ],
@@ -749,7 +749,7 @@ const getGuestContracts = async (req, res) => {
           checkoutRequested: contract.checkoutRequested,
 
           // 보증금 합의 상태 (동의 버튼 분기용)
-          depositAgreementStatus: contract.depositAgreement?.status || null,
+          depositAgreementStatus: contract.depositAgreements?.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0]?.status || null,
 
           // 계약 시점 스냅샷
           snapshot: contract.snapshot,
@@ -798,8 +798,8 @@ const getHostContracts = async (req, res) => {
         },
         {
           model: DepositAgreement,
-          as: 'depositAgreement',
-          attributes: ['id', 'status', 'deductAmount'],
+          as: 'depositAgreements',
+          attributes: ['id', 'status', 'deductAmount', 'rejectedReason', 'rejectedAt', 'createdAt'],
           required: false
         }
       ],
@@ -872,7 +872,14 @@ const getHostContracts = async (req, res) => {
           hostCheckedOut: contract.hostCheckedOut,
 
           // 보증금 합의 상태 (버튼 분기용)
-          depositAgreementStatus: contract.depositAgreement?.status || null,
+          depositAgreementStatus: (() => {
+            const latestDA = contract.depositAgreements?.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+            return latestDA?.status || null;
+          })(),
+          // 거절 정보 (HOLD_REJECTED 상태일 때 호스트에게 노출)
+          holdRejectedReason: contract.checkoutStatus === 'HOLD_REJECTED'
+            ? (contract.depositAgreements?.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0]?.rejectedReason || null)
+            : null,
 
           // 게스트 정보 (연락처는 결제 완료 이후 상태에서만 노출)
           guest: {
@@ -926,7 +933,7 @@ const getContractDetail = async (req, res) => {
         },
         {
           model: DepositAgreement,
-          as: 'depositAgreement',
+          as: 'depositAgreements',
           required: false
         }
       ]
@@ -1220,17 +1227,24 @@ const getContractDetail = async (req, res) => {
           checkoutRequested: contract.checkoutRequested,
           hostCheckedOut: contract.hostCheckedOut,
 
-          // 보증금 합의 정보
-          depositAgreement: contract.depositAgreement ? {
-            id: contract.depositAgreement.id,
-            deductAmount: contract.depositAgreement.deductAmount,
-            agreementText: contract.depositAgreement.agreementText,
-            holdReason: contract.depositAgreement.holdReason,
-            status: contract.depositAgreement.status,
-            submittedAt: contract.depositAgreement.submittedAt,
-            acceptedAt: contract.depositAgreement.acceptedAt,
-            refundableAmount: (contract.deposit || 0) - contract.depositAgreement.deductAmount
-          } : null,
+          // 보증금 합의 이력 (최신순)
+          depositAgreements: (contract.depositAgreements || [])
+            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+            .map(da => ({
+              id: da.id,
+              status: da.status,
+              statusLabel: DepositAgreement.STATUS_LABELS[da.status],
+              holdReason: da.holdReason,
+              requestedAt: da.requestedAt,
+              rejectedAt: da.rejectedAt,
+              rejectedReason: da.rejectedReason,
+              adminApprovedAt: da.adminApprovedAt,
+              deductAmount: da.deductAmount,
+              agreementText: da.agreementText,
+              submittedAt: da.submittedAt,
+              acceptedAt: da.acceptedAt,
+              createdAt: da.createdAt
+            })),
 
           // 시점 정보
           createdAt: contract.createdAt,
@@ -3509,11 +3523,11 @@ const holdCheckout = async (req, res) => {
       }, 400);
     }
 
-    if (contract.checkoutStatus !== 'GUEST_COMPLETED') {
+    if (!['GUEST_COMPLETED', 'HOLD_REJECTED'].includes(contract.checkoutStatus)) {
       await transaction.rollback();
       return error(res, {
         code: 4632,
-        message: '게스트가 퇴실 완료한 상태에서만 보류가 가능합니다.'
+        message: '게스트 퇴실 완료 또는 보류 신청 반려 상태에서만 보류가 가능합니다.'
       }, 400);
     }
 
@@ -3546,6 +3560,14 @@ const holdCheckout = async (req, res) => {
       deductionReason: reason.trim()
     }, { transaction });
 
+    // 보류 신청 이력 생성
+    await DepositAgreement.create({
+      contractId: contract.id,
+      holdReason: reason.trim(),
+      requestedAt: now,
+      status: 'REQUESTED'
+    }, { transaction });
+
     // 계약 상태 변경 로그
     await ContractStatusLog.create({
       contractId: contract.id,
@@ -3556,7 +3578,7 @@ const holdCheckout = async (req, res) => {
       reason: reason.trim(),
       metadata: JSON.stringify({
         type: 'CHECKOUT_HOLD_REQUESTED',
-        checkoutStatusChange: 'GUEST_COMPLETED → HOLD_REQUESTED',
+        checkoutStatusChange: `${contract.checkoutStatus} → HOLD_REQUESTED`,
         holdRemainingMs
       })
     }, { transaction });
@@ -3656,9 +3678,20 @@ const submitDepositAgreement = async (req, res) => {
       }, 400);
     }
 
+    // 최신 APPROVED row 조회 (합의 제출 대상)
+    const depositAgreement = await DepositAgreement.findOne({
+      where: { contractId: contract.id, status: { [Op.in]: ['APPROVED', 'SUBMITTED'] } },
+      order: [['createdAt', 'DESC']],
+      transaction
+    });
+
+    if (!depositAgreement) {
+      await transaction.rollback();
+      return error(res, { code: 4645, message: '관리자 승인된 보류 신청이 없습니다.' }, 404);
+    }
+
     // 게스트가 이미 동의한 경우 수정 불가
-    const existingAgreement = await DepositAgreement.findOne({ where: { contractId: contract.id }, transaction });
-    if (existingAgreement && existingAgreement.status === 'ACCEPTED') {
+    if (depositAgreement.status === 'ACCEPTED') {
       await transaction.rollback();
       return error(res, {
         code: 4647,
@@ -3693,16 +3726,12 @@ const submitDepositAgreement = async (req, res) => {
       }, 400);
     }
 
-    // 기존 합의가 있으면 업데이트, 없으면 생성
-    const [depositAgreement] = await DepositAgreement.upsert({
-      contractId: contract.id,
+    // 최신 APPROVED row 업데이트
+    await depositAgreement.update({
       deductAmount,
       agreementText: agreementText.trim(),
-      holdReason: contract.deductionReason,
-      adminApprovedAt: contract.holdApprovedAt,
       submittedAt: new Date(),
-      status: 'SUBMITTED',
-      acceptedAt: null
+      status: 'SUBMITTED'
     }, { transaction });
 
     // checkoutStatus는 HOST_PENDING 유지 (합의 제출 여부는 DepositAgreement.status로 판단)
@@ -3789,7 +3818,8 @@ const getDepositAgreement = async (req, res) => {
       include: [
         {
           model: DepositAgreement,
-          as: 'depositAgreement'
+          as: 'depositAgreements',
+          required: false
         }
       ]
     });
@@ -3803,30 +3833,50 @@ const getDepositAgreement = async (req, res) => {
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
-    if (!contract.depositAgreement) {
+    // 이력 최신순 정렬
+    const depositAgreements = (contract.depositAgreements || [])
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    if (depositAgreements.length === 0) {
       return error(res, {
         code: 4650,
-        message: '합의 내용이 없습니다.'
+        message: '보류 신청 이력이 없습니다.'
       }, 404);
     }
 
-    const agreement = contract.depositAgreement;
+    const latestDA = depositAgreements[0];
 
     return success(res, {
       contractId: contract.id,
       deposit: contract.deposit,
       checkoutStatus: contract.checkoutStatus,
+      // 현재 진행 중인 합의 (최신 row)
       depositAgreement: {
-        id: agreement.id,
-        deductAmount: agreement.deductAmount,
-        agreementText: agreement.agreementText,
-        holdReason: agreement.holdReason,
-        status: agreement.status,
-        statusLabel: DepositAgreement.STATUS_LABELS[agreement.status],
-        submittedAt: agreement.submittedAt,
-        acceptedAt: agreement.acceptedAt,
-        refundableAmount: (contract.deposit || 0) - agreement.deductAmount
-      }
+        id: latestDA.id,
+        status: latestDA.status,
+        statusLabel: DepositAgreement.STATUS_LABELS[latestDA.status],
+        holdReason: latestDA.holdReason,
+        requestedAt: latestDA.requestedAt,
+        rejectedAt: latestDA.rejectedAt,
+        rejectedReason: latestDA.rejectedReason,
+        adminApprovedAt: latestDA.adminApprovedAt,
+        deductAmount: latestDA.deductAmount,
+        agreementText: latestDA.agreementText,
+        submittedAt: latestDA.submittedAt,
+        acceptedAt: latestDA.acceptedAt,
+        refundableAmount: latestDA.deductAmount != null ? (contract.deposit || 0) - latestDA.deductAmount : null
+      },
+      // 전체 이력
+      history: depositAgreements.map(da => ({
+        id: da.id,
+        status: da.status,
+        statusLabel: DepositAgreement.STATUS_LABELS[da.status],
+        holdReason: da.holdReason,
+        requestedAt: da.requestedAt,
+        rejectedAt: da.rejectedAt,
+        rejectedReason: da.rejectedReason,
+        createdAt: da.createdAt
+      }))
     }, '합의 내용 조회 성공');
 
   } catch (err) {
@@ -3846,12 +3896,7 @@ const acceptDepositAgreement = async (req, res) => {
     const { contractId } = req.params;
     const guestId = req.user.id;
 
-    const contract = await Contract.findByPk(contractId, {
-      include: [
-        { model: DepositAgreement, as: 'depositAgreement' }
-      ],
-      transaction
-    });
+    const contract = await Contract.findByPk(contractId, { transaction });
 
     if (!contract) {
       await transaction.rollback();
@@ -3871,7 +3916,14 @@ const acceptDepositAgreement = async (req, res) => {
       }, 400);
     }
 
-    if (!contract.depositAgreement || contract.depositAgreement.status !== 'SUBMITTED') {
+    // 최신 SUBMITTED row 조회
+    const depositAgreement = await DepositAgreement.findOne({
+      where: { contractId: contract.id, status: 'SUBMITTED' },
+      order: [['createdAt', 'DESC']],
+      transaction
+    });
+
+    if (!depositAgreement) {
       await transaction.rollback();
       return error(res, {
         code: 4661,
@@ -3879,7 +3931,7 @@ const acceptDepositAgreement = async (req, res) => {
       }, 404);
     }
 
-    const depositDeduction = contract.depositAgreement.deductAmount;
+    const depositDeduction = depositAgreement.deductAmount;
     const refundableDeposit = Math.max(0, (contract.deposit || 0) - depositDeduction);
 
     // 차감 금액에 따라 차감확정/반환확정 전이
@@ -3893,7 +3945,7 @@ const acceptDepositAgreement = async (req, res) => {
     });
 
     // 합의 동의 처리
-    await contract.depositAgreement.update({
+    await depositAgreement.update({
       status: 'ACCEPTED',
       acceptedAt: new Date()
     }, { transaction });
@@ -3904,7 +3956,7 @@ const acceptDepositAgreement = async (req, res) => {
       hostCheckedOut: true,
       hostCheckedOutAt: new Date(),
       depositDeduction,
-      deductionReason: contract.depositAgreement.agreementText,
+      deductionReason: depositAgreement.agreementText,
       refundableDeposit,
       depositStatus
     }, { transaction });

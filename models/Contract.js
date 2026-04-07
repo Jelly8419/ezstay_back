@@ -491,11 +491,11 @@ const Contract = sequelize.define('Contract', {
 
   // 퇴실 세부 상태 (PRD v2)
   checkoutStatus: {
-    type: DataTypes.ENUM('NOT_STARTED', 'GUEST_COMPLETED', 'HOST_CONFIRMED', 'HOLD_REQUESTED', 'HOST_PENDING'),
+    type: DataTypes.ENUM('NOT_STARTED', 'GUEST_COMPLETED', 'HOST_CONFIRMED', 'HOLD_REQUESTED', 'HOLD_REJECTED', 'HOST_PENDING'),
     allowNull: false,
     defaultValue: 'NOT_STARTED',
     field: 'checkout_status',
-    comment: '퇴실 세부 상태 (NOT_STARTED=시작전, GUEST_COMPLETED=게스트퇴실완료, HOST_CONFIRMED=호스트확인완료, HOLD_REQUESTED=보류신청대기, HOST_PENDING=보류승인후합의중)'
+    comment: '퇴실 세부 상태 (NOT_STARTED=시작전, GUEST_COMPLETED=게스트퇴실완료, HOST_CONFIRMED=호스트확인완료, HOLD_REQUESTED=보류신청대기, HOLD_REJECTED=보류신청반려, HOST_PENDING=보류승인후합의중)'
   },
 
   // 보증금 보류 관련 필드
@@ -631,6 +631,8 @@ Contract.CHECKOUT_STATUS_LABELS = {
   NOT_STARTED: '퇴실 전',
   GUEST_COMPLETED: '게스트 퇴실 완료',
   HOST_CONFIRMED: '호스트 확인 완료',
+  HOLD_REQUESTED: '보류 신청 대기',
+  HOLD_REJECTED: '보류 신청 반려',
   HOST_PENDING: '퇴실 확인 보류'
 };
 

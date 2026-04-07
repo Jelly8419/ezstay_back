@@ -3264,6 +3264,8 @@ const getDepositHolds = async (req, res) => {
 
     if (status === 'REQUESTED') {
       contractWhere.checkoutStatus = 'HOLD_REQUESTED';
+    } else if (status === 'REJECTED') {
+      contractWhere.checkoutStatus = 'HOLD_REJECTED';
     } else if (status === 'APPROVED') {
       contractWhere.checkoutStatus = 'HOST_PENDING';
     } else if (status === 'HOST_SUBMITTED') {
@@ -3275,9 +3277,9 @@ const getDepositHolds = async (req, res) => {
       contractWhere.depositStatus = 'RETURN_CONFIRMED';
       contractWhere.checkoutStatus = 'HOST_CONFIRMED';
     } else {
-      // 전체: 보류 관련 상태만 조회
+      // 전체: 보류 관련 상태 모두 포함
       contractWhere[Op.or] = [
-        { checkoutStatus: { [Op.in]: ['HOLD_REQUESTED', 'HOST_PENDING'] } },
+        { checkoutStatus: { [Op.in]: ['HOLD_REQUESTED', 'HOLD_REJECTED', 'HOST_PENDING'] } },
         {
           checkoutStatus: 'HOST_CONFIRMED',
           depositStatus: { [Op.in]: ['DEDUCTION_CONFIRMED', 'RETURN_CONFIRMED'] }
@@ -3305,17 +3307,19 @@ const getDepositHolds = async (req, res) => {
       hostInclude.required = true;
     }
 
-    // HOST_SUBMITTED 필터는 DepositAgreement 조건 추가 필요
-    const depositAgreementInclude = {
+    // HOST_SUBMITTED / AUTO_REFUNDED 필터는 DepositAgreement 조건 추가 필요
+    const depositAgreementsInclude = {
       model: DepositAgreement,
-      as: 'depositAgreement',
-      required: status === 'HOST_SUBMITTED'
+      as: 'depositAgreements',
+      required: false,
+      attributes: ['id', 'status', 'deductAmount', 'rejectedReason', 'rejectedAt', 'createdAt']
     };
     if (status === 'HOST_SUBMITTED') {
-      depositAgreementInclude.where = { status: 'SUBMITTED' };
+      depositAgreementsInclude.where = { status: 'SUBMITTED' };
+      depositAgreementsInclude.required = true;
     } else if (status === 'AUTO_REFUNDED') {
-      depositAgreementInclude.where = { status: 'AUTO_RETURNED' };
-      depositAgreementInclude.required = true;
+      depositAgreementsInclude.where = { status: 'AUTO_RETURNED' };
+      depositAgreementsInclude.required = true;
     }
 
     const { count, rows: contracts } = await Contract.findAndCountAll({
@@ -3324,7 +3328,7 @@ const getDepositHolds = async (req, res) => {
         { model: User, as: 'guest', attributes: ['id', 'name', 'email', 'phoneNumber'] },
         hostInclude,
         { model: Room, as: 'room', attributes: ['id', 'roomName'] },
-        depositAgreementInclude
+        depositAgreementsInclude
       ],
       order: [['holdRequestedAt', 'DESC']],
       limit: parseInt(limit),
@@ -3332,32 +3336,47 @@ const getDepositHolds = async (req, res) => {
       distinct: true
     });
 
+    // 최신 DepositAgreement row 추출
+    const getLatestDA = (c) => {
+      if (!c.depositAgreements || c.depositAgreements.length === 0) return null;
+      return c.depositAgreements.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+    };
+
     // PRD 상태명 매핑
     const resolveStatus = (c) => {
       if (c.checkoutStatus === 'HOLD_REQUESTED') return 'REQUESTED';
+      if (c.checkoutStatus === 'HOLD_REJECTED') return 'REJECTED';
       if (c.checkoutStatus === 'HOST_PENDING') {
-        return c.depositAgreement?.status === 'SUBMITTED' ? 'HOST_SUBMITTED' : 'APPROVED';
+        const latestDA = getLatestDA(c);
+        return latestDA?.status === 'SUBMITTED' ? 'HOST_SUBMITTED' : 'APPROVED';
       }
       if (c.checkoutStatus === 'HOST_CONFIRMED') {
-        if (c.depositAgreement?.status === 'AUTO_RETURNED') return 'AUTO_REFUNDED';
+        const latestDA = getLatestDA(c);
+        if (latestDA?.status === 'AUTO_RETURNED') return 'AUTO_REFUNDED';
         return 'AGREED';
       }
       return 'UNKNOWN';
     };
 
     return success(res, {
-      holds: contracts.map(c => ({
-        contractId: c.id,
-        room: c.room ? { id: c.room.id, roomName: c.room.roomName } : null,
-        guest: { id: c.guest?.id, name: c.guest?.name },
-        host: { id: c.host?.id, name: c.host?.name },
-        deposit: c.deposit,
-        deductRequestAmount: c.depositAgreement?.deductAmount ?? null,
-        holdReason: c.deductionReason,
-        holdRequestedAt: c.holdRequestedAt,
-        holdApprovedAt: c.holdApprovedAt,
-        holdStatus: resolveStatus(c)
-      })),
+      holds: contracts.map(c => {
+        const latestDA = getLatestDA(c);
+        return {
+          contractId: c.id,
+          room: c.room ? { id: c.room.id, roomName: c.room.roomName } : null,
+          guest: { id: c.guest?.id, name: c.guest?.name },
+          host: { id: c.host?.id, name: c.host?.name },
+          deposit: c.deposit,
+          deductRequestAmount: latestDA?.deductAmount ?? null,
+          holdReason: c.deductionReason,
+          holdRequestedAt: c.holdRequestedAt,
+          holdApprovedAt: c.holdApprovedAt,
+          holdStatus: resolveStatus(c),
+          // 거절 정보
+          rejectedReason: c.checkoutStatus === 'HOLD_REJECTED' ? latestDA?.rejectedReason : null,
+          rejectedAt: c.checkoutStatus === 'HOLD_REJECTED' ? latestDA?.rejectedAt : null
+        };
+      }),
       pagination: {
         total: count,
         page: parseInt(page),
@@ -3388,8 +3407,9 @@ const getDepositHoldDetail = async (req, res) => {
         { model: Room, as: 'room', attributes: ['id', 'roomName', 'address'] },
         {
           model: DepositAgreement,
-          as: 'depositAgreement',
-          attributes: { exclude: [] }
+          as: 'depositAgreements',
+          attributes: { exclude: [] },
+          required: false
         }
       ]
     });
@@ -3398,30 +3418,25 @@ const getDepositHoldDetail = async (req, res) => {
       return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
     }
 
-    // 상태 변경 로그 (보증금 보류 관련 타입만)
-    const logs = await ContractStatusLog.findAll({
-      where: {
-        contractId,
-        metadata: { [Op.like]: '%DEPOSIT%' }
-      },
-      order: [['createdAt', 'ASC']],
-      attributes: ['id', 'fromStatus', 'toStatus', 'changedBy', 'changedByUserId', 'reason', 'metadata', 'createdAt']
-    });
+    // 보류 이력 최신순 정렬
+    const depositAgreements = (contract.depositAgreements || [])
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const latestDA = depositAgreements[0] || null;
 
     const resolveStatus = (c) => {
       if (c.checkoutStatus === 'HOLD_REQUESTED') return 'REQUESTED';
+      if (c.checkoutStatus === 'HOLD_REJECTED') return 'REJECTED';
       if (c.checkoutStatus === 'HOST_PENDING') {
-        return c.depositAgreement?.status === 'SUBMITTED' ? 'HOST_SUBMITTED' : 'APPROVED';
+        return latestDA?.status === 'SUBMITTED' ? 'HOST_SUBMITTED' : 'APPROVED';
       }
       if (c.checkoutStatus === 'HOST_CONFIRMED') {
-        if (c.depositAgreement?.status === 'AUTO_RETURNED') return 'AUTO_REFUNDED';
+        if (latestDA?.status === 'AUTO_RETURNED') return 'AUTO_REFUNDED';
         return 'AGREED';
       }
       return null;
     };
 
     return success(res, {
-      // 기본 계약 정보
       contractId: contract.id,
       checkInDate: toKSTString(contract.checkInDate),
       checkOutDate: toKSTString(contract.checkOutDate),
@@ -3429,31 +3444,27 @@ const getDepositHoldDetail = async (req, res) => {
       host: contract.host,
       room: contract.room,
       deposit: contract.deposit,
-      // 보류 신청 정보
       holdStatus: resolveStatus(contract),
       holdReason: contract.deductionReason,
       holdRequestedAt: contract.holdRequestedAt,
       holdApprovedAt: contract.holdApprovedAt,
-      // 합의 정보
-      depositAgreement: contract.depositAgreement ? {
-        id: contract.depositAgreement.id,
-        deductAmount: contract.depositAgreement.deductAmount,
-        agreementText: contract.depositAgreement.agreementText,
-        status: contract.depositAgreement.status,
-        submittedAt: contract.depositAgreement.submittedAt,
-        acceptedAt: contract.depositAgreement.acceptedAt
-      } : null,
       refundableDeposit: contract.refundableDeposit,
       depositStatus: contract.depositStatus,
-      // 상태 변경 로그
-      logs: logs.map(l => ({
-        id: l.id,
-        fromStatus: l.fromStatus,
-        toStatus: l.toStatus,
-        changedBy: l.changedBy,
-        reason: l.reason,
-        metadata: typeof l.metadata === 'string' ? JSON.parse(l.metadata) : l.metadata,
-        createdAt: l.createdAt
+      // 보류 신청/합의 이력 전체 (최신순)
+      depositAgreements: depositAgreements.map(da => ({
+        id: da.id,
+        status: da.status,
+        statusLabel: DepositAgreement.STATUS_LABELS[da.status],
+        holdReason: da.holdReason,
+        requestedAt: da.requestedAt,
+        rejectedAt: da.rejectedAt,
+        rejectedReason: da.rejectedReason,
+        adminApprovedAt: da.adminApprovedAt,
+        deductAmount: da.deductAmount,
+        agreementText: da.agreementText,
+        submittedAt: da.submittedAt,
+        acceptedAt: da.acceptedAt,
+        createdAt: da.createdAt
       }))
     }, '보증금 보류 상세 조회 성공');
 
@@ -3506,6 +3517,21 @@ const approveDepositHold = async (req, res) => {
     }
 
     const now = new Date();
+
+    // 최신 REQUESTED row → APPROVED
+    const depositAgreement = await DepositAgreement.findOne({
+      where: { contractId, status: 'REQUESTED' },
+      order: [['createdAt', 'DESC']],
+      transaction
+    });
+    if (!depositAgreement) {
+      await transaction.rollback();
+      return error(res, { code: 4672, message: '보류 신청 이력을 찾을 수 없습니다.' }, 404);
+    }
+    await depositAgreement.update({
+      status: 'APPROVED',
+      adminApprovedAt: now
+    }, { transaction });
 
     // 정책 7.8.1: 승인 → 반환보류, 합의 프로세스 시작
     await contract.update({
@@ -3618,7 +3644,7 @@ const rejectDepositHold = async (req, res) => {
       }, 400);
     }
 
-    // 정책 7.8.2: 거절 → GUEST_COMPLETED 복원, 카운트다운 재개
+    // 정책 7.8.2: 거절 → HOLD_REJECTED, 카운트다운 재개
     // 남은 시간 기준으로 새 checkoutRequestedAt 계산
     const now = new Date();
     let newCheckoutRequestedAt = contract.checkoutRequestedAt;
@@ -3631,8 +3657,25 @@ const rejectDepositHold = async (req, res) => {
       newCheckoutRequestedAt = new Date(now.getTime() - fortyEightHoursMs + contract.holdRemainingMs);
     }
 
+    // 최신 REQUESTED row → REJECTED
+    const depositAgreement = await DepositAgreement.findOne({
+      where: { contractId, status: 'REQUESTED' },
+      order: [['createdAt', 'DESC']],
+      transaction
+    });
+    if (!depositAgreement) {
+      await transaction.rollback();
+      return error(res, { code: 4673, message: '보류 신청 이력을 찾을 수 없습니다.' }, 404);
+    }
+    await depositAgreement.update({
+      status: 'REJECTED',
+      rejectedAt: now,
+      rejectedReason: reason || null,
+      rejectedByAdminId: adminId
+    }, { transaction });
+
     await contract.update({
-      checkoutStatus: 'GUEST_COMPLETED',
+      checkoutStatus: 'HOLD_REJECTED',
       checkoutRequestedAt: newCheckoutRequestedAt,
       holdRequestedAt: null,
       holdRemainingMs: null
@@ -3648,7 +3691,7 @@ const rejectDepositHold = async (req, res) => {
       reason: reason || '관리자 보증금 보류 거절',
       metadata: JSON.stringify({
         type: 'DEPOSIT_HOLD_REJECTED',
-        checkoutStatusChange: 'HOLD_REQUESTED → GUEST_COMPLETED',
+        checkoutStatusChange: 'HOLD_REQUESTED → HOLD_REJECTED',
         holdRemainingMs: contract.holdRemainingMs,
         newCheckoutRequestedAt
       })
@@ -3685,7 +3728,7 @@ const rejectDepositHold = async (req, res) => {
 
     return updated(res, {
       contractId: contract.id,
-      checkoutStatus: 'GUEST_COMPLETED',
+      checkoutStatus: 'HOLD_REJECTED',
       holdRemainingMs: contract.holdRemainingMs,
       rejectReason: reason || null
     }, '보증금 보류 신청이 거절되었습니다. 퇴실 확인 카운트다운이 재개됩니다.');
