@@ -3118,12 +3118,13 @@ const approveHostCancelRequest = async (req, res) => {
 
     // 요청자(호스트 또는 게스트) 알림
     try {
-      await NotificationService.sendNotification({
+      await NotificationService.create({
         userId: isGuestRequest ? contract.guestId : contract.hostId,
+        userMode: isGuestRequest ? 'guest' : 'host',
         type: 'CONTRACT',
         title: '취소 요청 승인',
         message: `${requesterLabel}님의 취소 요청이 관리자에 의해 승인되었습니다.`,
-        data: { contractId: contract.id }
+        relatedContractId: contract.id
       });
     } catch (notifyErr) {
       console.error('취소 승인 알림 전송 실패 (무시됨):', notifyErr);
@@ -3131,12 +3132,13 @@ const approveHostCancelRequest = async (req, res) => {
 
     // 상대방 알림
     try {
-      await NotificationService.sendNotification({
+      await NotificationService.create({
         userId: isGuestRequest ? contract.hostId : contract.guestId,
+        userMode: isGuestRequest ? 'host' : 'guest',
         type: 'CONTRACT',
         title: '계약 취소 안내',
         message: '관리자 승인으로 계약이 취소되었습니다. 환불 절차가 진행됩니다.',
-        data: { contractId: contract.id }
+        relatedContractId: contract.id
       });
     } catch (notifyErr) {
       console.error('취소 안내 알림 전송 실패 (무시됨):', notifyErr);
@@ -3257,12 +3259,13 @@ const rejectHostCancelRequest = async (req, res) => {
 
     // 요청자(호스트 또는 게스트) 알림
     try {
-      await NotificationService.sendNotification({
+      await NotificationService.create({
         userId: isGuestRequest ? contract.guestId : contract.hostId,
+        userMode: isGuestRequest ? 'guest' : 'host',
         type: 'CONTRACT',
         title: '취소 요청 거절',
         message: `${requesterLabel}님의 취소 요청이 관리자에 의해 거절되었습니다.`,
-        data: { contractId: contract.id }
+        relatedContractId: contract.id
       });
     } catch (notifyErr) {
       console.error('취소 거절 알림 전송 실패 (무시됨):', notifyErr);
@@ -3611,14 +3614,18 @@ const approveDepositHold = async (req, res) => {
 
     // 양측 알림 발송
     try {
-      const notifyTargets = [contract.hostId, contract.guestId];
-      for (const userId of notifyTargets) {
-        await NotificationService.sendNotification({
+      const notifyTargets = [
+        { userId: contract.hostId, userMode: 'host' },
+        { userId: contract.guestId, userMode: 'guest' }
+      ];
+      for (const { userId, userMode } of notifyTargets) {
+        await NotificationService.create({
           userId,
+          userMode,
           type: 'CONTRACT',
           title: '보증금 보류 승인',
           message: '관리자가 보증금 보류를 승인했습니다. 합의 절차가 시작됩니다. (기한: 10일)',
-          data: { contractId: contract.id }
+          relatedContractId: contract.id
         });
       }
     } catch (notifyErr) {
@@ -3751,14 +3758,18 @@ const rejectDepositHold = async (req, res) => {
 
     // 양측 알림 발송
     try {
-      const notifyTargets = [contract.hostId, contract.guestId];
-      for (const userId of notifyTargets) {
-        await NotificationService.sendNotification({
+      const notifyTargets = [
+        { userId: contract.hostId, userMode: 'host' },
+        { userId: contract.guestId, userMode: 'guest' }
+      ];
+      for (const { userId, userMode } of notifyTargets) {
+        await NotificationService.create({
           userId,
+          userMode,
           type: 'CONTRACT',
           title: '보증금 보류 거절',
           message: '관리자가 보증금 보류 신청을 거절했습니다. 호스트 퇴실확인 카운트다운이 재개됩니다.',
-          data: { contractId: contract.id }
+          relatedContractId: contract.id
         });
       }
     } catch (notifyErr) {
@@ -3866,14 +3877,18 @@ const forceDepositHold = async (req, res) => {
 
     // 양측 알림 발송
     try {
-      const notifyTargets = [contract.hostId, contract.guestId];
-      for (const userId of notifyTargets) {
-        await NotificationService.sendNotification({
+      const notifyTargets = [
+        { userId: contract.hostId, userMode: 'host' },
+        { userId: contract.guestId, userMode: 'guest' }
+      ];
+      for (const { userId, userMode } of notifyTargets) {
+        await NotificationService.create({
           userId,
+          userMode,
           type: 'CONTRACT',
           title: '보증금 반환보류 (관리자)',
           message: '관리자에 의해 보증금이 반환보류 처리되었습니다. 합의 절차가 시작됩니다.',
-          data: { contractId: contract.id }
+          relatedContractId: contract.id
         });
       }
     } catch (notifyErr) {
