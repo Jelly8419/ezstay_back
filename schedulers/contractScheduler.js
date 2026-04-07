@@ -858,14 +858,17 @@ async function autoReturnDepositOnDeadline() {
         }
       );
 
-      // DepositAgreement가 있으면 AUTO_RETURNED로 변경
+      // 최신 APPROVED 또는 SUBMITTED row → AUTO_RETURNED로 변경
       await DepositAgreement.update(
         {
           status: 'AUTO_RETURNED',
           updatedAt: now
         },
         {
-          where: { contractId: contract.id },
+          where: {
+            contractId: contract.id,
+            status: { [Op.in]: ['APPROVED', 'SUBMITTED'] }
+          },
           transaction
         }
       );

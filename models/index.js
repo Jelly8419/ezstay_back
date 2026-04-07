@@ -880,11 +880,11 @@ PayoutLog.belongsTo(Admin, {
 });
 
 // =====================================================
-// DepositAgreement 관계 설정 (보증금 합의)
+// DepositAgreement 관계 설정 (보증금 보류/합의 이력, 1:N)
 // =====================================================
-Contract.hasOne(DepositAgreement, {
+Contract.hasMany(DepositAgreement, {
   foreignKey: 'contractId',
-  as: 'depositAgreement',
+  as: 'depositAgreements',
   onDelete: 'NO ACTION',
   onUpdate: 'CASCADE'
 });
