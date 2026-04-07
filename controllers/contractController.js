@@ -751,6 +751,11 @@ const getGuestContracts = async (req, res) => {
           // 보증금 합의 상태 (동의 버튼 분기용)
           depositAgreementStatus: contract.depositAgreements?.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0]?.status || null,
 
+          // 합의 기한 (HOST_PENDING 또는 AGREEMENT_SUBMITTED 상태일 때만 노출)
+          agreementDeadline: ['HOST_PENDING', 'AGREEMENT_SUBMITTED'].includes(contract.checkoutStatus) && contract.holdApprovedAt
+            ? new Date(new Date(contract.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000)
+            : null,
+
           // 계약 시점 스냅샷
           snapshot: contract.snapshot,
 
@@ -879,6 +884,10 @@ const getHostContracts = async (req, res) => {
           // 거절 정보 (HOLD_REJECTED 상태일 때 호스트에게 노출)
           holdRejectedReason: contract.checkoutStatus === 'HOLD_REJECTED'
             ? (contract.depositAgreements?.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0]?.rejectedReason || null)
+            : null,
+          // 합의 기한 (HOST_PENDING 또는 AGREEMENT_SUBMITTED 상태일 때만 노출)
+          agreementDeadline: ['HOST_PENDING', 'AGREEMENT_SUBMITTED'].includes(contract.checkoutStatus) && contract.holdApprovedAt
+            ? new Date(new Date(contract.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000)
             : null,
 
           // 게스트 정보 (연락처는 결제 완료 이후 상태에서만 노출)
@@ -3461,12 +3470,13 @@ const requestCancelByHost = async (req, res) => {
 
     // 게스트에게 알림 발송
     try {
-      await NotificationService.sendNotification({
+      await NotificationService.create({
         userId: contract.guestId,
+        userMode: 'guest',
         type: 'CONTRACT',
         title: '계약 취소 요청',
         message: '호스트가 계약 취소를 요청했습니다. 관리자 확인 후 처리됩니다.',
-        data: { contractId: contract.id }
+        relatedContractId: contract.id
       });
     } catch (notifyErr) {
       console.error('취소 요청 알림 전송 실패 (무시됨):', notifyErr);
@@ -3598,12 +3608,13 @@ const holdCheckout = async (req, res) => {
 
     // 게스트에게 알림 발송 (트랜잭션 외부)
     try {
-      await NotificationService.sendNotification({
+      await NotificationService.create({
         userId: contract.guestId,
+        userMode: 'guest',
         type: 'CONTRACT',
         title: '퇴실 확인 보류 신청',
         message: '호스트가 퇴실 확인 보류를 신청했습니다. 관리자 확인 중입니다.',
-        data: { contractId: contract.id }
+        relatedContractId: contract.id
       });
     } catch (notifyErr) {
       console.error('퇴실 보류 신청 알림 전송 실패 (무시됨):', notifyErr);
@@ -3766,12 +3777,13 @@ const submitDepositAgreement = async (req, res) => {
 
     // 게스트에게 알림 발송
     try {
-      await NotificationService.sendNotification({
+      await NotificationService.create({
         userId: contract.guestId,
+        userMode: 'guest',
         type: 'CONTRACT',
         title: '합의 내용 확인 요청',
         message: `호스트가 보증금 합의 내용을 제출했습니다. 확인해주세요. (차감 요청: ${deductAmount.toLocaleString()}원)`,
-        data: { contractId: contract.id }
+        relatedContractId: contract.id
       });
     } catch (notifyErr) {
       console.error('합의 제출 알림 전송 실패 (무시됨):', notifyErr);
@@ -3855,7 +3867,6 @@ const getDepositAgreement = async (req, res) => {
         id: latestDA.id,
         status: latestDA.status,
         statusLabel: DepositAgreement.STATUS_LABELS[latestDA.status],
-        holdReason: latestDA.holdReason,
         requestedAt: latestDA.requestedAt,
         rejectedAt: latestDA.rejectedAt,
         rejectedReason: latestDA.rejectedReason,
@@ -3871,7 +3882,6 @@ const getDepositAgreement = async (req, res) => {
         id: da.id,
         status: da.status,
         statusLabel: DepositAgreement.STATUS_LABELS[da.status],
-        holdReason: da.holdReason,
         requestedAt: da.requestedAt,
         rejectedAt: da.rejectedAt,
         rejectedReason: da.rejectedReason,
