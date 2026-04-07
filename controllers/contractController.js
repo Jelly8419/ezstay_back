@@ -751,6 +751,11 @@ const getGuestContracts = async (req, res) => {
           // 보증금 합의 상태 (동의 버튼 분기용)
           depositAgreementStatus: contract.depositAgreements?.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0]?.status || null,
 
+          // 합의 기한 (HOST_PENDING 또는 AGREEMENT_SUBMITTED 상태일 때만 노출)
+          agreementDeadline: ['HOST_PENDING', 'AGREEMENT_SUBMITTED'].includes(contract.checkoutStatus) && contract.holdApprovedAt
+            ? new Date(new Date(contract.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000)
+            : null,
+
           // 계약 시점 스냅샷
           snapshot: contract.snapshot,
 
@@ -880,8 +885,8 @@ const getHostContracts = async (req, res) => {
           holdRejectedReason: contract.checkoutStatus === 'HOLD_REJECTED'
             ? (contract.depositAgreements?.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0]?.rejectedReason || null)
             : null,
-          // 합의 기한 (보류 승인 후 10일)
-          agreementDeadline: contract.holdApprovedAt
+          // 합의 기한 (HOST_PENDING 또는 AGREEMENT_SUBMITTED 상태일 때만 노출)
+          agreementDeadline: ['HOST_PENDING', 'AGREEMENT_SUBMITTED'].includes(contract.checkoutStatus) && contract.holdApprovedAt
             ? new Date(new Date(contract.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000)
             : null,
 
