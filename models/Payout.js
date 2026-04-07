@@ -85,6 +85,7 @@ module.exports = (sequelize) => {
         'PAYABLE',     // 지급 가능 (조건 충족, 관리자 실행 대기)
         'PROCESSING',  // 지급 처리 중
         'COMPLETED',   // 지급 완료
+        'ON_HOLD',     // 지급 보류 (계약 취소 승인 등 관리자 조치)
         'FAILED',      // 지급 실패 (재시도 필요)
         'CANCELLED'    // 취소 (환불 충돌 등)
       ),
@@ -169,6 +170,7 @@ module.exports = (sequelize) => {
     PAYABLE: '지급 가능',
     PROCESSING: '처리 중',
     COMPLETED: '지급 완료',
+    ON_HOLD: '지급 보류',
     FAILED: '지급 실패',
     CANCELLED: '지급 취소'
   };

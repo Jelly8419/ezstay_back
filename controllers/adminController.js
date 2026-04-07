@@ -989,7 +989,7 @@ const getReservationDetail = async (req, res) => {
         },
         {
           model: DepositAgreement,
-          as: 'depositAgreement',
+          as: 'depositAgreements',
           required: false
         }
       ]
@@ -1136,7 +1136,9 @@ const getReservationDetail = async (req, res) => {
     let checkoutTimeline = null;
     if (hasCheckoutFlow) {
       const steps = [];
-      const da = reservation.depositAgreement;
+      const depositAgreementsSorted = (reservation.depositAgreements || [])
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      const da = depositAgreementsSorted[0] || null;
 
       // 1) 퇴실 확인 요청 (게스트)
       if (reservation.checkoutRequestedAt) {
@@ -3008,20 +3010,23 @@ const approveHostCancelRequest = async (req, res) => {
       return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
     }
 
-    if (contract.status !== 'IN_PROGRESS') {
+    if (contract.status !== 'CANCEL_REQUESTED') {
       await transaction.rollback();
       return error(res, {
         code: 4631,
-        message: '임대 진행 중 상태에서만 취소 요청 승인이 가능합니다.',
+        message: '취소 요청 상태에서만 승인이 가능합니다.',
         currentStatus: contract.status
       }, 400);
     }
 
-    // 호스트 취소 요청 존재 확인 (ContractStatusLog에서)
+    // 호스트 또는 게스트 취소 요청 존재 확인 (ContractStatusLog에서)
     const cancelRequest = await ContractStatusLog.findOne({
       where: {
         contractId,
-        metadata: { [Op.like]: '%CANCEL_REQUEST_BY_HOST%' }
+        [Op.or]: [
+          { metadata: { [Op.like]: '%CANCEL_REQUEST_BY_HOST%' } },
+          { metadata: { [Op.like]: '%CANCEL_REQUEST_BY_GUEST%' } }
+        ]
       },
       order: [['createdAt', 'DESC']],
       transaction
@@ -3031,16 +3036,21 @@ const approveHostCancelRequest = async (req, res) => {
       await transaction.rollback();
       return error(res, {
         code: 4632,
-        message: '해당 계약에 대한 호스트 취소 요청을 찾을 수 없습니다.'
+        message: '해당 계약에 대한 취소 요청을 찾을 수 없습니다.'
       }, 404);
     }
+
+    const cancelRequestMetadata = JSON.parse(cancelRequest.metadata || '{}');
+    const isGuestRequest = cancelRequestMetadata.type === 'CANCEL_REQUEST_BY_GUEST';
+    const cancelledStatus = isGuestRequest ? 'CANCELLED_BY_GUEST' : 'CANCELLED_BY_HOST';
+    const requesterLabel = isGuestRequest ? '게스트' : '호스트';
 
     const previousStatus = contract.status;
 
     await contract.update({
-      status: 'CANCELLED_BY_HOST',
+      status: cancelledStatus,
       cancelledAt: new Date(),
-      cancellationReason: `호스트 취소 요청 승인 (관리자: ${adminNote || '사유 없음'})`,
+      cancellationReason: `${requesterLabel} 취소 요청 승인 (관리자: ${adminNote || '사유 없음'})`,
       cancellationType: 'DURING_STAY'
     }, { transaction });
 
@@ -3048,26 +3058,28 @@ const approveHostCancelRequest = async (req, res) => {
     // const { createCancelFeeReceipt } = require('../services/receiptService');
     // await createCancelFeeReceipt({ contractId: contract.id, hostId: contract.hostId, targetType: 'HOST_CANCEL_FEE', platformFeeAmount, date: new Date().toISOString().split('T')[0] }, transaction);
 
-    // 호스트 취소 승인 시 기존 CONTRACT_SETTLEMENT Payout/Settlement 취소
+    // 취소 승인 시 Payout/Settlement 보류 처리 (PG 환불 미호출 — 관리자가 별도 수동 처리)
     await Payout.update(
-      { status: 'CANCELLED', note: '호스트 취소 승인으로 인한 자동 취소' },
+      { status: 'ON_HOLD', note: `${requesterLabel} 취소 승인으로 인한 지급 보류` },
       { where: { contractId: contract.id, payoutType: 'CONTRACT_SETTLEMENT', status: { [Op.in]: ['PENDING', 'PAYABLE'] } }, transaction }
     );
     await Settlement.update(
-      { status: 'ON_HOLD', note: '호스트 취소 승인으로 인한 정산 보류' },
+      { status: 'ON_HOLD', note: `${requesterLabel} 취소 승인으로 인한 정산 보류` },
       { where: { contractId: contract.id, status: 'PENDING' }, transaction }
     );
+
+    const approvedMetadataType = isGuestRequest ? 'GUEST_CANCEL_REQUEST_APPROVED' : 'HOST_CANCEL_REQUEST_APPROVED';
 
     // 상태 변경 로그
     await ContractStatusLog.createLog({
       contractId: contract.id,
       fromStatus: previousStatus,
-      toStatus: 'CANCELLED_BY_HOST',
+      toStatus: cancelledStatus,
       changedBy: 'ADMIN',
       changedByUserId: adminId,
-      reason: `호스트 취소 요청 승인: ${adminNote || ''}`,
+      reason: `${requesterLabel} 취소 요청 승인: ${adminNote || ''}`,
       metadata: {
-        type: 'HOST_CANCEL_REQUEST_APPROVED',
+        type: approvedMetadataType,
         withRefund,
         adminId,
         adminNote,
@@ -3083,17 +3095,20 @@ const approveHostCancelRequest = async (req, res) => {
       const { cancelPendingServiceTasks } = require('../schedulers/contractScheduler');
       await cancelPendingServiceTasks(contract.id);
     } catch (taskErr) {
-      console.error('호스트 취소 승인 서비스 태스크 삭제 실패 (무시됨):', taskErr);
+      console.error('취소 승인 서비스 태스크 삭제 실패 (무시됨):', taskErr);
     }
 
     // 채팅 시스템 메시지
     try {
       if (contract.chatRoom && contract.chatRoom.firebaseChatRoomId) {
-        const messageText = getSystemMessageTemplate(SystemMessageTypes.HOST_CANCEL_REQUEST_APPROVED);
+        const approvedMsgType = isGuestRequest
+          ? SystemMessageTypes.GUEST_CANCEL_REQUEST_APPROVED
+          : SystemMessageTypes.HOST_CANCEL_REQUEST_APPROVED;
+        const messageText = getSystemMessageTemplate(approvedMsgType);
         await sendSystemMessage(
           contract.chatRoom.firebaseChatRoomId,
           messageText,
-          SystemMessageTypes.HOST_CANCEL_REQUEST_APPROVED,
+          approvedMsgType,
           { contractId: contract.id }
         );
       }
@@ -3101,43 +3116,43 @@ const approveHostCancelRequest = async (req, res) => {
       console.error('취소 요청 승인 시스템 메시지 전송 실패 (무시됨):', chatErr);
     }
 
-    // 호스트 알림
+    // 요청자(호스트 또는 게스트) 알림
     try {
       await NotificationService.sendNotification({
-        userId: contract.hostId,
+        userId: isGuestRequest ? contract.guestId : contract.hostId,
         type: 'CONTRACT',
         title: '취소 요청 승인',
-        message: '호스트님의 취소 요청이 관리자에 의해 승인되었습니다.',
+        message: `${requesterLabel}님의 취소 요청이 관리자에 의해 승인되었습니다.`,
         data: { contractId: contract.id }
       });
     } catch (notifyErr) {
-      console.error('호스트 취소 승인 알림 전송 실패 (무시됨):', notifyErr);
+      console.error('취소 승인 알림 전송 실패 (무시됨):', notifyErr);
     }
 
-    // 게스트 알림
+    // 상대방 알림
     try {
       await NotificationService.sendNotification({
-        userId: contract.guestId,
+        userId: isGuestRequest ? contract.hostId : contract.guestId,
         type: 'CONTRACT',
         title: '계약 취소 안내',
         message: '관리자 승인으로 계약이 취소되었습니다. 환불 절차가 진행됩니다.',
         data: { contractId: contract.id }
       });
     } catch (notifyErr) {
-      console.error('게스트 취소 알림 전송 실패 (무시됨):', notifyErr);
+      console.error('취소 안내 알림 전송 실패 (무시됨):', notifyErr);
     }
 
     return success(res, {
       contractId: contract.id,
       previousStatus,
-      newStatus: 'CANCELLED_BY_HOST',
+      newStatus: cancelledStatus,
       withRefund,
       adminNote
-    }, '호스트 취소 요청이 승인되었습니다.');
+    }, `${requesterLabel} 취소 요청이 승인되었습니다.`);
 
   } catch (err) {
     await transaction.rollback();
-    console.error('호스트 취소 요청 승인 오류:', err);
+    console.error('취소 요청 승인 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
 };
@@ -3147,6 +3162,8 @@ const approveHostCancelRequest = async (req, res) => {
  * POST /api/admin/reservations/:contractId/reject-cancel-request
  */
 const rejectHostCancelRequest = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
   try {
     const { contractId } = req.params;
     const { adminNote } = req.body;
@@ -3155,61 +3172,82 @@ const rejectHostCancelRequest = async (req, res) => {
     const contract = await Contract.findByPk(contractId, {
       include: [
         { model: ChatRoom, as: 'chatRoom', attributes: ['firebaseChatRoomId'] }
-      ]
+      ],
+      transaction
     });
 
     if (!contract) {
+      await transaction.rollback();
       return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
     }
 
-    if (contract.status !== 'IN_PROGRESS') {
+    if (contract.status !== 'CANCEL_REQUESTED') {
+      await transaction.rollback();
       return error(res, {
         code: 4633,
-        message: '임대 진행 중 상태에서만 취소 요청 거절이 가능합니다.',
+        message: '취소 요청 상태에서만 거절이 가능합니다.',
         currentStatus: contract.status
       }, 400);
     }
 
-    // 호스트 취소 요청 존재 확인
+    // 호스트 또는 게스트 취소 요청 존재 확인
     const cancelRequest = await ContractStatusLog.findOne({
       where: {
         contractId,
-        metadata: { [Op.like]: '%CANCEL_REQUEST_BY_HOST%' }
+        [Op.or]: [
+          { metadata: { [Op.like]: '%CANCEL_REQUEST_BY_HOST%' } },
+          { metadata: { [Op.like]: '%CANCEL_REQUEST_BY_GUEST%' } }
+        ]
       },
-      order: [['createdAt', 'DESC']]
+      order: [['createdAt', 'DESC']],
+      transaction
     });
 
     if (!cancelRequest) {
+      await transaction.rollback();
       return error(res, {
         code: 4634,
-        message: '해당 계약에 대한 호스트 취소 요청을 찾을 수 없습니다.'
+        message: '해당 계약에 대한 취소 요청을 찾을 수 없습니다.'
       }, 404);
     }
 
-    // 상태 변경 없음 (IN_PROGRESS 유지), 거절 기록만 남김
+    const cancelRequestMetadata = JSON.parse(cancelRequest.metadata || '{}');
+    const isGuestRequest = cancelRequestMetadata.type === 'CANCEL_REQUEST_BY_GUEST';
+    const requesterLabel = isGuestRequest ? '게스트' : '호스트';
+    const rejectedMetadataType = isGuestRequest ? 'GUEST_CANCEL_REQUEST_REJECTED' : 'HOST_CANCEL_REQUEST_REJECTED';
+
+    // CANCEL_REQUESTED → IN_PROGRESS 원복
+    await contract.update({ status: 'IN_PROGRESS' }, { transaction });
+
     await ContractStatusLog.createLog({
       contractId: contract.id,
-      fromStatus: 'IN_PROGRESS',
+      fromStatus: 'CANCEL_REQUESTED',
       toStatus: 'IN_PROGRESS',
       changedBy: 'ADMIN',
       changedByUserId: adminId,
-      reason: `호스트 취소 요청 거절: ${adminNote || ''}`,
+      reason: `${requesterLabel} 취소 요청 거절: ${adminNote || ''}`,
       metadata: {
-        type: 'HOST_CANCEL_REQUEST_REJECTED',
+        type: rejectedMetadataType,
         adminId,
         adminNote,
         originalRequestLogId: cancelRequest.id
-      }
+      },
+      transaction
     });
+
+    await transaction.commit();
 
     // 채팅 시스템 메시지
     try {
       if (contract.chatRoom && contract.chatRoom.firebaseChatRoomId) {
-        const messageText = getSystemMessageTemplate(SystemMessageTypes.HOST_CANCEL_REQUEST_REJECTED);
+        const rejectedMsgType = isGuestRequest
+          ? SystemMessageTypes.GUEST_CANCEL_REQUEST_REJECTED
+          : SystemMessageTypes.HOST_CANCEL_REQUEST_REJECTED;
+        const messageText = getSystemMessageTemplate(rejectedMsgType);
         await sendSystemMessage(
           contract.chatRoom.firebaseChatRoomId,
           messageText,
-          SystemMessageTypes.HOST_CANCEL_REQUEST_REJECTED,
+          rejectedMsgType,
           { contractId: contract.id }
         );
       }
@@ -3217,26 +3255,27 @@ const rejectHostCancelRequest = async (req, res) => {
       console.error('취소 요청 거절 시스템 메시지 전송 실패 (무시됨):', chatErr);
     }
 
-    // 호스트 알림
+    // 요청자(호스트 또는 게스트) 알림
     try {
       await NotificationService.sendNotification({
-        userId: contract.hostId,
+        userId: isGuestRequest ? contract.guestId : contract.hostId,
         type: 'CONTRACT',
         title: '취소 요청 거절',
-        message: '호스트님의 취소 요청이 관리자에 의해 거절되었습니다.',
+        message: `${requesterLabel}님의 취소 요청이 관리자에 의해 거절되었습니다.`,
         data: { contractId: contract.id }
       });
     } catch (notifyErr) {
-      console.error('호스트 취소 거절 알림 전송 실패 (무시됨):', notifyErr);
+      console.error('취소 거절 알림 전송 실패 (무시됨):', notifyErr);
     }
 
     return success(res, {
       contractId: contract.id,
       status: 'IN_PROGRESS',
       adminNote
-    }, '호스트 취소 요청이 거절되었습니다.');
+    }, `${requesterLabel} 취소 요청이 거절되었습니다.`);
 
   } catch (err) {
+    await transaction.rollback();
     console.error('호스트 취소 요청 거절 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
