@@ -6,7 +6,7 @@ const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/syste
 const { toDateStrKST, nowKSTString } = require('../utils/dateHelper');
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
-const { calculateSettlementDate, calculateSettlementAmount } = require('../services/settlementService');
+const { calculateSettlementDate, calculateSettlementAmount, calculatePayoutAvailableDate } = require('../services/settlementService');
 const { createReceiptsForReadySettlements } = require('../services/receiptService');
 const { cancelRentalItemReservations } = require('../utils/contractHelper');
 const paytagClient = require('../utils/paytagClient');
@@ -330,12 +330,25 @@ async function updateInProgress() {
         if (!existingSettlement) {
           const fullContract = await Contract.findByPk(contract.id, {
             attributes: ['id', 'hostId', 'checkInDate', 'rentalFee', 'maintenanceFee', 'cleaningFee', 'discountAmount', 'hostPlatformFee', 'snapshot'],
+            include: [
+              {
+                model: Payment,
+                as: 'payment',
+                attributes: ['approvedAt'],
+                required: false
+              }
+            ],
             transaction
           });
 
           const expectedDate = calculateSettlementDate(fullContract.checkInDate);
           const hasEzCleaningService = fullContract.snapshot?.ezService?.cleaningService || false;
           const settlementCalc = calculateSettlementAmount(fullContract, [], { hasEzCleaningService });
+
+          const paymentApprovedAt = fullContract.payment?.approvedAt;
+          const payoutAvailableDate = paymentApprovedAt
+            ? toDateStrKST(calculatePayoutAvailableDate(paymentApprovedAt))
+            : toDateStrKST(expectedDate); // 결제 정보 없으면 정산 예정일로 fallback
 
           await Settlement.create({
             contractId: fullContract.id,
@@ -349,6 +362,7 @@ async function updateInProgress() {
             grossAmount: settlementCalc.grossAmount,      // 할인/수수료 전 총액
             netAmount: settlementCalc.grossSettlement,    // 수수료 차감 후 (초기 환불 없음)
             expectedDate: toDateStrKST(expectedDate),
+            payoutAvailableDate,
             settlementSnapshot: {
               createdAt: nowKSTString(),
               checkInDate: fullContract.checkInDate,
@@ -578,10 +592,10 @@ async function autoConfirmCheckout() {
 /**
  * 8. 정산 상태 자동 업데이트
  * - PENDING 상태인 Settlement 중
- * - expectedDate가 오늘이거나 지난 경우
+ * - payoutAvailableDate가 오늘이거나 지난 경우
  * -> READY 상태로 변경 (토스 서브몰 정산 가능)
  *
- * 정책: 입주일 + 3영업일 = 정산 예정일, 예정일 도래 시 READY
+ * 정책: 결제 승인일 + 3영업일 = PG 정산 입금 가능일, 해당일 도래 시 READY
  */
 async function updateSettlementReady() {
   const transaction = await sequelize.transaction();
@@ -598,7 +612,7 @@ async function updateSettlementReady() {
       {
         where: {
           status: 'PENDING',
-          expectedDate: { [Op.lte]: todayStr }
+          payoutAvailableDate: { [Op.lte]: todayStr }
         },
         transaction
       }
