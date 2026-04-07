@@ -2,7 +2,7 @@
  * Settlement Controller
  * 호스트 정산 관리 API
  */
-const { Contract, Room, RoomPhoto, User, Refund, UserBankAccount, EzService, sequelize } = require('../models');
+const { Contract, Room, RoomPhoto, User, Refund, UserBankAccount, EzService, Payout, sequelize } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 const { toDateStrKST, todayKST, toKSTString } = require('../utils/dateHelper');
 const { toAbsoluteUrl } = require('../utils/urlHelper');
@@ -125,6 +125,13 @@ const getSettlements = async (req, res) => {
             'maintenanceFeeRefundAmount', 'cleaningFeeRefundAmount'
           ],
           required: false
+        },
+        {
+          model: Payout,
+          as: 'payouts',
+          attributes: ['id', 'payoutType', 'amount', 'status', 'payableAfter'],
+          where: { payoutType: 'DEPOSIT_DEDUCTION', recipientType: 'HOST' },
+          required: false
         }
       ],
       order: [['checkOutDate', tab === 'pending' ? 'ASC' : 'DESC']],
@@ -138,6 +145,8 @@ const getSettlements = async (req, res) => {
       const settlement = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
       const status = getSettlementStatus(contract.checkInDate);
       const settlementDate = calculateSettlementDate(contract.checkInDate);
+
+      const depositDeductionPayout = contract.payouts?.find(p => p.payoutType === 'DEPOSIT_DEDUCTION') || null;
 
       return {
         contractId: contract.id,
@@ -155,7 +164,13 @@ const getSettlements = async (req, res) => {
         statusLabel: SETTLEMENT_STATUS_LABELS[status],
         hasRefund: settlement.refund.hasRefund,
         refundAmount: settlement.refund.totalRefundAmount,
-        hasEzCleaningService  // EZ청소서비스 사용 여부
+        hasEzCleaningService,  // EZ청소서비스 사용 여부
+        depositDeduction: depositDeductionPayout ? {
+          amount: depositDeductionPayout.amount,
+          status: depositDeductionPayout.status,
+          statusLabel: Payout.STATUS_LABELS[depositDeductionPayout.status],
+          payableAfter: depositDeductionPayout.payableAfter
+        } : null
       };
     });
 
@@ -295,6 +310,13 @@ const getSettlementDetail = async (req, res) => {
             'finalRefundAmount', 'completedAt', 'createdAt'
           ],
           required: false
+        },
+        {
+          model: Payout,
+          as: 'payouts',
+          attributes: ['id', 'payoutType', 'amount', 'status', 'payableAfter', 'processedAt'],
+          where: { payoutType: 'DEPOSIT_DEDUCTION', recipientType: 'HOST' },
+          required: false
         }
       ]
     });
@@ -319,6 +341,9 @@ const getSettlementDetail = async (req, res) => {
     const settlement = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
     const status = getSettlementStatus(contract.checkInDate);
     const settlementDate = calculateSettlementDate(contract.checkInDate);
+
+    // 보증금 차감 지급 정보
+    const depositDeductionPayout = contract.payouts?.find(p => p.payoutType === 'DEPOSIT_DEDUCTION') || null;
 
     // 환불 정보 가공
     const completedRefund = contract.refunds?.find(r => r.refundStatus === 'COMPLETED');
@@ -374,6 +399,13 @@ const getSettlementDetail = async (req, res) => {
         grossSettlement: settlement.grossSettlement
       },
       refund: refundInfo,
+      depositDeduction: depositDeductionPayout ? {
+        amount: depositDeductionPayout.amount,
+        status: depositDeductionPayout.status,
+        statusLabel: Payout.STATUS_LABELS[depositDeductionPayout.status],
+        payableAfter: depositDeductionPayout.payableAfter,
+        processedAt: depositDeductionPayout.processedAt
+      } : null,
       settlement: {
         finalAmount: settlement.finalAmount,
         settlementDate: toDateStrKST(settlementDate),
