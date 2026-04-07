@@ -33,7 +33,8 @@ const {
 const {
   getSettlements,
   getSettlementDetail,
-  exportSettlements
+  exportSettlements,
+  getDepositDeductionDetail
 } = require('../controllers/settlementController');
 const { authenticateToken } = require('../middleware/auth');
 const { uploadRoomPhotos } = require('../middleware/upload');
@@ -141,5 +142,8 @@ router.get('/settlements', getSettlements);
 
 // 25. 정산 상세 조회
 router.get('/settlements/:contractId', getSettlementDetail);
+
+// 26. 보증금 차감 이력 조회
+router.get('/settlements/:contractId/deposit-deduction', getDepositDeductionDetail);
 
 module.exports = router;

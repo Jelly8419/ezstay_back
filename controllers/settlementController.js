@@ -2,7 +2,7 @@
  * Settlement Controller
  * 호스트 정산 관리 API
  */
-const { Contract, Room, RoomPhoto, User, Refund, UserBankAccount, EzService, Payout, sequelize } = require('../models');
+const { Contract, Room, RoomPhoto, User, Refund, UserBankAccount, EzService, Payout, DepositAgreement, sequelize } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 const { toDateStrKST, todayKST, toKSTString } = require('../utils/dateHelper');
 const { toAbsoluteUrl } = require('../utils/urlHelper');
@@ -17,6 +17,13 @@ const {
   SETTLEMENT_STATUS_LABELS
 } = require('../services/settlementService');
 const { createSettlementExcel } = require('../utils/excelHelper');
+
+const DEPOSIT_STATUS_LABELS = {
+  HOLDING: '보증금 보류 중',
+  RETURN_CONFIRMED: '전액 반환 확정',
+  DEDUCTION_CONFIRMED: '차감 확정',
+  RETURNED: '반환 완료'
+};
 
 /**
  * 정산 목록 조회
@@ -569,8 +576,100 @@ const exportSettlements = async (req, res) => {
   }
 };
 
+/**
+ * 보증금 차감 이력 조회
+ * GET /api/host/settlements/:contractId/deposit-deduction
+ */
+const getDepositDeductionDetail = async (req, res) => {
+  try {
+    const hostId = req.user.id;
+    const { contractId } = req.params;
+
+    const contract = await Contract.findOne({
+      where: { id: contractId, hostId, status: 'COMPLETED' },
+      attributes: [
+        'id', 'contractNumber',
+        'deposit', 'depositDeduction', 'deductionReason',
+        'refundableDeposit', 'depositStatus',
+        'checkoutStatus'
+      ],
+      include: [
+        {
+          model: Payout,
+          as: 'payouts',
+          attributes: ['id', 'amount', 'status', 'payableAfter', 'processedAt'],
+          where: { payoutType: 'DEPOSIT_DEDUCTION', recipientType: 'HOST' },
+          required: false
+        },
+        {
+          model: DepositAgreement,
+          as: 'depositAgreements',
+          attributes: [
+            'id', 'status',
+            'holdReason', 'requestedAt',
+            'rejectedAt', 'rejectedReason',
+            'adminApprovedAt',
+            'deductAmount', 'agreementText',
+            'submittedAt', 'acceptedAt',
+            'createdAt'
+          ],
+          required: false
+        }
+      ]
+    });
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    const payout = contract.payouts?.[0] || null;
+
+    const history = (contract.depositAgreements || [])
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .map(da => ({
+        id: da.id,
+        status: da.status,
+        statusLabel: DepositAgreement.STATUS_LABELS[da.status],
+        holdReason: da.holdReason,
+        requestedAt: da.requestedAt,
+        rejectedAt: da.rejectedAt,
+        rejectedReason: da.rejectedReason,
+        adminApprovedAt: da.adminApprovedAt,
+        deductAmount: da.deductAmount,
+        agreementText: da.agreementText,
+        submittedAt: da.submittedAt,
+        acceptedAt: da.acceptedAt,
+        createdAt: da.createdAt
+      }));
+
+    return success(res, {
+      contractId: contract.id,
+      contractNumber: contract.contractNumber,
+      deposit: contract.deposit,
+      depositDeduction: contract.depositDeduction,
+      deductionReason: contract.deductionReason,
+      refundableDeposit: contract.refundableDeposit,
+      depositStatus: contract.depositStatus,
+      depositStatusLabel: DEPOSIT_STATUS_LABELS[contract.depositStatus] ?? contract.depositStatus,
+      payout: payout ? {
+        id: payout.id,
+        amount: payout.amount,
+        status: payout.status,
+        statusLabel: Payout.STATUS_LABELS[payout.status],
+        payableAfter: payout.payableAfter,
+        processedAt: payout.processedAt
+      } : null,
+      history
+    });
+  } catch (err) {
+    console.error('Deposit deduction detail error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
 module.exports = {
   getSettlements,
   getSettlementDetail,
-  exportSettlements
+  exportSettlements,
+  getDepositDeductionDetail
 };
