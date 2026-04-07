@@ -171,7 +171,7 @@ const getSettlements = async (req, res) => {
 
     // 정산 정보 가공
     const settlements = contracts.map(contract => {
-      const hasEzCleaningService = contract.room?.ezService?.cleaningService || false;
+      const hasEzCleaningService = contract.snapshot?.ezService?.cleaningService || false;
       const settlement = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
       const status = getSettlementStatus(contract.checkInDate);
       const settlementDate = calculateSettlementDate(contract.checkInDate);
@@ -204,17 +204,15 @@ const getSettlements = async (req, res) => {
       };
     });
 
-    // 전체 통계 조회 (탭과 관계없이, 입주일 기준)
-    // totalSettlementAmount = 계약 정산액 합계(host_platform_fee 차감) + 미지급 차감 Payout 합계
+    // 전체 건수 집계 (탭과 관계없이)
     const pendingDeductionSubquery = `(SELECT contract_id FROM payouts
       WHERE payout_type = 'DEPOSIT_DEDUCTION'
         AND recipient_type = 'HOST'
         AND recipient_id = ${hostId}
         AND status IN ('PENDING', 'PAYABLE'))`;
 
-    const [pendingStats, completedStats, pendingDeductionSum, completedDeductionSum] = await Promise.all([
-      // 정산 대기 건수
-      Contract.findAll({
+    const [pendingCount, completedCount] = await Promise.all([
+      Contract.count({
         where: {
           hostId,
           status: 'COMPLETED',
@@ -222,69 +220,50 @@ const getSettlements = async (req, res) => {
             { checkInDate: { [Op.gte]: settlementCutoffDate } },
             { id: { [Op.in]: literal(pendingDeductionSubquery) } }
           ]
-        },
-        attributes: [
-          [fn('COUNT', col('id')), 'count'],
-          [fn('SUM', col('rental_fee')), 'totalRentalFee'],
-          [fn('SUM', col('maintenance_fee')), 'totalMaintenanceFee'],
-          [fn('SUM', col('cleaning_fee')), 'totalCleaningFee'],
-          [fn('SUM', col('host_platform_fee')), 'totalHostPlatformFee']
-        ],
-        raw: true
+        }
       }),
-      // 정산 완료 건수
-      Contract.findAll({
+      Contract.count({
         where: {
           hostId,
           status: 'COMPLETED',
           checkInDate: { [Op.lt]: settlementCutoffDate },
           id: { [Op.notIn]: literal(pendingDeductionSubquery) }
-        },
-        attributes: [
-          [fn('COUNT', col('id')), 'count'],
-          [fn('SUM', col('rental_fee')), 'totalRentalFee'],
-          [fn('SUM', col('maintenance_fee')), 'totalMaintenanceFee'],
-          [fn('SUM', col('cleaning_fee')), 'totalCleaningFee'],
-          [fn('SUM', col('host_platform_fee')), 'totalHostPlatformFee']
-        ],
-        raw: true
-      }),
-      // pending 탭 차감 Payout 합계
-      Payout.findAll({
-        where: {
-          recipientType: 'HOST',
-          recipientId: hostId,
-          payoutType: 'DEPOSIT_DEDUCTION',
-          status: { [Op.in]: ['PENDING', 'PAYABLE'] }
-        },
-        attributes: [[fn('SUM', col('amount')), 'totalDeductionAmount']],
-        raw: true
-      }),
-      // completed 탭 차감 Payout 합계 (COMPLETED/CANCELLED 포함 전체)
-      Payout.findAll({
-        where: {
-          recipientType: 'HOST',
-          recipientId: hostId,
-          payoutType: 'DEPOSIT_DEDUCTION',
-          status: { [Op.in]: ['COMPLETED', 'CANCELLED', 'FAILED'] },
-          contractId: { [Op.notIn]: literal(pendingDeductionSubquery) }
-        },
-        attributes: [[fn('SUM', col('amount')), 'totalDeductionAmount']],
-        raw: true
+        }
       })
     ]);
 
-    // 통계 계산: rental_fee + maintenance_fee + cleaning_fee - host_platform_fee(3.3%) + 차감 Payout
-    const calculateTotalSettlement = (stats, deductionStats) => {
-      if (!stats[0]) return 0;
-      const contractTotal =
-        (parseInt(stats[0].totalRentalFee) || 0) +
-        (parseInt(stats[0].totalMaintenanceFee) || 0) +
-        (parseInt(stats[0].totalCleaningFee) || 0) -
-        (parseInt(stats[0].totalHostPlatformFee) || 0);
-      const deductionTotal = parseInt(deductionStats[0]?.totalDeductionAmount) || 0;
-      return contractTotal + deductionTotal;
-    };
+    // totalSettlementAmount: calculateSettlementAmount()로 정확히 계산
+    // (hostPlatformFee=0 계약의 동적 3.3% 계산, discountAmount, EZ청소서비스, 환불 모두 반영)
+    const allContractsForSum = await Contract.findAll({
+      where: whereCondition,
+      attributes: [
+        'id', 'rentalFee', 'maintenanceFee', 'cleaningFee',
+        'discountAmount', 'hostPlatformFee', 'snapshot'
+      ],
+      include: [
+        {
+          model: Refund,
+          as: 'refunds',
+          attributes: ['refundStatus', 'rentalFeeRefundAmount', 'maintenanceFeeRefundAmount', 'cleaningFeeRefundAmount'],
+          required: false
+        },
+        {
+          model: Payout,
+          as: 'payouts',
+          attributes: ['amount', 'status'],
+          where: { payoutType: 'DEPOSIT_DEDUCTION', recipientType: 'HOST' },
+          required: false
+        }
+      ]
+    });
+
+    const totalSettlementAmount = allContractsForSum.reduce((sum, c) => {
+      const hasEzCleaningService = c.snapshot?.ezService?.cleaningService || false;
+      const s = calculateSettlementAmount(c, c.refunds || [], { hasEzCleaningService });
+      const deductionPayout = c.payouts?.find(p => ['PENDING', 'PAYABLE', 'COMPLETED'].includes(p.status));
+      const deductionAmount = deductionPayout ? deductionPayout.amount : 0;
+      return sum + s.finalAmount + deductionAmount;
+    }, 0);
 
     // 호스트의 방 목록 (필터용)
     const hostRooms = await Room.findAll({
@@ -297,11 +276,9 @@ const getSettlements = async (req, res) => {
       settlements,
       summary: {
         totalCount: count,
-        totalSettlementAmount: tab === 'pending'
-          ? calculateTotalSettlement(pendingStats, pendingDeductionSum)
-          : calculateTotalSettlement(completedStats, completedDeductionSum),
-        pendingCount: parseInt(pendingStats[0]?.count) || 0,
-        completedCount: parseInt(completedStats[0]?.count) || 0
+        totalSettlementAmount,
+        pendingCount,
+        completedCount
       },
       pagination: {
         page: parseInt(page),
@@ -400,8 +377,8 @@ const getSettlementDetail = async (req, res) => {
       attributes: ['bankName', 'accountNumber', 'accountHolder']
     });
 
-    // EZ청소서비스 사용 여부 확인
-    const hasEzCleaningService = contract.room?.ezService?.cleaningService || false;
+    // EZ청소서비스 사용 여부 확인 (계약 시점 스냅샷 기준)
+    const hasEzCleaningService = contract.snapshot?.ezService?.cleaningService || false;
 
     // 정산 금액 계산
     const settlement = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
@@ -587,7 +564,7 @@ const exportSettlements = async (req, res) => {
 
     // 엑셀 데이터 준비
     const excelData = contracts.map(contract => {
-      const hasEzCleaningService = contract.room?.ezService?.cleaningService || false;
+      const hasEzCleaningService = contract.snapshot?.ezService?.cleaningService || false;
       const settlement = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
       const status = getSettlementStatus(contract.checkInDate);
       const settlementDate = calculateSettlementDate(contract.checkInDate);
