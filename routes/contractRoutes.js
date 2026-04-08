@@ -19,14 +19,13 @@ const {
   updatePendingRentalItems,
   requestCheckout,
   confirmCheckout,
+  getHostCancelPreview,
   cancelContractByHost,
   requestCancelByHost,
   holdCheckout,
   submitDepositAgreement,
   getDepositAgreement,
   acceptDepositAgreement,
-  getHostBurdenPaymentInfo,
-  confirmHostBurdenPayment,
   getContractRoomDetail
 } = require('../controllers/contractController');
 const { confirmPaymentMock } = require('../controllers/mockPaymentController');
@@ -256,17 +255,25 @@ router.post('/:contractId/request-checkout', authenticateToken, requestCheckout)
 router.post('/:contractId/confirm-checkout', authenticateToken, confirmCheckout);
 
 /**
- * 호스트가 계약 취소 (PAYMENT_COMPLETED 상태)
- * PATCH /api/contracts/:contractId/cancel-by-host
+ * 호스트 취소 부담금 미리보기 (취소 전 금액 확인)
+ * GET /api/contracts/:contractId/cancel-by-host/preview
+ */
+router.get('/:contractId/cancel-by-host/preview', authenticateToken, getHostCancelPreview);
+
+/**
+ * 호스트가 계약 취소 (부담금 결제 → 게스트 환불)
+ * POST /api/contracts/:contractId/cancel-by-host
  *
  * Request Body:
  * {
  *   "cancellationReason": "호스트 사정으로 계약을 취소합니다." (필수)
+ *   "recvPayparam": "...",   (hostBurdenAmount > 0 인 경우 필수)
+ *   "payType": "CARD",
+ *   "orderId": "250111-00001",
+ *   "amount": 129000
  * }
- *
- * TODO: 위약금 결제 플로우 (PG사 확정 후 구현)
  */
-router.patch('/:contractId/cancel-by-host', authenticateToken, cancelContractByHost);
+router.post('/:contractId/cancel-by-host', authenticateToken, cancelContractByHost);
 
 /**
  * 호스트가 계약 취소 요청 (IN_PROGRESS 상태, 관리자 승인 필요)
@@ -314,25 +321,6 @@ router.get('/:contractId/deposit-agreement', authenticateToken, getDepositAgreem
  */
 router.post('/:contractId/deposit-agreement/accept', authenticateToken, acceptDepositAgreement);
 
-/**
- * 호스트 부담금 결제 정보 조회 (호스트 귀책 취소 후)
- * GET /api/contracts/:contractId/host-burden-payment-info
- */
-router.get('/:contractId/host-burden-payment-info', authenticateToken, getHostBurdenPaymentInfo);
-
-/**
- * 호스트 부담금 결제 승인 (PayTag PG 결제)
- * POST /api/contracts/:contractId/host-burden-payment
- *
- * Request Body:
- * {
- *   "recvPayparam": "...",
- *   "payType": "CARD",
- *   "orderId": "250111-00001",
- *   "amount": 150000
- * }
- */
-router.post('/:contractId/host-burden-payment', authenticateToken, confirmHostBurdenPayment);
 
 /**
  * Mock 결제 승인 (개발/테스트 환경 전용)

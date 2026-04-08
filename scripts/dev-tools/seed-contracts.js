@@ -322,9 +322,9 @@ function buildContractData(orderId, hostId, guestId, roomId, baseDate, overrides
     guestMessage: `[SEED] 테스트 계약 데이터`,
     termsAgreed: JSON.stringify({ service: true, privacy: true, refund: true }),
     specialRequests: JSON.stringify({ earlyCheckin: false, lateCheckout: false }),
-    pricingSnapshot: JSON.stringify({ weeklyRent: 225000, dailyMaintenance: 5000, cleaningFee: 50000 }),
+    pricingSnapshot: { weeklyRent: 225000, dailyMaintenance: 5000, cleaningFee: 50000 },
     refundPolicyType: refundInfo.policyType || null,
-    refundPolicySnapshot: refundInfo.snapshot ? JSON.stringify(refundInfo.snapshot) : null,
+    refundPolicySnapshot: refundInfo.snapshot || null,
     status: 'PENDING_APPROVAL',
     ...overrides,
   };

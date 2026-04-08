@@ -1,8 +1,6 @@
 const { RefundPolicyType, RefundPolicyRule, Room, EzService } = require('../models');
 const { Op } = require('sequelize');
 
-// 수수료율 상수
-const HOST_PLATFORM_FEE_RATE = 0.033; // 호스트 서비스 수수료 3.3%
 
 /**
  * 환불 금액 계산 유틸리티
@@ -26,15 +24,12 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
   try {
     const faultType = options.faultType || 'GUEST';
 
-    // 1. EZ클리닝 여부 확인 (스냅샷 우선, 없으면 현재 방 조회)
+    // 1. EZ클리닝 여부 확인 (contract.snapshot 우선, 없으면 현재 방 조회)
     let hasEzCleaningService = false;
-    const snapshot = contract.refundPolicySnapshot;
 
-    if (snapshot) {
-      // 스냅샷이 있으면 현재 방/정책 조회 불필요
-      hasEzCleaningService = contract.snapshot?.ezService?.cleaningService || false;
+    if (contract.snapshot?.ezService) {
+      hasEzCleaningService = contract.snapshot.ezService.cleaningService || false;
     } else {
-      // 스냅샷 없음 → 현재 방 정보로 fallback
       const room = await Room.findByPk(contract.roomId, {
         include: [{ model: EzService, as: 'ezService', required: false }]
       });
@@ -47,6 +42,11 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
     // 2. 환불 정책 결정 (스냅샷 우선, 없으면 현재 DB 조회)
     let policy;
     let policyType;
+    let snapshot = contract.refundPolicySnapshot;
+    // 이중 stringify 방어: getter 이후에도 string이면 한 번 더 파싱
+    if (typeof snapshot === 'string') {
+      try { snapshot = JSON.parse(snapshot); } catch { snapshot = null; }
+    }
 
     if (snapshot) {
       // 스냅샷 기반: 계약 시점의 정책 그대로 사용
@@ -150,8 +150,6 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
     let maintenanceFeeRefundAmount;
     let guestServiceFeeRefunded;
     let penaltyAmount;
-    let hostPenaltyFee;
-    let hostPenaltyAmount;
     let totalRefundAmount;
 
     // 관리비·청소비는 귀책과 무관하게 항상 100% 환불
@@ -166,8 +164,6 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
 
       // 호스트 위약금 = 현재 시점 환불정책 기준 임대료 위약금
       penaltyAmount = Math.floor(usageFee * ((100 - refundRate) / 100));
-      hostPenaltyFee = Math.floor(penaltyAmount * HOST_PLATFORM_FEE_RATE);
-      hostPenaltyAmount = penaltyAmount - hostPenaltyFee;
 
       // 게스트 환불 총액 = 결제 전액
       totalRefundAmount = deposit + usageFee + cleaningFee + maintenanceFee + platformFee + rentalItemsFee;
@@ -180,24 +176,18 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
         usageFeeRefundAmount = usageFee;
         guestServiceFeeRefunded = true;
         penaltyAmount = 0;
-        hostPenaltyFee = 0;
-        hostPenaltyAmount = 0;
         totalRefundAmount = deposit + usageFee + cleaningFee + maintenanceFee + platformFee + rentalItemsFee;
       } else if (refundRate > 0) {
         // 부분 환불: 보증금 + 임대료×환불율 + 관리비 + 청소비 + 옵션상품, 수수료 비환불
         usageFeeRefundAmount = Math.floor(usageFee * (refundRate / 100));
         guestServiceFeeRefunded = false;
         penaltyAmount = Math.floor(usageFee * ((100 - refundRate) / 100));
-        hostPenaltyFee = Math.floor(penaltyAmount * HOST_PLATFORM_FEE_RATE);
-        hostPenaltyAmount = penaltyAmount - hostPenaltyFee;
         totalRefundAmount = deposit + usageFeeRefundAmount + cleaningFee + maintenanceFee + rentalItemsFee;
       } else {
         // 0% 환불: 보증금 + 관리비 + 청소비 + 옵션상품만 환불 (임대료 환불 없음)
         usageFeeRefundAmount = 0;
         guestServiceFeeRefunded = false;
         penaltyAmount = usageFee; // 임대료 전액이 위약금
-        hostPenaltyFee = Math.floor(penaltyAmount * HOST_PLATFORM_FEE_RATE);
-        hostPenaltyAmount = penaltyAmount - hostPenaltyFee;
         totalRefundAmount = deposit + cleaningFee + maintenanceFee + rentalItemsFee;
       }
     }
@@ -248,10 +238,8 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
         rentalItemsFeeRefundAmount: rentalItemsFee,
         totalRefundAmount,
 
-        // 위약금 분배
+        // 위약금
         penaltyAmount,
-        hostPenaltyFee,
-        hostPenaltyAmount,
 
         // 수수료
         guestServiceFeeRefunded,
