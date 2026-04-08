@@ -1822,8 +1822,20 @@ const requestRefund = async (req, res) => {
     }
 
     // 환불 가능한 상태인지 확인
-    const refundableStatuses = ['PAYMENT_COMPLETED', 'IN_PROGRESS'];
-    if (!refundableStatuses.includes(contract.status)) {
+    if (contract.status === 'IN_PROGRESS') {
+      await transaction.rollback();
+      return error(
+        res,
+        {
+          code: 4501,
+          message: '임대 진행 중에는 취소 요청 기능을 이용해주세요.',
+          currentStatus: contract.status
+        },
+        400
+      );
+    }
+
+    if (contract.status !== 'PAYMENT_COMPLETED') {
       await transaction.rollback();
       return error(
         res,
@@ -1881,26 +1893,6 @@ const requestRefund = async (req, res) => {
         },
         400
       );
-    }
-
-    // 입주 중(IN_PROGRESS) 취소/환불 1회 제한
-    if (contract.status === 'IN_PROGRESS') {
-      const pastRefundCount = await Refund.count({
-        where: { contractId },
-        transaction
-      });
-
-      if (pastRefundCount > 0) {
-        await transaction.rollback();
-        return error(
-          res,
-          {
-            code: 4503,
-            message: '입주 중에는 취소/환불 요청을 1회만 할 수 있습니다. 이미 환불 이력이 존재합니다.'
-          },
-          400
-        );
-      }
     }
 
     // 정산 완료 후 환불 차단
@@ -1982,10 +1974,8 @@ const requestRefund = async (req, res) => {
       maintenanceFeeRefundAmount: refundData.maintenanceFeeRefundAmount,
       totalRefundAmount: refundData.totalRefundAmount,
 
-      // 위약금 분배
+      // 위약금
       penaltyAmount: refundData.penaltyAmount,
-      hostPenaltyAmount: refundData.hostPenaltyAmount,
-      hostPenaltyFee: refundData.hostPenaltyFee,
 
       // 수수료
       guestServiceFeeRefunded: refundData.guestServiceFeeRefunded,
@@ -2158,7 +2148,7 @@ const requestRefund = async (req, res) => {
           guestPenalty: (refund.penaltyAmount || 0) + (refund.platformFeeDeducted || 0),
           refundAmount: refund.finalRefundAmount || 0,
           hostPenalty: refund.penaltyAmount || 0,
-          settlementAmount: refund.hostPenaltyAmount || 0
+          settlementAmount: refund.penaltyAmount || 0
         }
       }).catch(err => console.error('환불 취소 알림 전송 실패 (무시됨):', err));
     } catch (notifyErr) {
@@ -2260,10 +2250,8 @@ const getContractRefunds = async (req, res) => {
           totalRefundAmount: refund.totalRefundAmount,
           finalRefundAmount: refund.finalRefundAmount,
 
-          // 위약금 분배
+          // 위약금
           penaltyAmount: refund.penaltyAmount,
-          hostPenaltyAmount: refund.hostPenaltyAmount,
-          hostPenaltyFee: refund.hostPenaltyFee,
 
           // 수수료
           guestServiceFeeRefunded: refund.guestServiceFeeRefunded,
@@ -3154,10 +3142,86 @@ const confirmCheckout = async (req, res) => {
 };
 
 /**
- * 호스트가 계약 취소 (PAYMENT_COMPLETED 상태에서)
- * PATCH /api/contracts/:contractId/cancel-by-host
+ * 호스트 취소 시 부담금 미리보기
+ * GET /api/contracts/:contractId/cancel-by-host/preview
+ */
+const getHostCancelPreview = async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const hostId = req.user.id;
+
+    const contract = await Contract.findByPk(contractId);
+
+    if (!contract) {
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.hostId !== hostId) {
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    if (contract.status !== 'PAYMENT_COMPLETED') {
+      return error(res, {
+        code: 4621,
+        message: '결제 완료 상태에서만 취소할 수 있습니다.'
+      }, 400);
+    }
+
+    const refundResult = await calculateRefund(contract, new Date(), { faultType: 'HOST' });
+
+    if (!refundResult.success) {
+      return error(res, { code: 4623, message: `환불 계산 실패: ${refundResult.error.message}` }, 500);
+    }
+
+    const d = refundResult.data;
+    const hostBurdenAmount = d.penaltyAmount + d.originalPlatformFee;
+
+    return success(res, {
+      // 원본 결제 항목별 금액
+      originalRentalFee: d.originalRentalFee,
+      originalCleaningFee: d.originalCleaningFee,
+      originalMaintenanceFee: d.originalMaintenanceFee,
+      originalDeposit: d.originalDeposit,
+      originalPlatformFee: d.originalPlatformFee,
+      originalRentalItemsFee: d.originalRentalItemsFee,
+      originalTotalAmount: d.originalTotalAmount,
+
+      // 항목별 환불 금액
+      rentalFeeRefundAmount: d.rentalFeeRefundAmount,
+      cleaningFeeRefundAmount: d.cleaningFeeRefundAmount,
+      maintenanceFeeRefundAmount: d.maintenanceFeeRefundAmount,
+      depositRefundAmount: d.depositRefundAmount,
+      rentalItemsFeeRefundAmount: d.rentalItemsFeeRefundAmount,
+
+      // 호스트 납부
+      hostBurdenAmount,
+      penaltyAmount: d.penaltyAmount,
+
+      // 게스트 환불
+      guestRefundAmount: d.finalRefundAmount,
+
+      // 게스트 보전 (결제일+3영업일 후)
+      guestCompensationAmount: d.penaltyAmount,
+
+      // 참고 정보
+      daysBeforeCheckin: d.daysBeforeCheckin,
+      refundRate: d.rentalFeeRefundRate,
+      policyDisplayName: d.policyDisplayName,
+      applicableRuleDescription: d.applicableRuleDescription,
+      message: d.message
+    }, '호스트 취소 부담금 미리보기');
+  } catch (err) {
+    console.error('호스트 취소 미리보기 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 호스트가 계약 취소 (부담금 결제 → 게스트 환불 순서)
+ * POST /api/contracts/:contractId/cancel-by-host
  *
- * 위약금 결제 플로우는 PG사 확정 후 구현 예정 (TODO)
+ * hostBurdenAmount > 0: 호스트 PG 결제 → 게스트 PG 취소
+ * hostBurdenAmount = 0: 게스트 PG 취소만
  */
 const cancelContractByHost = async (req, res) => {
   const transaction = await sequelize.transaction();
@@ -3165,14 +3229,11 @@ const cancelContractByHost = async (req, res) => {
   try {
     const { contractId } = req.params;
     const hostId = req.user.id;
-    const { cancellationReason } = req.body;
+    const { cancellationReason, recvPayparam, payType, orderId, amount } = req.body;
 
     if (!cancellationReason || !cancellationReason.trim()) {
       await transaction.rollback();
-      return error(res, {
-        code: 4620,
-        message: '취소 사유를 입력해주세요.'
-      }, 400);
+      return error(res, { code: 4620, message: '취소 사유를 입력해주세요.' }, 400);
     }
 
     const contract = await Contract.findByPk(contractId, { transaction });
@@ -3189,32 +3250,129 @@ const cancelContractByHost = async (req, res) => {
 
     if (contract.status !== 'PAYMENT_COMPLETED') {
       await transaction.rollback();
-      return error(res, {
-        code: 4621,
-        message: '결제 완료 상태에서만 호스트 취소가 가능합니다.'
-      }, 400);
+      return error(res, { code: 4621, message: '결제 완료 상태에서만 호스트 취소가 가능합니다.' }, 400);
     }
 
-    // 호스트 귀책 환불 계산
+    // [1] 환불 계산
     const cancellationDate = new Date();
     const refundResult = await calculateRefund(contract, cancellationDate, { faultType: 'HOST' });
 
     if (!refundResult.success) {
       await transaction.rollback();
-      return error(res, {
-        code: 4623,
-        message: `환불 계산 실패: ${refundResult.error.message}`
-      }, 500);
+      return error(res, { code: 4623, message: `환불 계산 실패: ${refundResult.error.message}` }, 500);
     }
 
     const refundData = refundResult.data;
+    const hostBurdenAmount = refundData.penaltyAmount + refundData.originalPlatformFee;
 
-    // 호스트 귀책 Refund 레코드 생성 (자동 승인)
+    // [2] 호스트 부담금 PG 결제 (hostBurdenAmount > 0인 경우만)
+    let hostPayment = null;
+    if (hostBurdenAmount > 0) {
+      if (!recvPayparam || !orderId || !amount) {
+        await transaction.rollback();
+        return error(res, { code: 4624, message: '부담금 결제 정보가 필요합니다. (recvPayparam, orderId, amount)' }, 400);
+      }
+
+      if (contract.orderId !== orderId) {
+        await transaction.rollback();
+        return error(res, ErrorCodes.ORDER_ID_MISMATCH, 400);
+      }
+
+      if (hostBurdenAmount !== parseInt(amount, 10)) {
+        await transaction.rollback();
+        return error(res, ErrorCodes.AMOUNT_MISMATCH, 400);
+      }
+
+      let paytagResponse;
+      try {
+        paytagResponse = await paytagClient.confirmPayment({
+          recvPayparam,
+          payType: payType || 'CARD'
+        });
+      } catch (paytagErr) {
+        await transaction.rollback();
+        console.error('[cancelByHost] 호스트 부담금 결제 실패:', paytagErr.message);
+        return error(res, ErrorCodes.PAYMENT_CONFIRMATION_FAILED, 400, {
+          pgErrorCode: paytagErr.paytagErrorCode,
+          pgErrorMessage: paytagErr.paytagErrorMessage
+        });
+      }
+
+      const paymentMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
+      const easyPayProvider = paytagClient.mapEasyPayProvider(payType || 'CARD');
+
+      hostPayment = await Payment.create({
+        contractId: contract.id,
+        paymentType: 'HOST_BURDEN',
+        paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
+        orderId: contract.orderId,
+        method: paymentMethod,
+        easyPayProvider,
+        status: 'DONE',
+        requestedAt: cancellationDate,
+        approvedAt: cancellationDate,
+        totalAmount: hostBurdenAmount,
+        balanceAmount: hostBurdenAmount,
+        suppliedAmount: Math.round(hostBurdenAmount / 1.1),
+        vat: hostBurdenAmount - Math.round(hostBurdenAmount / 1.1),
+        taxFreeAmount: 0,
+        currency: 'KRW',
+        receiptUrl: paytagResponse.receipt_url || null,
+        checkoutUrl: null,
+        paymentResponse: paytagResponse
+      }, { transaction });
+    }
+
+    // [3] 게스트 결제금 PG 취소 (전액 환불)
+    if (refundData.finalRefundAmount > 0) {
+      const guestPayment = await Payment.findOne({
+        where: { contractId: contract.id, status: { [Op.in]: ['DONE', 'PARTIAL_CANCELED'] } },
+        transaction
+      });
+
+      if (guestPayment) {
+        try {
+          const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(guestPayment);
+          const cancelamt = refundData.finalRefundAmount;
+          const newBalance = guestPayment.balanceAmount - cancelamt;
+          const canceltype = newBalance === 0 ? '0' : '1';
+
+          const cancelResp = await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, loginid, cancelamt, canceltype });
+
+          await guestPayment.update({
+            balanceAmount: newBalance,
+            status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+          }, { transaction });
+
+          console.log(`[cancelByHost] 게스트 환불 완료: contractId=${contract.id}, cancelamt=${cancelamt}, restamt=${cancelResp.restamt}`);
+        } catch (pgErr) {
+          console.error('[cancelByHost] 게스트 환불 PG 취소 실패:', pgErr.message);
+
+          // 호스트 부담금 결제가 성공했다면 PG 취소로 원복
+          if (hostPayment) {
+            try {
+              const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(hostPayment);
+              await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, loginid, cancelamt: hostBurdenAmount, canceltype: '0' });
+              console.log(`[cancelByHost] 호스트 부담금 PG 원복 완료: contractId=${contract.id}`);
+            } catch (rollbackErr) {
+              console.error('[cancelByHost] 호스트 부담금 PG 원복 실패 (수동 처리 필요):', rollbackErr.message, { contractId: contract.id, hostBurdenAmount });
+            }
+          }
+
+          await transaction.rollback();
+          return error(res, {
+            code: 4900,
+            message: `게스트 환불 처리 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
+            pgErrorCode: pgErr.paytagErrorCode
+          }, 502);
+        }
+      }
+    }
+
+    // [4] Refund 레코드 생성
     const refund = await Refund.create({
       contractId: contract.id,
       refundStatus: 'APPROVED',
-
-      // 환불 계산 정보
       policyTypeUsed: refundData.policyTypeUsed,
       cancellationDate,
       checkInDate: contract.checkInDate,
@@ -3222,96 +3380,42 @@ const cancelContractByHost = async (req, res) => {
       isSameDayCancellation: refundData.isSameDayCancellation,
       cancellationFaultType: 'HOST',
       hasEzCleaningService: refundData.hasEzCleaningService,
-
-      // 원본 금액
       originalDeposit: refundData.originalDeposit,
       originalPlatformFee: refundData.originalPlatformFee,
       originalRentalFee: contract.rentalFee,
       originalCleaningFee: contract.cleaningFee,
       originalMaintenanceFee: contract.maintenanceFee,
       originalTotalAmount: contract.finalTotalAmount,
-
-      // 이용료 기반 환불
       usageFee: refundData.usageFee,
       usageFeeRefundAmount: refundData.usageFeeRefundAmount,
       depositRefundAmount: refundData.depositRefundAmount,
-
-      // 환불 금액 (하위 호환)
       rentalFeeRefundRate: refundData.rentalFeeRefundRate,
       rentalFeeRefundAmount: refundData.rentalFeeRefundAmount,
       cleaningFeeRefundAmount: refundData.cleaningFeeRefundAmount,
       maintenanceFeeRefundAmount: refundData.maintenanceFeeRefundAmount,
       totalRefundAmount: refundData.totalRefundAmount,
-
-      // 위약금 분배
       penaltyAmount: refundData.penaltyAmount,
-      hostPenaltyAmount: refundData.hostPenaltyAmount,
-      hostPenaltyFee: refundData.hostPenaltyFee,
-
-      // 수수료
       guestServiceFeeRefunded: refundData.guestServiceFeeRefunded,
       platformFeeDeducted: refundData.platformFeeDeducted,
       finalRefundAmount: refundData.finalRefundAmount,
-
-      // 호스트 부담금 (위약금 + 게스트 서비스 수수료)
-      hostBurdenAmount: refundData.penaltyAmount + refundData.originalPlatformFee,
-      hostBurdenStatus: 'PENDING',
-
-      // 게스트 보전 지급액 (위약금)
+      hostBurdenAmount,
+      hostBurdenStatus: hostBurdenAmount > 0 ? 'PAID' : null,
       guestCompensationAmount: refundData.penaltyAmount,
       guestCompensationStatus: refundData.penaltyAmount > 0 ? 'PENDING' : null,
-
-      // 환불 방법
       refundMethod: 'ORIGINAL_PAYMENT',
-
-      // 사유
       cancellationReason,
-
-      // 타임스탬프
       requestedAt: cancellationDate,
       approvedAt: cancellationDate
     }, { transaction });
 
-    // PayTag PG 전액 환불 (호스트 귀책 → 게스트 전액 반환)
-    if (refundData.finalRefundAmount > 0) {
-      const payment = await Payment.findOne({
-        where: { contractId: contract.id, status: { [Op.in]: ['DONE', 'PARTIAL_CANCELED'] } },
-        transaction
-      });
-
-      if (payment) {
-        try {
-          const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(payment);
-          const cancelamt = refundData.finalRefundAmount;
-          const newBalance = payment.balanceAmount - cancelamt;
-          const canceltype = newBalance === 0 ? '0' : '1';
-
-          const cancelResp = await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, loginid, cancelamt, canceltype });
-
-          await payment.update({
-            balanceAmount: newBalance,
-            status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
-          }, { transaction });
-
-          console.log(`[cancelByHost] PayTag 취소 완료: contractId=${contract.id}, cancelamt=${cancelamt}, restamt=${cancelResp.restamt}`);
-        } catch (pgErr) {
-          await transaction.rollback();
-          console.error('[cancelByHost] PayTag 취소 실패:', pgErr.message);
-          return error(res, {
-            code: 4900,
-            message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}`,
-            pgErrorCode: pgErr.paytagErrorCode
-          }, 502);
-        }
-      }
-    }
+    // [5] 계약 상태 변경
     await contract.update({
       status: 'CANCELLED_BY_HOST',
       cancellationReason,
       cancelledAt: cancellationDate
     }, { transaction });
 
-    // 계약 상태 변경 로그
+    // [6] 계약 상태 변경 로그
     await ContractStatusLog.create({
       contractId: contract.id,
       fromStatus: 'PAYMENT_COMPLETED',
@@ -3322,19 +3426,36 @@ const cancelContractByHost = async (req, res) => {
       metadata: JSON.stringify({
         cancelledByHost: true,
         refundId: refund.id,
+        hostBurdenAmount,
+        hostBurdenPaymentId: hostPayment?.id || null,
         totalRefundAmount: refund.totalRefundAmount,
         penaltyAmount: refund.penaltyAmount,
-        hostPenaltyAmount: refund.hostPenaltyAmount,
-        guestServiceFeeRefunded: refund.guestServiceFeeRefunded,
-        hostBurdenAmount: refund.hostBurdenAmount,
         guestCompensationAmount: refund.guestCompensationAmount
       })
     }, { transaction });
 
-    // HOST_CANCELLATION_COMPENSATION Payout은 호스트가 부담금을 PG 결제 완료한 시점에 생성
-    // POST /api/contracts/:contractId/host-burden-payment 참고
+    // [7] 게스트 보전 Payout 생성 (결제일 + 3영업일 후)
+    if (refund.guestCompensationAmount > 0) {
+      const payableAfter = calculatePayoutAvailableDate(cancellationDate);
+      const { GuestRefundAccount } = require('../models');
+      const guestRefundAccount = await GuestRefundAccount.findOne({ where: { userId: contract.guestId } });
 
-    // 호스트 취소 확정 시 기존 CONTRACT_SETTLEMENT Payout/Settlement 취소
+      await Payout.create({
+        contractId: contract.id,
+        refundId: refund.id,
+        payoutType: 'HOST_CANCELLATION_COMPENSATION',
+        recipientType: 'GUEST',
+        recipientId: contract.guestId,
+        amount: refund.guestCompensationAmount,
+        status: 'PENDING',
+        payableAfter,
+        bankName: guestRefundAccount?.bankName || null,
+        accountNumber: guestRefundAccount?.accountNumber || null,
+        accountHolder: guestRefundAccount?.accountHolder || null
+      }, { transaction });
+    }
+
+    // [8] 기존 CONTRACT_SETTLEMENT Payout/Settlement 취소
     await Payout.update(
       { status: 'CANCELLED', note: '호스트 취소로 인한 자동 취소' },
       { where: { contractId: contract.id, payoutType: 'CONTRACT_SETTLEMENT', status: { [Op.in]: ['PENDING', 'PAYABLE'] } }, transaction }
@@ -3368,7 +3489,7 @@ const cancelContractByHost = async (req, res) => {
       console.error('호스트 취소 시스템 메시지 전송 실패 (무시됨):', chatErr);
     }
 
-    // 게스트에게 알림 발송 + 알림톡
+    // 알림 발송
     try {
       const [cancelGuest, cancelHost, cancelRoom] = await Promise.all([
         User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
@@ -3388,16 +3509,13 @@ const cancelContractByHost = async (req, res) => {
       console.error('호스트 취소 알림 전송 실패 (무시됨):', notifyErr);
     }
 
-    return updated(res, {
+    return success(res, {
       contractId: contract.id,
       status: 'CANCELLED_BY_HOST',
       cancelledAt: contract.cancelledAt,
       refundId: refund.id,
-      totalRefundAmount: refund.totalRefundAmount,
-      penaltyAmount: refund.penaltyAmount,
-      hostPenaltyAmount: refund.hostPenaltyAmount,
-      hostBurdenAmount: refund.hostBurdenAmount,
-      hostBurdenStatus: refund.hostBurdenStatus,
+      hostBurdenAmount,
+      guestRefundAmount: refundData.finalRefundAmount,
       guestCompensationAmount: refund.guestCompensationAmount
     }, '계약이 취소되었습니다. 게스트에게 전액 환불이 진행됩니다.');
 
@@ -3415,7 +3533,7 @@ const cancelContractByHost = async (req, res) => {
 const requestCancelByHost = async (req, res) => {
   try {
     const { contractId } = req.params;
-    const hostId = req.user.id;
+    const userId = req.user.id;
     const { reason } = req.body;
 
     if (!reason || !reason.trim()) {
@@ -3431,7 +3549,10 @@ const requestCancelByHost = async (req, res) => {
       return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
     }
 
-    if (contract.hostId !== hostId) {
+    const isHost = contract.hostId === userId;
+    const isGuest = contract.guestId === userId;
+
+    if (!isHost && !isGuest) {
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
@@ -3442,16 +3563,24 @@ const requestCancelByHost = async (req, res) => {
       }, 400);
     }
 
+    const requesterRole = isHost ? 'HOST' : 'GUEST';
+    const metadataType = isHost ? 'CANCEL_REQUEST_BY_HOST' : 'CANCEL_REQUEST_BY_GUEST';
+    const systemMessageType = isHost
+      ? SystemMessageTypes.CANCEL_REQUEST_BY_HOST
+      : SystemMessageTypes.CANCEL_REQUEST_BY_GUEST;
+
+    await contract.update({ status: 'CANCEL_REQUESTED' });
+
     // 관리자 확인 큐 등록 (ContractStatusLog에 메타데이터로 기록)
     await ContractStatusLog.create({
       contractId: contract.id,
       fromStatus: 'IN_PROGRESS',
-      toStatus: 'IN_PROGRESS', // 상태 변경 없이 취소 요청 기록
-      changedBy: 'HOST',
-      changedByUserId: hostId,
+      toStatus: 'CANCEL_REQUESTED',
+      changedBy: requesterRole,
+      changedByUserId: userId,
       reason,
       metadata: JSON.stringify({
-        type: 'CANCEL_REQUEST_BY_HOST',
+        type: metadataType,
         requestedAt: new Date(),
         adminApprovalRequired: true
       })
@@ -3461,23 +3590,34 @@ const requestCancelByHost = async (req, res) => {
     try {
       const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
       if (chatRoom && chatRoom.firebaseChatRoomId) {
-        const messageText = getSystemMessageTemplate(SystemMessageTypes.CANCEL_REQUEST_BY_HOST);
-        await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, SystemMessageTypes.CANCEL_REQUEST_BY_HOST);
+        const messageText = getSystemMessageTemplate(systemMessageType);
+        await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, systemMessageType);
       }
     } catch (chatErr) {
       console.error('취소 요청 시스템 메시지 전송 실패 (무시됨):', chatErr);
     }
 
-    // 게스트에게 알림 발송
+    // 상대방에게 알림 발송
     try {
-      await NotificationService.create({
-        userId: contract.guestId,
-        userMode: 'guest',
-        type: 'CONTRACT',
-        title: '계약 취소 요청',
-        message: '호스트가 계약 취소를 요청했습니다. 관리자 확인 후 처리됩니다.',
-        relatedContractId: contract.id
-      });
+      if (isHost) {
+        await NotificationService.create({
+          userId: contract.guestId,
+          userMode: 'guest',
+          type: 'CONTRACT',
+          title: '계약 취소 요청',
+          message: '호스트가 계약 취소를 요청했습니다. 관리자 확인 후 처리됩니다.',
+          relatedContractId: contract.id
+        });
+      } else {
+        await NotificationService.create({
+          userId: contract.hostId,
+          userMode: 'host',
+          type: 'CONTRACT',
+          title: '계약 취소 요청',
+          message: '게스트가 계약 취소를 요청했습니다. 관리자 확인 후 처리됩니다.',
+          relatedContractId: contract.id
+        });
+      }
     } catch (notifyErr) {
       console.error('취소 요청 알림 전송 실패 (무시됨):', notifyErr);
     }
@@ -3489,7 +3629,7 @@ const requestCancelByHost = async (req, res) => {
     }, '취소 요청이 접수되었습니다. 관리자 승인 후 처리됩니다.');
 
   } catch (err) {
-    console.error('호스트 취소 요청 오류:', err);
+    console.error('취소 요청 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
 };
@@ -4139,6 +4279,7 @@ const acceptDepositAgreement = async (req, res) => {
 };
 
 /**
+ * @deprecated 제거됨 - cancel-by-host/preview 로 대체
  * 호스트 부담금 결제 정보 조회
  * GET /api/contracts/:contractId/host-burden-payment-info
  *
@@ -4552,13 +4693,12 @@ module.exports = {
   updatePendingRentalItems,
   requestCheckout,
   confirmCheckout,
+  getHostCancelPreview,
   cancelContractByHost,
   requestCancelByHost,
   holdCheckout,
   submitDepositAgreement,
   getDepositAgreement,
   acceptDepositAgreement,
-  getHostBurdenPaymentInfo,
-  confirmHostBurdenPayment,
   getContractRoomDetail
 };
