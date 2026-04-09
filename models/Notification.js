@@ -1,6 +1,6 @@
 const { DataTypes, Sequelize } = require('sequelize');
 
-const sequelize = new Sequelize('ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
+const sequelize = new Sequelize(process.env.DB_NAME || 'ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT || 3306,
   dialect: 'mysql',
@@ -48,6 +48,7 @@ const Notification = sequelize.define('Notification', {
       'CHECKOUT_REMINDER',    // 퇴실 임박
       'CHECKOUT_CONFIRMED',   // 퇴실 완료
       'CONTRACT_CANCELED',    // 계약 취소
+      'CONTRACT',             // 계약 관련 범용 (취소 요청, 승인/거절 등)
 
       // 게스트 전용
       'CONTRACT_REQUEST_GUEST',   // 계약 요청 완료 (게스트)

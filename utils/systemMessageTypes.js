@@ -36,13 +36,16 @@ const SystemMessageTypes = {
   DEPOSIT_AUTO_RETURNED: 'deposit_auto_returned',                     // 데드라인 초과 보증금 전액 자동반환
   CHECKOUT_AUTO_REQUESTED: 'checkout_auto_requested',                 // 퇴실시각+48h 자동 퇴실요청
 
-  // 호스트 취소 요청
-  CANCEL_REQUEST_BY_HOST: 'cancel_request_by_host',                   // 호스트 계약 취소 요청 (관리자 승인 필요)
+  // 취소 요청 (호스트/게스트 공통, 관리자 승인 필요)
+  CANCEL_REQUEST_BY_HOST: 'cancel_request_by_host',                   // 호스트 계약 취소 요청
+  CANCEL_REQUEST_BY_GUEST: 'cancel_request_by_guest',                 // 게스트 계약 취소 요청
 
   // 관리자 처리
   CONTRACT_FORCE_CANCELLED: 'contract_force_cancelled',               // 관리자 강제 취소
   HOST_CANCEL_REQUEST_APPROVED: 'host_cancel_request_approved',       // 호스트 취소 요청 승인
   HOST_CANCEL_REQUEST_REJECTED: 'host_cancel_request_rejected',       // 호스트 취소 요청 거절
+  GUEST_CANCEL_REQUEST_APPROVED: 'guest_cancel_request_approved',     // 게스트 취소 요청 승인
+  GUEST_CANCEL_REQUEST_REJECTED: 'guest_cancel_request_rejected',     // 게스트 취소 요청 거절
   CANCEL_REQUEST_SUBMITTED: 'cancel_request_submitted',               // 게스트 취소 요청 접수 (입주 후)
 
   // 중요 알림
@@ -83,9 +86,12 @@ const getSystemMessageTemplate = (type, data = {}) => {
     [SystemMessageTypes.DEPOSIT_AUTO_RETURNED]: `합의 기한(10일)이 경과하여 보증금이 게스트에게 전액 반환확정됩니다.`,
     [SystemMessageTypes.CHECKOUT_AUTO_REQUESTED]: `퇴실 시간 경과 후 자동으로 퇴실 요청이 처리되었습니다. 호스트님의 퇴실 확인을 기다리고 있습니다.`,
     [SystemMessageTypes.CANCEL_REQUEST_BY_HOST]: `호스트가 계약 취소를 요청했습니다. 관리자 확인 후 처리됩니다.`,
+    [SystemMessageTypes.CANCEL_REQUEST_BY_GUEST]: `게스트가 계약 취소를 요청했습니다. 관리자 확인 후 처리됩니다.`,
     [SystemMessageTypes.CONTRACT_FORCE_CANCELLED]: `관리자에 의해 계약이 강제 취소되었습니다.${data.reason ? `\n사유: ${data.reason}` : ''}`,
     [SystemMessageTypes.HOST_CANCEL_REQUEST_APPROVED]: `호스트의 취소 요청이 승인되었습니다. 계약이 취소 처리됩니다.`,
     [SystemMessageTypes.HOST_CANCEL_REQUEST_REJECTED]: `호스트의 취소 요청이 거절되었습니다. 계약은 유지됩니다.`,
+    [SystemMessageTypes.GUEST_CANCEL_REQUEST_APPROVED]: `게스트의 취소 요청이 승인되었습니다. 계약이 취소 처리됩니다.`,
+    [SystemMessageTypes.GUEST_CANCEL_REQUEST_REJECTED]: `게스트의 취소 요청이 거절되었습니다. 계약은 유지됩니다.`,
     [SystemMessageTypes.CANCEL_REQUEST_SUBMITTED]: `취소 요청이 접수되었습니다. 관리자 확인 후 처리됩니다.`,
     [SystemMessageTypes.IMPORTANT_NOTICE]: `${data.notice || '중요 공지사항이 있습니다'}`,
     [SystemMessageTypes.REVIEW_REQUEST]: `숙소 이용은 어떠셨나요?\n리뷰를 남겨주시면 큰 도움이 됩니다 ⭐`
