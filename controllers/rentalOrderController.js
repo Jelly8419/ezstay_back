@@ -1199,6 +1199,27 @@ const cancelRentalItemsByGuest = async (req, res) => {
       ? '선택한 상품이 모두 취소되었습니다.'
       : `${succeeded.length}건 취소 완료, ${failed.length}건 처리 실패.`;
 
+    // 알림톡 발송 — 1건 이상 성공한 경우만 (게스트에게 옵션 결제 취소 안내)
+    if (succeeded.length > 0) {
+      const AlimtalkService = require('../services/alimtalkService');
+      User.findByPk(userId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] })
+        .then(guest => {
+          if (!guest) return;
+          return Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
+            .then(room => {
+              const itemNames = succeeded
+                .flatMap(s => s.cancelledItems.map(i => i.name || ''))
+                .filter(Boolean)
+                .join(', ');
+              return AlimtalkService.sendOptionPaymentCanceled(contract, guest, room, {
+                optionItems: itemNames,
+                amount: totalRefunded
+              });
+            });
+        })
+        .catch(err => console.error('[Alimtalk] option_payment_canceled_guest 실패:', err.message));
+    }
+
     return success(res, { succeeded, failed, totalRefunded }, message);
   } catch (err) {
     console.error('아이템 즉시환불 오류:', err);

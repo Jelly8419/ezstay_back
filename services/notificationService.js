@@ -382,7 +382,7 @@ class NotificationService {
       Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
     ]);
     if (guest) {
-      AlimtalkService.sendOptionPayment(contract, guest, room, optionData)
+      AlimtalkService.sendOptionPayment(contract, guest, room, optionData, { skipDedup: true })
         .catch(err => console.error('[Alimtalk] option_payment_guest 실패:', err.message));
     }
   }
