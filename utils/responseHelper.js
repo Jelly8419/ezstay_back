@@ -123,6 +123,7 @@ const ErrorCodes = {
   RENTAL_ORDER_ITEM_NOT_FOUND: { code: 4711, message: '렌탈 주문 아이템을 찾을 수 없습니다.' },
   RENTAL_NOT_GUEST: { code: 4712, message: '계약의 게스트만 렌탈 주문을 관리할 수 있습니다.' },
   RENTAL_ORDER_ALREADY_CANCELLED: { code: 4713, message: '이미 취소된 주문입니다.' },
+  RENTAL_MINIMUM_AMOUNT_REQUIRED: { code: 4714, message: '별도 배송이 필요한 경우 최소 주문금액은 10,000원입니다.' },
 
   // 알림 관련 (48xx)
   NOTIFICATION_NOT_FOUND: { code: 4801, message: '알림을 찾을 수 없습니다.' },

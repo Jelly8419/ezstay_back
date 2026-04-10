@@ -165,6 +165,37 @@ const createRentalOrder = async (req, res) => {
       });
     }
 
+    // 최소 주문금액 검증
+    // 배송전(PENDING) 주문이 이미 있으면 합배송 가능 → 금액 제한 없음
+    // 배송전 주문이 없으면 새 배송이 필요하므로 10,000원 미만 차단
+    const hasPendingDelivery = await RentalOrder.count({
+      where: {
+        contractId,
+        status: ['PAID', 'PARTIAL_REFUND'],
+        deliveryStatus: 'PENDING'
+      },
+      transaction
+    });
+
+    if (!hasPendingDelivery) {
+      // 요청된 아이템들의 금액 합산 (아이템 단가는 RentalItem에서 가져와야 하므로 여기서는 간단히 totalAmount 기준으로 체크)
+      // createAdditionalRentalOrder 내부에서 itemDetails가 계산되므로, 미리 validateRentalStock으로 계산
+      const stockValidation = await validateRentalStock(
+        items,
+        contract.checkInDate,
+        contract.checkOutDate,
+        transaction
+      );
+      const requestedAmount = stockValidation.itemDetails.reduce((sum, item) => sum + item.totalPrice, 0);
+
+      if (requestedAmount < 10000) {
+        await transaction.rollback();
+        return error(res, ErrorCodes.RENTAL_MINIMUM_AMOUNT_REQUIRED, 400, {
+          details: `현재 주문금액 ${requestedAmount.toLocaleString()}원 (최소 10,000원)`
+        });
+      }
+    }
+
     // 추가 주문 생성
     const rentalOrder = await createAdditionalRentalOrder(
       contract,
