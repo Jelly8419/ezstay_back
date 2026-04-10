@@ -753,6 +753,22 @@ const cancelPaidRentalOrderByGuest = async (req, res) => {
       );
       await dbTransaction.commit();
 
+      // 알림톡 발송 (옵션 결제 취소 → 게스트)
+      const AlimtalkService = require('../services/alimtalkService');
+      User.findByPk(userId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] })
+        .then(guest => {
+          if (!guest) return;
+          return Room.findByPk(rentalOrder.contract.roomId, { attributes: ['id', 'roomName'] })
+            .then(room => {
+              const itemNames = activeItems.map(i => i.rentalItem?.name || '').filter(Boolean).join(', ');
+              return AlimtalkService.sendOptionPaymentCanceled(rentalOrder.contract, guest, room, {
+                optionItems: itemNames,
+                amount: result.refundAmount
+              });
+            });
+        })
+        .catch(err => console.error('[Alimtalk] option_payment_canceled_guest 실패:', err.message));
+
       const responseData = {
         rentalOrderId: rentalOrder.id,
         orderId: result.orderId,

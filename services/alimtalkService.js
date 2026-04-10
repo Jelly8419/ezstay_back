@@ -523,6 +523,17 @@ class AlimtalkService {
     }, { contractId: contract.id });
   }
 
+  /** 옵션 결제 취소 완료 알림톡 (게스트에게) */
+  static async sendOptionPaymentCanceled(contract, guest, room, optionData = {}) {
+    await this.send('option_payment_canceled_guest', guest, {
+      roomName: room?.roomName || '',
+      startDate: this._formatDate(contract.checkInDate),
+      endDate: this._formatDate(contract.checkOutDate),
+      optionItems: optionData.optionItems || '',
+      amount: this._formatNumber(optionData.amount || 0)
+    }, { contractId: contract.id });
+  }
+
   // =====================================================
   // 유틸리티
   // =====================================================
