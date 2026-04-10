@@ -1972,6 +1972,22 @@ exports.approveRentalRefundRequest = async (req, res) => {
 
       await transaction.commit();
 
+      // 알림톡 발송 (옵션 결제 취소 → 게스트)
+      const AlimtalkService = require('../services/alimtalkService');
+      Contract.findByPk(refundRequest.contractId, {
+        include: [{ model: User, as: 'guest', attributes: ['id', 'phoneNumber', 'name', 'nickname'] }]
+      }).then(contract => {
+        if (!contract?.guest) return;
+        return Room.findByPk(contract.roomId, { attributes: ['id', 'roomName'] })
+          .then(room => {
+            const itemNames = cancelRequestedItems.map(i => i.rentalItem?.name || '').filter(Boolean).join(', ');
+            return AlimtalkService.sendOptionPaymentCanceled(contract, contract.guest, room, {
+              optionItems: itemNames,
+              amount: finalRefundAmount
+            });
+          });
+      }).catch(err => console.error('[Alimtalk] option_payment_canceled_guest 실패:', err.message));
+
       return success(res, {
         requestId: refundRequest.id,
         rentalOrderId: rentalOrder.id,

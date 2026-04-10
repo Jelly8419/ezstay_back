@@ -414,6 +414,11 @@ class AlimtalkService {
     await this.send('checkout_today_guest', guest, {}, { contractId: contract.id });
   }
 
+  /** 4-17. 퇴실 당일 침구류 반납 안내 (침구류 대여 게스트에게만) */
+  static async sendCheckoutBeddingReturn(contract, guest) {
+    await this.send('checkout_bedding_return_guest', guest, {}, { contractId: contract.id });
+  }
+
   /** 4-8. 호스트 퇴실 확인 요청 */
   static async sendCheckoutHostRequest(contract, host, confirmDeadline) {
     await this.send('checkout_host_request', host, {
@@ -515,6 +520,17 @@ class AlimtalkService {
   /** 옵션 추가 결제 완료 알림톡 (게스트에게) */
   static async sendOptionPayment(contract, guest, room, optionData = {}) {
     await this.send('option_payment_guest', guest, {
+      roomName: room?.roomName || '',
+      startDate: this._formatDate(contract.checkInDate),
+      endDate: this._formatDate(contract.checkOutDate),
+      optionItems: optionData.optionItems || '',
+      amount: this._formatNumber(optionData.amount || 0)
+    }, { contractId: contract.id });
+  }
+
+  /** 옵션 결제 취소 완료 알림톡 (게스트에게) */
+  static async sendOptionPaymentCanceled(contract, guest, room, optionData = {}) {
+    await this.send('option_payment_canceled_guest', guest, {
       roomName: room?.roomName || '',
       startDate: this._formatDate(contract.checkInDate),
       endDate: this._formatDate(contract.checkOutDate),

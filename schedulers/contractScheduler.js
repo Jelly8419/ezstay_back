@@ -417,7 +417,7 @@ async function updateCompleted() {
         status: 'IN_PROGRESS',
         checkOutDate: { [Op.lte]: now }
       },
-      attributes: ['id', 'checkInDate', 'checkOutDate', 'totalDays'],
+      attributes: ['id', 'checkInDate', 'checkOutDate', 'totalDays', 'checkoutStatus', 'guestId'],
       transaction
     });
 
@@ -456,6 +456,13 @@ async function updateCompleted() {
 
     if (eligibleContracts.length > 0) {
       console.log(`[스케줄러] ${eligibleContracts.length}건의 계약을 종료 처리했습니다.`);
+
+      // 알림톡 발송: checkoutStatus=NOT_STARTED인 계약에만 퇴실 당일 알림(UG_4151) 발송
+      for (const contract of eligibleContracts) {
+        if (contract.checkoutStatus !== 'NOT_STARTED') continue;
+        NotificationService.notifyCheckoutToday(contract)
+          .catch(err => console.error(`[스케줄러] 퇴실 당일 알림톡 발송 실패: contractId=${contract.id}`, err.message));
+      }
     }
 
     return eligibleContracts.length;
