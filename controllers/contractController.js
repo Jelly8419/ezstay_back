@@ -3246,6 +3246,8 @@ const getHostCancelPreview = async (req, res) => {
     const hostBurdenAmount = d.penaltyAmount + d.originalPlatformFee;
 
     return success(res, {
+      orderId: contract.orderId,
+
       // 원본 결제 항목별 금액
       originalRentalFee: d.originalRentalFee,
       originalCleaningFee: d.originalCleaningFee,
@@ -3298,12 +3300,7 @@ const cancelContractByHost = async (req, res) => {
   try {
     const { contractId } = req.params;
     const hostId = req.user.id;
-    const { cancellationReason, recvPayparam, payType, orderId, amount } = req.body;
-
-    if (!cancellationReason || !cancellationReason.trim()) {
-      await transaction.rollback();
-      return error(res, { code: 4620, message: '취소 사유를 입력해주세요.' }, 400);
-    }
+    const { recvPayparam, payType, orderId, amount } = req.body;
 
     const contract = await Contract.findByPk(contractId, { transaction });
 
