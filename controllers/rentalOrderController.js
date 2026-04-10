@@ -27,7 +27,8 @@ const {
   cancelPendingRentalOrder,
   logRentalAction,
   groupItemsByOrder,
-  RENTAL_CANCEL_REQUEST_DAYS
+  RENTAL_CANCEL_REQUEST_DAYS,
+  RENTAL_MODIFIABLE_STATUSES
 } = require('../utils/rentalOrderHelper');
 const NotificationService = require('../services/notificationService');
 const { toKSTString } = require('../utils/dateHelper');
@@ -340,6 +341,12 @@ const confirmRentalPayment = async (req, res) => {
     if (rentalOrder.status !== 'PENDING') {
       await transaction.rollback();
       return error(res, ErrorCodes.RENTAL_ORDER_NOT_PAYABLE, 400);
+    }
+
+    // 계약 상태 재검증 (주문 생성 후 계약이 취소/종료된 경우 차단)
+    if (!RENTAL_MODIFIABLE_STATUSES.includes(rentalOrder.contract.status)) {
+      await transaction.rollback();
+      return error(res, { code: 4470, message: `계약이 취소되거나 종료되어 결제가 불가합니다. (계약 상태: ${rentalOrder.contract.status})` }, 400);
     }
 
     // 주문번호 확인
