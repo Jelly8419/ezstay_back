@@ -214,7 +214,10 @@ async function reserveRentalItems(contractId, rentalItems, checkInDate, checkOut
     }
 
     if (rentalItem.salesType === 'SALE') {
-      // SALE: totalStock 직접 차감
+      // SALE: totalStock 직접 차감 (재고 부족 사전 검증)
+      if (rentalItem.totalStock < item.quantity) {
+        throw new Error(`렌탈 아이템 재고가 부족합니다. (ID: ${item.itemId}, 재고: ${rentalItem.totalStock}, 요청: ${item.quantity})`);
+      }
       await RentalItem.decrement('totalStock', {
         by: item.quantity,
         where: { id: item.itemId },
