@@ -2940,6 +2940,14 @@ const adminForceCancel = async (req, res) => {
       console.error('강제 취소 서비스 태스크 삭제 실패 (무시됨):', taskErr);
     }
 
+    // 예약된 알림 큐 전체 취소 (취소된 계약에 알림 발송 방지)
+    try {
+      const { cancelScheduledNotifications } = require('../queues/notificationQueue');
+      await cancelScheduledNotifications(contract.id);
+    } catch (queueErr) {
+      console.error('[adminForceCancel] 알림 큐 취소 실패 (무시됨):', queueErr);
+    }
+
     // 채팅 시스템 메시지 (트랜잭션 외부)
     try {
       if (contract.chatRoom && contract.chatRoom.firebaseChatRoomId) {

@@ -383,6 +383,19 @@ async function updateInProgress() {
 
     if (eligibleContracts.length > 0) {
       console.log(`[스케줄러] ${eligibleContracts.length}건의 계약을 임대중 상태로 변경했습니다.`);
+
+      // 퇴실 알림 큐 예약 (트랜잭션 커밋 후 처리)
+      // checkout-reminder(퇴실 3일 전), checkout-eve(퇴실 전일), checkout-today(퇴실 당일)
+      const { scheduleCheckinConfirmedNotifications } = require('../queues/notificationQueue');
+      for (const contract of eligibleContracts) {
+        const fullContract = await Contract.findByPk(contract.id, {
+          attributes: ['id', 'checkOutDate']
+        });
+        if (fullContract?.checkOutDate) {
+          scheduleCheckinConfirmedNotifications(contract.id, fullContract.checkOutDate)
+            .catch(err => console.error(`[스케줄러] 퇴실 알림 큐 예약 실패: contractId=${contract.id}`, err));
+        }
+      }
     }
 
     return eligibleContracts.length;
