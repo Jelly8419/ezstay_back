@@ -2202,6 +2202,14 @@ const requestRefund = async (req, res) => {
 
     await transaction.commit();
 
+    // 예약된 알림 큐 전체 취소 (취소된 계약에 알림 발송 방지)
+    try {
+      const { cancelScheduledNotifications } = require('../queues/notificationQueue');
+      await cancelScheduledNotifications(contractId);
+    } catch (queueErr) {
+      console.error('[requestRefund] 알림 큐 취소 실패 (무시됨):', queueErr);
+    }
+
     // 알림톡 발송 (4-5 게스트 취소) - 트랜잭션 커밋 후
     try {
       const [refundGuest, refundHost, refundRoom] = await Promise.all([
@@ -3246,6 +3254,8 @@ const getHostCancelPreview = async (req, res) => {
     const hostBurdenAmount = d.penaltyAmount + d.originalPlatformFee;
 
     return success(res, {
+      orderId: contract.orderId,
+
       // 원본 결제 항목별 금액
       originalRentalFee: d.originalRentalFee,
       originalCleaningFee: d.originalCleaningFee,
@@ -3298,12 +3308,7 @@ const cancelContractByHost = async (req, res) => {
   try {
     const { contractId } = req.params;
     const hostId = req.user.id;
-    const { cancellationReason, recvPayparam, payType, orderId, amount } = req.body;
-
-    if (!cancellationReason || !cancellationReason.trim()) {
-      await transaction.rollback();
-      return error(res, { code: 4620, message: '취소 사유를 입력해주세요.' }, 400);
-    }
+    const { recvPayparam, payType, orderId, amount } = req.body;
 
     const contract = await Contract.findByPk(contractId, { transaction });
 
@@ -3631,6 +3636,14 @@ const cancelContractByHost = async (req, res) => {
       await cancelPendingServiceTasks(contract.id);
     } catch (taskErr) {
       console.error('호스트 취소 서비스 태스크 삭제 실패 (무시됨):', taskErr);
+    }
+
+    // 예약된 알림 큐 전체 취소 (취소된 계약에 알림 발송 방지)
+    try {
+      const { cancelScheduledNotifications } = require('../queues/notificationQueue');
+      await cancelScheduledNotifications(contract.id);
+    } catch (queueErr) {
+      console.error('[cancelByHost] 알림 큐 취소 실패 (무시됨):', queueErr);
     }
 
     // 채팅방 시스템 메시지 발송 + 쓰기 마감

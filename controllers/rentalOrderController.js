@@ -3,6 +3,7 @@ const paytagClient = require('../utils/paytagClient');
 const {
   sequelize,
   Contract,
+  Payment,
   RentalOrder,
   RentalOrderItem,
   RentalOrderLog,
@@ -911,7 +912,7 @@ const cancelRentalItemsByGuest = async (req, res) => {
       });
     }
 
-    // 아이템 그룹핑 + 유효성 검증
+    // 아이템 그룹핑 + 유효성 검증 (중복 itemId 포함)
     let groups;
     try {
       groups = await groupItemsByOrder(itemIds, parseInt(contractId), null);
@@ -926,13 +927,154 @@ const cancelRentalItemsByGuest = async (req, res) => {
       }
     }
 
+    // INITIAL / ADDITIONAL 분리
+    const initialGroups = new Map();
+    const additionalGroups = new Map();
+    for (const [orderId, group] of groups) {
+      if (group.rentalOrder.orderType === 'INITIAL') {
+        initialGroups.set(orderId, group);
+      } else {
+        additionalGroups.set(orderId, group);
+      }
+    }
+
     const succeeded = [];
     const failed = [];
     let totalRefunded = 0;
     const now = new Date();
 
-    // 주문별 독립 PG + DB 처리
-    for (const [, { rentalOrder, rentalPayment, items }] of groups) {
+    // ── [A] INITIAL 주문 처리 — 계약 결제(Payment) 기준, 선택 아이템 합산 1회 PG 취소 ──
+    if (initialGroups.size > 0) {
+      const contractPayment = await Payment.findOne({
+        where: {
+          contractId,
+          paymentType: 'CONTRACT',
+          status: { [Op.in]: ['DONE', 'PARTIAL_CANCELED'] }
+        }
+      });
+
+      for (const [, { rentalOrder, items }] of initialGroups) {
+        if (!contractPayment) {
+          failed.push({ orderId: rentalOrder.orderId, reason: '계약 결제 정보를 찾을 수 없습니다.' });
+          continue;
+        }
+
+        const refundAmount = items.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
+        const availableBalance = parseFloat(contractPayment.balanceAmount);
+
+        if (refundAmount > availableBalance) {
+          failed.push({ orderId: rentalOrder.orderId, reason: `환불 가능 금액 부족 (가능: ${availableBalance}원, 요청: ${refundAmount}원)` });
+          continue;
+        }
+
+        // PG 부분 취소 (계약 결제 기준, 트랜잭션 밖)
+        const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(contractPayment);
+        const newBalance = availableBalance - refundAmount;
+        const canceltype = newBalance === 0 ? '0' : '1';
+
+        try {
+          await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, loginid, cancelamt: refundAmount, canceltype });
+        } catch (pgErr) {
+          failed.push({ orderId: rentalOrder.orderId, reason: pgErr.paytagErrorMessage || pgErr.message });
+          continue;
+        }
+
+        // DB 업데이트 (짧은 트랜잭션)
+        const dbTx = await sequelize.transaction();
+        try {
+          for (const item of items) {
+            await item.update({
+              status: 'CANCELLED',
+              cancelledAt: now,
+              cancelReason: reason || '게스트 취소',
+              refundAmount: parseFloat(item.totalPrice)
+            }, { transaction: dbTx });
+          }
+
+          // 재고 복구
+          const rentalTypeItemIds = [];
+          for (const item of items) {
+            if (item.rentalItem?.salesType === 'SALE') {
+              await RentalItem.increment('totalStock', {
+                by: item.quantity,
+                where: { id: item.rentalItemId },
+                transaction: dbTx
+              });
+            } else {
+              rentalTypeItemIds.push(item.rentalItemId);
+            }
+          }
+
+          if (rentalTypeItemIds.length > 0) {
+            await RentalItemReservation.update(
+              { status: 'CANCELLED' },
+              {
+                where: {
+                  rentalOrderId: rentalOrder.id,
+                  rentalItemId: { [Op.in]: rentalTypeItemIds },
+                  status: { [Op.ne]: 'CANCELLED' }
+                },
+                transaction: dbTx
+              }
+            );
+          }
+
+          await contractPayment.update({
+            balanceAmount: newBalance,
+            status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+          }, { transaction: dbTx });
+
+          const newRefundedAmount = parseFloat(rentalOrder.refundedAmount || 0) + refundAmount;
+          const remainingActive = await RentalOrderItem.count({
+            where: { rentalOrderId: rentalOrder.id, status: 'ACTIVE' },
+            transaction: dbTx
+          });
+          await rentalOrder.update({
+            refundedAmount: newRefundedAmount,
+            status: remainingActive === 0 ? 'FULLY_REFUNDED' : 'PARTIAL_REFUND'
+          }, { transaction: dbTx });
+
+          await logRentalAction({
+            contractId: parseInt(contractId),
+            rentalOrderId: rentalOrder.id,
+            action: 'ORDER_CANCELLED',
+            actor: 'GUEST',
+            actorId: userId,
+            amountChange: -refundAmount,
+            balanceAfter: newBalance,
+            metadata: {
+              orderId: rentalOrder.orderId,
+              orderType: 'INITIAL',
+              cancelledItemIds: items.map(i => i.id),
+              refundAmount,
+              reason: reason || '게스트 취소'
+            },
+            description: `INITIAL 아이템 선택 즉시환불: ${refundAmount}원`,
+            req
+          }, dbTx);
+
+          await dbTx.commit();
+
+          // 메모리상 잔액 갱신 (같은 Payment를 참조하는 다음 INITIAL 주문에서 최신값 사용)
+          contractPayment.balanceAmount = newBalance;
+          contractPayment.status = newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED';
+
+          succeeded.push({
+            orderId: rentalOrder.orderId,
+            refundAmount,
+            cancelledItems: items.map(i => ({ id: i.id, name: i.rentalItem?.name, quantity: i.quantity }))
+          });
+          totalRefunded += refundAmount;
+        } catch (dbErr) {
+          await dbTx.rollback();
+          console.error(`INITIAL 즉시환불 DB 오류 (PG 취소 완료됨) orderId=${rentalOrder.orderId}:`, dbErr);
+          failed.push({ orderId: rentalOrder.orderId, reason: 'PG 취소는 완료됐으나 DB 업데이트에 실패했습니다. 관리자에게 문의하세요.' });
+        }
+      }
+    }
+
+    // ── [B] ADDITIONAL 주문 처리 — 기존 로직 (RentalPayment 기준, 주문별 독립 PG 취소) ──
+    for (const [, { rentalOrder, rentalPayment, items }] of additionalGroups) {
       if (!rentalPayment) {
         failed.push({ orderId: rentalOrder.orderId, reason: '결제 정보를 찾을 수 없습니다.' });
         continue;
@@ -974,7 +1116,6 @@ const cancelRentalItemsByGuest = async (req, res) => {
         const rentalTypeItemIds = [];
         for (const item of items) {
           if (item.rentalItem?.salesType === 'SALE') {
-            // SALE: 배송 전(PENDING)에만 재고 복구 (groupItemsByOrder에서 PENDING만 통과하므로 항상 해당)
             await RentalItem.increment('totalStock', {
               by: item.quantity,
               where: { id: item.rentalItemId },

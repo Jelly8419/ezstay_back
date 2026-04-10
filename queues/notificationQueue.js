@@ -37,15 +37,21 @@ const notificationQueue = new Queue('notifications', {
 
 /**
  * 날짜에서 KST 연/월/일 추출
- * 'YYYY-MM-DD' 문자열은 UTC 기준으로 파싱되므로 KST(+9) 오프셋 보정
+ *
+ * process.env.TZ = 'Asia/Seoul' 환경에서:
+ * - 'YYYY-MM-DD' 문자열: new Date()가 UTC 자정으로 파싱 → KST +9h 보정 후 로컬 메서드 사용
+ * - Date 객체 / ISO 문자열: Sequelize가 KST 기준 Date로 반환 → 로컬 메서드(getFullYear 등) 그대로 사용
  */
 function getKSTDateParts(date) {
   const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
-  const kstMs = (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date))
-    ? new Date(date).getTime() + KST_OFFSET_MS
-    : new Date(date).getTime();
-  const kst = new Date(kstMs);
-  return { year: kst.getUTCFullYear(), month: kst.getUTCMonth(), day: kst.getUTCDate() };
+  if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    // 'YYYY-MM-DD' → UTC 자정으로 파싱되므로 KST 오프셋 보정 필요
+    const kst = new Date(new Date(date).getTime() + KST_OFFSET_MS);
+    return { year: kst.getUTCFullYear(), month: kst.getUTCMonth(), day: kst.getUTCDate() };
+  }
+  // Date 객체 또는 ISO 문자열: TZ=Asia/Seoul 환경에서 로컬 메서드가 KST 반환
+  const d = new Date(date);
+  return { year: d.getFullYear(), month: d.getMonth(), day: d.getDate() };
 }
 
 /**
@@ -80,10 +86,17 @@ function calculateDelay(targetTime) {
  * 결제 만료 임박 알림 처리
  */
 notificationQueue.process('payment-pending', async (job) => {
-  const { contractId } = job.data;
+  const { contractId, scheduledAt } = job.data;
   console.log(`[알림 큐] 결제 만료 알림 처리: contractId=${contractId}`);
 
   try {
+    // stale 체크: 예약 발송 시각 기준 1시간 이상 지연된 경우 skip
+    // (서버 장애 복구 시 이미 만료된 결제에 "3시간 전" 알림 발송 방지)
+    if (scheduledAt && Date.now() - new Date(scheduledAt).getTime() > 60 * 60 * 1000) {
+      console.warn(`[알림 큐] 결제 만료 알림 stale job 스킵: contractId=${contractId}, scheduledAt=${scheduledAt}`);
+      return { success: false, reason: 'stale_job' };
+    }
+
     const { Contract } = require('../models');
     const contract = await Contract.findByPk(contractId);
 
@@ -115,12 +128,24 @@ notificationQueue.process('checkin-today', async (job) => {
 
   try {
     // 입주 당일 알림 유효성 체크
-    // 오전 10시 이후 실행된 경우 무조건 skip (서버 장애 밀림, 날짜 오류 등 모든 케이스 차단)
+    // scheduledAt 기준: 예약 발송 시각이 속한 날짜의 오전 10시까지만 허용
+    // 서버 재시작/장애 밀림으로 다른 날 실행되는 경우를 차단
     const now = new Date();
-    const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 0, 0, 0);
-    if (now >= cutoff) {
-      console.warn(`[알림 큐] 입주 당일 알림 스킵 (오전 10시 초과): contractId=${contractId}, 현재=${now.toISOString()}`);
-      return { success: false, reason: 'past_cutoff' };
+    if (scheduledAt) {
+      const scheduled = new Date(scheduledAt);
+      // 예약 날짜(scheduledAt) 기준 오전 10시 cutoff
+      const cutoff = new Date(scheduled.getFullYear(), scheduled.getMonth(), scheduled.getDate(), 10, 0, 0, 0);
+      if (now >= cutoff) {
+        console.warn(`[알림 큐] 입주 당일 알림 스킵 (예약일 오전 10시 초과): contractId=${contractId}, 예약=${scheduledAt}, 현재=${now.toISOString()}`);
+        return { success: false, reason: 'past_cutoff' };
+      }
+    } else {
+      // scheduledAt 없는 구버전 job: 오늘 오전 10시 기준으로 fallback
+      const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 0, 0, 0);
+      if (now >= cutoff) {
+        console.warn(`[알림 큐] 입주 당일 알림 스킵 (오전 10시 초과, scheduledAt 없음): contractId=${contractId}, 현재=${now.toISOString()}`);
+        return { success: false, reason: 'past_cutoff' };
+      }
     }
 
     const { Contract, User, Room } = require('../models');
@@ -136,8 +161,8 @@ notificationQueue.process('checkin-today', async (job) => {
       return { success: false, reason: 'contract_not_found' };
     }
 
-    // CONFIRMED 또는 IN_PROGRESS 상태인지 확인
-    if (!['CONFIRMED', 'IN_PROGRESS'].includes(contract.status)) {
+    // PAYMENT_COMPLETED 또는 IN_PROGRESS 상태인지 확인 (입주 당일은 두 상태 모두 허용)
+    if (!['PAYMENT_COMPLETED', 'IN_PROGRESS'].includes(contract.status)) {
       console.log(`[알림 큐] 상태 변경됨 (스킵): contractId=${contractId}, status=${contract.status}`);
       return { success: false, reason: 'status_changed', currentStatus: contract.status };
     }
@@ -180,8 +205,8 @@ notificationQueue.process('checkout-reminder', async (job) => {
       return { success: false, reason: 'contract_not_found' };
     }
 
-    // CHECKED_IN 또는 IN_PROGRESS 상태인지 확인
-    if (!['CHECKED_IN', 'IN_PROGRESS'].includes(contract.status)) {
+    // IN_PROGRESS 상태인지 확인 (입주 후 퇴실 전)
+    if (contract.status !== 'IN_PROGRESS') {
       console.log(`[알림 큐] 상태 변경됨 (스킵): contractId=${contractId}, status=${contract.status}`);
       return { success: false, reason: 'status_changed', currentStatus: contract.status };
     }
@@ -224,7 +249,8 @@ notificationQueue.process('checkout-eve', async (job) => {
       return { success: false, reason: 'contract_not_found' };
     }
 
-    if (!['CONFIRMED', 'IN_PROGRESS'].includes(contract.status)) {
+    // PAYMENT_COMPLETED 또는 IN_PROGRESS 상태인지 확인
+    if (!['PAYMENT_COMPLETED', 'IN_PROGRESS'].includes(contract.status)) {
       console.log(`[알림 큐] 상태 변경됨 (스킵): contractId=${contractId}, status=${contract.status}`);
       return { success: false, reason: 'status_changed', currentStatus: contract.status };
     }
@@ -243,10 +269,22 @@ notificationQueue.process('checkout-eve', async (job) => {
  * 퇴실 당일 알림 처리
  */
 notificationQueue.process('checkout-today', async (job) => {
-  const { contractId } = job.data;
+  const { contractId, scheduledAt } = job.data;
   console.log(`[알림 큐] 퇴실 당일 침구류 반납 알림 처리: contractId=${contractId}`);
 
   try {
+    // scheduledAt 기준: 예약 날짜의 오전 10시까지만 허용
+    // 서버 재시작/장애 밀림으로 다른 날 실행되는 경우를 차단
+    const now = new Date();
+    if (scheduledAt) {
+      const scheduled = new Date(scheduledAt);
+      const cutoff = new Date(scheduled.getFullYear(), scheduled.getMonth(), scheduled.getDate(), 10, 0, 0, 0);
+      if (now >= cutoff) {
+        console.warn(`[알림 큐] 퇴실 당일 알림 스킵 (예약일 오전 10시 초과): contractId=${contractId}, 예약=${scheduledAt}, 현재=${now.toISOString()}`);
+        return { success: false, reason: 'past_cutoff' };
+      }
+    }
+
     const { Contract, RentalOrder, RentalOrderItem, RentalItem, User } = require('../models');
     const AlimtalkService = require('../services/alimtalkService');
 
@@ -258,7 +296,7 @@ notificationQueue.process('checkout-today', async (job) => {
       return { success: false, reason: 'contract_not_found' };
     }
 
-    if (!['CHECKED_IN', 'IN_PROGRESS'].includes(contract.status)) {
+    if (contract.status !== 'IN_PROGRESS') {
       console.log(`[알림 큐] 상태 변경됨 (스킵): contractId=${contractId}, status=${contract.status}`);
       return { success: false, reason: 'status_changed', currentStatus: contract.status };
     }
@@ -322,8 +360,8 @@ notificationQueue.process('option-deadline', async (job) => {
       return { success: false, reason: 'contract_not_found' };
     }
 
-    // CONFIRMED 또는 IN_PROGRESS 상태인지 확인
-    if (!['CONFIRMED', 'IN_PROGRESS'].includes(contract.status)) {
+    // PAYMENT_COMPLETED 상태인지 확인 (옵션 마감은 입주 전에만 유효)
+    if (contract.status !== 'PAYMENT_COMPLETED') {
       console.log(`[알림 큐] 상태 변경됨 (스킵): contractId=${contractId}, status=${contract.status}`);
       return { success: false, reason: 'status_changed', currentStatus: contract.status };
     }
@@ -374,7 +412,7 @@ async function schedulePaymentPendingNotification(contractId, approvedAt) {
 
   return notificationQueue.add(
     'payment-pending',
-    { contractId },
+    { contractId, scheduledAt: notifyAt.toISOString() },
     { delay, jobId: `payment-pending-${contractId}` }
   );
 }
@@ -388,18 +426,23 @@ async function schedulePaymentPendingNotification(contractId, approvedAt) {
 async function schedulePaymentCompletedNotifications(contractId, checkInDate) {
   const jobs = [];
 
-  // 1. 입주 당일 알림 (입주일 오전 9시, 이미 지났으면 즉시 발송)
+  // 1. 입주 당일 알림 (입주일 오전 9시)
+  // 발송 시각이 이미 지난 경우 적재하지 않음 (delay=0 즉시 실행 방지)
   const checkinNotifyAt = getDateAt9AM(checkInDate);
   const checkinDelay = calculateDelay(checkinNotifyAt);
 
-  console.log(`[알림 큐] 입주 당일 알림 예약: contractId=${contractId}, 발송=${checkinDelay > 0 ? checkinNotifyAt.toISOString() : '즉시'}`);
-  jobs.push(
-    notificationQueue.add(
-      'checkin-today',
-      { contractId, scheduledAt: checkinNotifyAt.toISOString() },
-      { delay: checkinDelay, jobId: `checkin-today-${contractId}` }
-    )
-  );
+  if (checkinDelay > 0) {
+    console.log(`[알림 큐] 입주 당일 알림 예약: contractId=${contractId}, 발송=${checkinNotifyAt.toISOString()}`);
+    jobs.push(
+      notificationQueue.add(
+        'checkin-today',
+        { contractId, scheduledAt: checkinNotifyAt.toISOString() },
+        { delay: checkinDelay, jobId: `checkin-today-${contractId}` }
+      )
+    );
+  } else {
+    console.log(`[알림 큐] 입주 당일 알림 스킵 (발송 시각 이미 경과): contractId=${contractId}, 발송예정=${checkinNotifyAt.toISOString()}`);
+  }
 
   // 2. 옵션 마감 알림 (입주 6일 전 오전 10시)
   const optionDeadline = new Date(checkInDate);

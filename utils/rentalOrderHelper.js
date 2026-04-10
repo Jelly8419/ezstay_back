@@ -944,8 +944,13 @@ async function cancelPendingRentalOrder(rentalOrder, actorId, req, transaction) 
 async function groupItemsByOrder(itemIds, contractId, transaction) {
   const options = transaction ? { transaction } : {};
   const groups = new Map();
+  const seenItemIds = new Set();
 
   for (const itemId of itemIds) {
+    if (seenItemIds.has(itemId)) {
+      throw Object.assign(new Error(`아이템(${itemId})이 중복 요청되었습니다.`), { code: 4464, status: 400 });
+    }
+    seenItemIds.add(itemId);
     const item = await RentalOrderItem.findByPk(itemId, {
       include: [{
         model: RentalOrder,
