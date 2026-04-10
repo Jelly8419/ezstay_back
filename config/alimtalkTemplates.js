@@ -91,7 +91,7 @@ const templates = {
   // 4-3. 결제 완료
   // =====================================================
   payment_completed_guest: {
-    tplCode: 'UF_9063',
+    tplCode: 'UG_7670',
     eventLabel: '게스트 계약 결제 완료_게스트',
     varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일', amount: '결제총액', optionItems: '옵션상품목록' },
     fallbackContent:
@@ -423,6 +423,42 @@ const templates = {
       `계약 기간: #{입주일} ~ #{퇴실일}`,
     buildFallbackSMS: (data) =>
       `[EZstay] 퇴실확인 기한 만료. ${data.roomName} 보증금 반환 진행.`
+  },
+
+  // =====================================================
+  // 4-17. 게스트 퇴실 당일 침구류 반납 안내
+  // =====================================================
+  checkout_bedding_return_guest: {
+    tplCode: 'UG_6689',
+    eventLabel: '게스트 퇴실 당일 침구류 반납 안내_게스트',
+    varMap: {},
+    fallbackContent:
+      `[퇴실 전 침구류 반납 안내]\n\n` +
+      `대여하신 침구류는 포장 비닐에 넣은 후 침구류 전용 박스에 넣어서 문앞에 놓아주세요.\n\n` +
+      `※ 주의사항\n` +
+      ` - 반납 하지 않을 시, 보증금 차감 등 불이익이 발생할 수 있습니다.\n` +
+      ` - 임대인이 직접 제공한 침구류를 넣지 않도록 주의해주세요.`,
+    buildFallbackSMS: () =>
+      `[EZstay] 퇴실 전 침구류 반납 안내. 포장 비닐에 넣어 침구류 전용 박스에 문앞에 놓아주세요.`
+  },
+
+  // =====================================================
+  // 신규. 옵션 상품 결제 취소
+  // =====================================================
+  option_payment_canceled_guest: {
+    tplCode: 'UG_7674',
+    eventLabel: '게스트 옵션 결제 취소_게스트',
+    varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일', optionItems: '옵션상품목록', amount: '취소금액' },
+    fallbackContent:
+      `[옵션 결제 취소 완료]\n\n` +
+      `옵션 상품 결제 취소가 완료되었습니다.\n\n` +
+      `방 이름: #{방이름}\n` +
+      `입주 기간: #{입주일} ~ #{퇴실일}\n` +
+      `상품명: #{옵션상품목록}\n` +
+      `취소 금액: #{취소금액}원\n\n` +
+      `결제수단에 따라 5영업일 까지 소요될 수 있습니다.`,
+    buildFallbackSMS: (data) =>
+      `[EZstay] ${data.roomName} 옵션 결제 취소 완료. 취소 금액: ${data.amount}원`
   }
 };
 
