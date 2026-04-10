@@ -865,6 +865,15 @@ const getAvailableRentalItems = async (req, res) => {
       order: [['itemType', 'ASC'], ['name', 'ASC']]
     });
 
+    // 이 계약에 배송 전(PENDING) 주문이 하나라도 있는지 확인
+    const hasPendingDelivery = await RentalOrder.count({
+      where: {
+        contractId,
+        status: { [Op.in]: ['PAID', 'PARTIAL_REFUND'] },
+        deliveryStatus: 'PENDING'
+      }
+    }) > 0;
+
     // 각 아이템의 해당 기간 가용 수량 계산
     const itemsWithAvailability = await Promise.all(
       rentalItems.map(async (item) => {
@@ -911,6 +920,7 @@ const getAvailableRentalItems = async (req, res) => {
       modifiableUntil: modifiableInfo.modifiableUntil,
       checkInDate: toKSTString(contract.checkInDate),
       checkOutDate: toKSTString(contract.checkOutDate),
+      hasPendingDelivery,
       items: itemsWithAvailability
     });
   } catch (err) {
