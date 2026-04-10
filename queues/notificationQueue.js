@@ -244,35 +244,59 @@ notificationQueue.process('checkout-eve', async (job) => {
  */
 notificationQueue.process('checkout-today', async (job) => {
   const { contractId } = job.data;
-  console.log(`[알림 큐] 퇴실 당일 알림 처리: contractId=${contractId}`);
+  console.log(`[알림 큐] 퇴실 당일 침구류 반납 알림 처리: contractId=${contractId}`);
 
   try {
-    // 오전 10시 이후 실행된 경우 skip
-    const now = new Date();
-    const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 0, 0, 0);
-    if (now >= cutoff) {
-      console.warn(`[알림 큐] 퇴실 당일 알림 스킵 (오전 10시 초과): contractId=${contractId}, 현재=${now.toISOString()}`);
-      return { success: false, reason: 'past_cutoff' };
-    }
+    const { Contract, RentalOrder, RentalOrderItem, RentalItem, User } = require('../models');
+    const AlimtalkService = require('../services/alimtalkService');
 
-    const { Contract } = require('../models');
-    const contract = await Contract.findByPk(contractId);
+    const contract = await Contract.findByPk(contractId, {
+      attributes: ['id', 'guestId', 'roomId', 'checkInDate', 'checkOutDate', 'status']
+    });
 
     if (!contract) {
       return { success: false, reason: 'contract_not_found' };
     }
 
-    // CHECKED_IN 또는 IN_PROGRESS 상태인지 확인
     if (!['CHECKED_IN', 'IN_PROGRESS'].includes(contract.status)) {
       console.log(`[알림 큐] 상태 변경됨 (스킵): contractId=${contractId}, status=${contract.status}`);
       return { success: false, reason: 'status_changed', currentStatus: contract.status };
     }
 
-    await NotificationService.notifyCheckoutToday(contract);
-    console.log(`[알림 큐] 퇴실 당일 알림 발송 완료: contractId=${contractId}`);
+    // 침구류 대여 여부 확인 (취소되지 않은 주문 중 bedding_set 아이템 존재 여부)
+    const beddingCount = await RentalOrderItem.count({
+      where: { status: { [require('sequelize').Op.notIn]: ['CANCELLED', 'CANCEL_REQUESTED'] } },
+      include: [
+        {
+          model: RentalOrder,
+          as: 'rentalOrder',
+          where: { contractId, status: { [require('sequelize').Op.notIn]: ['CANCELLED', 'FULLY_REFUNDED'] } },
+          attributes: []
+        },
+        {
+          model: RentalItem,
+          as: 'rentalItem',
+          where: { itemType: 'bedding_set' },
+          attributes: []
+        }
+      ]
+    });
+
+    if (beddingCount === 0) {
+      console.log(`[알림 큐] 침구류 대여 없음 (스킵): contractId=${contractId}`);
+      return { success: false, reason: 'no_bedding' };
+    }
+
+    const guest = await User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] });
+    if (!guest) {
+      return { success: false, reason: 'guest_not_found' };
+    }
+
+    await AlimtalkService.sendCheckoutBeddingReturn(contract, guest);
+    console.log(`[알림 큐] 침구류 반납 알림 발송 완료: contractId=${contractId}`);
     return { success: true, contractId };
   } catch (err) {
-    console.error(`[알림 큐] 퇴실 당일 알림 실패: contractId=${contractId}`, err);
+    console.error(`[알림 큐] 침구류 반납 알림 실패: contractId=${contractId}`, err);
     throw err;
   }
 });

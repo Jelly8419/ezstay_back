@@ -414,6 +414,11 @@ class AlimtalkService {
     await this.send('checkout_today_guest', guest, {}, { contractId: contract.id });
   }
 
+  /** 4-17. 퇴실 당일 침구류 반납 안내 (침구류 대여 게스트에게만) */
+  static async sendCheckoutBeddingReturn(contract, guest) {
+    await this.send('checkout_bedding_return_guest', guest, {}, { contractId: contract.id });
+  }
+
   /** 4-8. 호스트 퇴실 확인 요청 */
   static async sendCheckoutHostRequest(contract, host, confirmDeadline) {
     await this.send('checkout_host_request', host, {
