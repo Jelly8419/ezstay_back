@@ -1,4 +1,4 @@
-const { sequelize, Contract, Room, User, RoomPhoto, RoomAmenity, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement, AdminRefund } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, RoomAmenity, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement, AdminRefund, RentalOrderRefundRequest } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const paytagClient = require('../utils/paytagClient');
@@ -25,7 +25,7 @@ const {
   getContractRentalSummary
 } = require('../utils/rentalOrderHelper');
 const NotificationService = require('../services/notificationService');
-const { CANCEL_TYPES } = require('../utils/notificationMessages');
+const { CANCEL_TYPES, NotificationMessages } = require('../utils/notificationMessages');
 const { calculateSettlementDate, calculatePayoutAvailableDate, calculateSettlementAmount } = require('../services/settlementService');
 const { toKSTString, nowKSTString } = require('../utils/dateHelper');
 
@@ -1707,7 +1707,7 @@ const cancelContractByGuest = async (req, res) => {
       reason: cancellationReason || '게스트가 계약 요청을 취소했습니다',
       metadata: {
         cancellationType: 'BEFORE_PAYMENT',
-        cancelledAt: contract.cancelledAt
+        cancelledAt: toKSTString(contract.cancelledAt)
       },
       req,
       transaction
@@ -1732,7 +1732,7 @@ const cancelContractByGuest = async (req, res) => {
         status: contract.status,
         statusLabel: Contract.STATUS_LABELS[contract.status],
         cancellationReason: contract.cancellationReason,
-        cancelledAt: contract.cancelledAt
+        cancelledAt: toKSTString(contract.cancelledAt)
       },
       '계약 요청이 취소되었습니다'
     );
@@ -1787,7 +1787,38 @@ const calculateRefundPreview = async (req, res) => {
       }, 500);
     }
 
-    return success(res, refundResult.data, '환불 금액이 계산되었습니다.');
+    // 입주 전인 경우: 미처리 ADDITIONAL 주문 존재 여부 확인
+    let pendingAdditionalOrders = [];
+    const checkInDate = new Date(contract.checkInDate);
+    if (new Date() < checkInDate) {
+      const additionalOrders = await RentalOrder.findAll({
+        where: {
+          contractId,
+          orderType: 'ADDITIONAL',
+          status: { [Op.in]: ['PAID', 'PARTIAL_REFUND'] }
+        },
+        include: [{
+          model: RentalOrderRefundRequest,
+          as: 'refundRequests',
+          where: { status: 'PENDING' },
+          required: false
+        }]
+      });
+
+      pendingAdditionalOrders = additionalOrders
+        .filter(o => !o.refundRequests || o.refundRequests.length === 0)
+        .map(o => ({
+          orderId: o.orderId,
+          status: o.status,
+          totalAmount: o.totalAmount
+        }));
+    }
+
+    return success(res, {
+      ...refundResult.data,
+      cancelBlocked: pendingAdditionalOrders.length > 0,
+      pendingAdditionalOrders
+    }, '환불 금액이 계산되었습니다.');
   } catch (err) {
     console.error('환불 계산 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
@@ -1915,6 +1946,44 @@ const requestRefund = async (req, res) => {
         },
         400
       );
+    }
+
+    // 입주 전 취소 시 미처리 ADDITIONAL 렌탈 주문 차단
+    // (PAID/PARTIAL_REFUND 상태이면서 반품 요청이 없는 주문이 있으면 먼저 환불 요구)
+    const checkInDateForBlock2 = new Date(contract.checkInDate);
+    if (now < checkInDateForBlock2) {
+      const additionalOrders = await RentalOrder.findAll({
+        where: {
+          contractId,
+          orderType: 'ADDITIONAL',
+          status: { [Op.in]: ['PAID', 'PARTIAL_REFUND'] }
+        },
+        include: [{
+          model: RentalOrderRefundRequest,
+          as: 'refundRequests',
+          where: { status: 'PENDING' },
+          required: false
+        }],
+        transaction
+      });
+
+      const blockedOrders = additionalOrders.filter(o => !o.refundRequests || o.refundRequests.length === 0);
+
+      if (blockedOrders.length > 0) {
+        await transaction.rollback();
+        return error(
+          res,
+          { code: 4506, message: '추가 주문된 옵션 상품을 먼저 환불해주세요.' },
+          400,
+          {
+            blockedOrders: blockedOrders.map(o => ({
+              orderId: o.orderId,
+              status: o.status,
+              totalAmount: o.totalAmount
+            }))
+          }
+        );
+      }
     }
 
     // 환불 금액 계산
@@ -3356,6 +3425,19 @@ const cancelContractByHost = async (req, res) => {
               console.log(`[cancelByHost] 호스트 부담금 PG 원복 완료: contractId=${contract.id}`);
             } catch (rollbackErr) {
               console.error('[cancelByHost] 호스트 부담금 PG 원복 실패 (수동 처리 필요):', rollbackErr.message, { contractId: contract.id, hostBurdenAmount });
+              // 원복 실패 시 관리자 수동 처리를 위해 반드시 로그 기록
+              PaymentFailureLog.create({
+                contractId: contract.id,
+                orderId: hostPayment.orderId,
+                failureCode: rollbackErr.paytagErrorCode || 'HOST_BURDEN_ROLLBACK_FAILED',
+                failureMessage: rollbackErr.paytagErrorMessage || rollbackErr.message,
+                requestData: JSON.stringify({
+                  type: 'HOST_BURDEN_ROLLBACK',
+                  cancelamt: hostBurdenAmount,
+                  hostPaymentId: hostPayment.id
+                }),
+                responseData: rollbackErr.paytagResponse ? JSON.stringify(rollbackErr.paytagResponse) : null
+              }).catch(logErr => console.error('[cancelByHost] PaymentFailureLog 저장 실패:', logErr.message));
             }
           }
 
@@ -3453,6 +3535,20 @@ const cancelContractByHost = async (req, res) => {
         accountNumber: guestRefundAccount?.accountNumber || null,
         accountHolder: guestRefundAccount?.accountHolder || null
       }, { transaction });
+
+      // 계좌 미등록 시 게스트에게 등록 안내 알림
+      if (!guestRefundAccount) {
+        const { compensationAccountRequired } = NotificationMessages;
+        const msg = compensationAccountRequired();
+        NotificationService.create({
+          userId: contract.guestId,
+          userMode: 'guest',
+          type: 'PAYOUT_ACCOUNT_REQUIRED',
+          title: msg.title,
+          message: msg.message,
+          relatedContractId: contract.id
+        }).catch(err => console.error('[cancelByHost] 계좌 등록 안내 알림 실패 (무시됨):', err.message));
+      }
     }
 
     // [8] 기존 CONTRACT_SETTLEMENT Payout/Settlement 취소
@@ -3466,6 +3562,68 @@ const cancelContractByHost = async (req, res) => {
     );
 
     await transaction.commit();
+
+    // [9] ADDITIONAL 렌탈 주문 PG 취소 (트랜잭션 외부, 실패해도 응답은 성공 — 실패 시 PaymentFailureLog 기록)
+    const additionalOrdersToCancel = await RentalOrder.findAll({
+      where: {
+        contractId: contract.id,
+        orderType: 'ADDITIONAL',
+        status: { [Op.in]: ['PAID', 'PARTIAL_REFUND'] }
+      },
+      include: [{ model: require('../models').RentalPayment, as: 'payment', required: false }]
+    });
+
+    for (const additionalOrder of additionalOrdersToCancel) {
+      const rentalPayment = additionalOrder.payment;
+      if (!rentalPayment || parseFloat(rentalPayment.balanceAmount) <= 0) continue;
+
+      const cancelamt = parseFloat(rentalPayment.balanceAmount);
+      try {
+        const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(rentalPayment);
+        await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, loginid, cancelamt, canceltype: '0' });
+
+        // DB 업데이트 (짧은 트랜잭션)
+        const additionalTx = await sequelize.transaction();
+        try {
+          await rentalPayment.update({ balanceAmount: 0, status: 'CANCELED' }, { transaction: additionalTx });
+          await RentalOrderItem.update(
+            { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: '호스트 귀책 계약 취소' },
+            { where: { rentalOrderId: additionalOrder.id, status: { [Op.ne]: 'CANCELLED' } }, transaction: additionalTx }
+          );
+          await RentalItemReservation.update(
+            { status: 'CANCELLED' },
+            { where: { rentalOrderId: additionalOrder.id, status: { [Op.ne]: 'CANCELLED' } }, transaction: additionalTx }
+          );
+          await additionalOrder.update(
+            { status: 'FULLY_REFUNDED', refundedAmount: additionalOrder.paidAmount },
+            { transaction: additionalTx }
+          );
+          await additionalTx.commit();
+          console.log(`[cancelByHost] ADDITIONAL 렌탈 취소 완료: orderId=${additionalOrder.orderId}, cancelamt=${cancelamt}`);
+        } catch (dbErr) {
+          await additionalTx.rollback();
+          console.error(`[cancelByHost] ADDITIONAL 렌탈 DB 업데이트 실패 (PG 취소는 완료됨): orderId=${additionalOrder.orderId}`, dbErr.message);
+          PaymentFailureLog.create({
+            contractId: contract.id,
+            orderId: additionalOrder.orderId,
+            failureCode: 'ADDITIONAL_RENTAL_DB_UPDATE_FAILED',
+            failureMessage: dbErr.message,
+            requestData: JSON.stringify({ type: 'ADDITIONAL_RENTAL_HOST_CANCEL_DB', rentalOrderId: additionalOrder.id, cancelamt }),
+            responseData: null
+          }).catch(logErr => console.error('[cancelByHost] PaymentFailureLog 저장 실패:', logErr.message));
+        }
+      } catch (pgErr) {
+        console.error(`[cancelByHost] ADDITIONAL 렌탈 PG 취소 실패 (수동 처리 필요): orderId=${additionalOrder.orderId}`, pgErr.message);
+        PaymentFailureLog.create({
+          contractId: contract.id,
+          orderId: additionalOrder.orderId,
+          failureCode: pgErr.paytagErrorCode || 'ADDITIONAL_RENTAL_PG_CANCEL_FAILED',
+          failureMessage: pgErr.paytagErrorMessage || pgErr.message,
+          requestData: JSON.stringify({ type: 'ADDITIONAL_RENTAL_HOST_CANCEL', rentalOrderId: additionalOrder.id, cancelamt }),
+          responseData: pgErr.paytagResponse ? JSON.stringify(pgErr.paytagResponse) : null
+        }).catch(logErr => console.error('[cancelByHost] PaymentFailureLog 저장 실패:', logErr.message));
+      }
+    }
 
     // 서비스 태스크 PENDING 삭제 (트랜잭션 외부)
     try {
@@ -3512,7 +3670,7 @@ const cancelContractByHost = async (req, res) => {
     return success(res, {
       contractId: contract.id,
       status: 'CANCELLED_BY_HOST',
-      cancelledAt: contract.cancelledAt,
+      cancelledAt: toKSTString(contract.cancelledAt),
       refundId: refund.id,
       hostBurdenAmount,
       guestRefundAmount: refundData.finalRefundAmount,

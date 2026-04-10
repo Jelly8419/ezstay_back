@@ -276,8 +276,11 @@ router.get('/:contractId/cancel-by-host/preview', authenticateToken, getHostCanc
 router.post('/:contractId/cancel-by-host', authenticateToken, cancelContractByHost);
 
 /**
- * 호스트가 계약 취소 요청 (IN_PROGRESS 상태, 관리자 승인 필요)
+ * 호스트 또는 게스트가 계약 취소 요청 (IN_PROGRESS 상태, 관리자 승인 필요)
  * POST /api/contracts/:contractId/cancel-request
+ *
+ * - 호스트/게스트 모두 호출 가능, changedBy(HOST|GUEST)로 구분
+ * - ContractStatusLog.metadata.type: CANCEL_REQUEST_BY_HOST | CANCEL_REQUEST_BY_GUEST
  *
  * Request Body:
  * {
