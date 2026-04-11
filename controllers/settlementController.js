@@ -123,7 +123,7 @@ const getSettlements = async (req, res) => {
           required: false
         }
       ],
-      order: [[{ model: Settlement, as: 'settlement' }, 'expectedDate', tab === 'pending' ? 'ASC' : 'DESC']],
+      order: [[literal('`settlement`.`expected_date`'), tab === 'pending' ? 'ASC' : 'DESC']],
       limit: parseInt(limit),
       offset
     });
@@ -462,7 +462,7 @@ const exportSettlements = async (req, res) => {
           required: false
         }
       ],
-      order: [[{ model: Settlement, as: 'settlement' }, 'expectedDate', 'DESC']]
+      order: [[literal('`settlement`.`expected_date`'), 'DESC']]
     });
 
     // 엑셀 데이터 준비
