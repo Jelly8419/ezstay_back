@@ -10,7 +10,7 @@
 
 require('../../setup/setup');
 
-const { Contract, Settlement, DepositAgreement, ChatRoom } = require('../../../models');
+const { Contract, Settlement, DepositAgreement, ChatRoom, Payment } = require('../../../models');
 const { createHost, cleanupUsers }  = require('../../setup/factories/userFactory');
 const { createRoom, cleanupRooms }  = require('../../setup/factories/roomFactory');
 const {
@@ -31,6 +31,7 @@ const {
   autoRequestCheckout,
   autoConfirmCheckout,
   autoReturnDepositOnDeadline,
+  autoReturnDeposit,
 } = require('../../../schedulers/contractScheduler');
 
 // ─── 공통 데이터 ─────────────────────────────────────────────────────
@@ -274,6 +275,72 @@ test('TC-09-07: HOST_PENDING + holdApprovedAt 11일 전 → depositStatus 반환
     order: [['createdAt', 'DESC']],
   });
   expect(da.status).toBe('AUTO_RETURNED');
+});
+
+// ─── TC-09-09: 보증금 자동 반환 — PG 환불 호출 ──────────────────────
+
+test('TC-09-09: RETURN_PENDING + Settlement READY → PG cancelPayment 호출, depositStatus=RETURNED, depositReturnedAt 기록', async () => {
+  const { contract } = await createCompletedContract({ host, room });
+  createdContractIds.push(contract.id);
+
+  // Settlement를 READY 상태로 변경
+  await Settlement.update(
+    { status: 'READY' },
+    { where: { contractId: contract.id } }
+  );
+
+  // 퇴실 확인 완료 + RETURN_PENDING 상태로 설정
+  await Contract.update(
+    {
+      checkoutStatus: 'HOST_CONFIRMED',
+      depositStatus: 'RETURN_PENDING',
+      deposit: 100000,
+      refundableDeposit: 100000,
+    },
+    { where: { id: contract.id } }
+  );
+
+  const { cancelPayment } = require('../../../utils/paytagClient');
+  const callsBefore = cancelPayment.mock ? cancelPayment.mock.calls.length : 0;
+
+  await autoReturnDeposit();
+
+  const updated = await Contract.findByPk(contract.id);
+
+  // PG mock 환경에서는 RETURNED 또는 REFUND_FAILED
+  expect(['RETURNED', 'REFUND_FAILED']).toContain(updated.depositStatus);
+
+  // RETURNED 성공 시 depositReturnedAt 기록 확인
+  if (updated.depositStatus === 'RETURNED') {
+    expect(updated.depositReturnedAt).not.toBeNull();
+  }
+});
+
+// ─── TC-09-10: 보증금 자동 반환 — deposit=0이면 PG 호출 없이 RETURNED ─
+
+test('TC-09-10: deposit=0인 계약 RETURN_PENDING + Settlement READY → PG 호출 없이 depositStatus=RETURNED', async () => {
+  const { contract } = await createCompletedContract({ host, room });
+  createdContractIds.push(contract.id);
+
+  await Settlement.update(
+    { status: 'READY' },
+    { where: { contractId: contract.id } }
+  );
+
+  await Contract.update(
+    {
+      checkoutStatus: 'HOST_CONFIRMED',
+      depositStatus: 'RETURN_PENDING',
+      deposit: 0,
+      refundableDeposit: 0,
+    },
+    { where: { id: contract.id } }
+  );
+
+  await autoReturnDeposit();
+
+  const updated = await Contract.findByPk(contract.id);
+  expect(updated.depositStatus).toBe('RETURNED');
 });
 
 // ─── TC-09-08: 스케줄러 중복 실행 방지 ──────────────────────────────

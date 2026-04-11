@@ -1317,20 +1317,11 @@ const requestRentalItemsReturn = async (req, res) => {
       return error(res, { code: validErr.code || 4460, message: validErr.message }, validErr.status || 400);
     }
 
-    // 배송중/완료 상태 이중 검증 + 중복 요청 차단
+    // 배송중/완료 상태 이중 검증
     for (const [, { rentalOrder }] of groups) {
       if (!['IN_TRANSIT', 'DELIVERED'].includes(rentalOrder.deliveryStatus)) {
         await transaction.rollback();
         return error(res, { code: 4470, message: `주문(${rentalOrder.orderId})은 배송 전 상태로 반품 신청이 불가합니다. 결제취소를 이용하세요.` }, 400);
-      }
-
-      const pendingCount = await RentalOrderRefundRequest.count({
-        where: { rentalOrderId: rentalOrder.id, status: 'PENDING' },
-        transaction
-      });
-      if (pendingCount > 0) {
-        await transaction.rollback();
-        return error(res, { code: 4424, message: `주문(${rentalOrder.orderId})에 이미 처리 중인 반품 요청이 있습니다.` }, 400);
       }
     }
 
@@ -1353,7 +1344,7 @@ const requestRentalItemsReturn = async (req, res) => {
       }
     }
 
-    // 주문별 반품 신청 생성 (단일 트랜잭션)
+    // 주문별 반품 신청 생성 또는 기존 PENDING 요청에 병합 (단일 트랜잭션)
     const requestedOrders = [];
     for (const [, { rentalOrder, items }] of groups) {
       for (const item of items) {
@@ -1363,17 +1354,31 @@ const requestRentalItemsReturn = async (req, res) => {
         }, { transaction });
       }
 
-      const itemTotalAmount = items.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
+      const addedAmount = items.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
 
-      const refundRequest = await RentalOrderRefundRequest.create({
-        rentalOrderId: rentalOrder.id,
-        contractId: parseInt(contractId),
-        requestedBy: userId,
-        status: 'PENDING',
-        cancelReason: reason,
-        deliveryStatusSnapshot: rentalOrder.deliveryStatus,
-        itemTotalAmount
-      }, { transaction });
+      // 기존 PENDING 요청이 있으면 itemTotalAmount 누적, 없으면 신규 생성
+      const existingRequest = await RentalOrderRefundRequest.findOne({
+        where: { rentalOrderId: rentalOrder.id, status: 'PENDING' },
+        transaction
+      });
+
+      let refundRequest;
+      if (existingRequest) {
+        await existingRequest.update({
+          itemTotalAmount: parseFloat(existingRequest.itemTotalAmount) + addedAmount
+        }, { transaction });
+        refundRequest = existingRequest;
+      } else {
+        refundRequest = await RentalOrderRefundRequest.create({
+          rentalOrderId: rentalOrder.id,
+          contractId: parseInt(contractId),
+          requestedBy: userId,
+          status: 'PENDING',
+          cancelReason: reason,
+          deliveryStatusSnapshot: rentalOrder.deliveryStatus,
+          itemTotalAmount: addedAmount
+        }, { transaction });
+      }
 
       await logRentalAction({
         contractId: parseInt(contractId),
@@ -1387,11 +1392,14 @@ const requestRentalItemsReturn = async (req, res) => {
           orderId: rentalOrder.orderId,
           refundRequestId: refundRequest.id,
           cancelledItemIds: items.map(i => i.id),
-          itemTotalAmount,
+          addedAmount,
           reason,
-          deliveryStatus: rentalOrder.deliveryStatus
+          deliveryStatus: rentalOrder.deliveryStatus,
+          merged: !!existingRequest
         },
-        description: `아이템 선택 반품 신청: ${reason}`,
+        description: existingRequest
+          ? `아이템 선택 반품 신청 (기존 요청에 병합): ${reason}`
+          : `아이템 선택 반품 신청: ${reason}`,
         req
       }, transaction);
 
@@ -1399,7 +1407,9 @@ const requestRentalItemsReturn = async (req, res) => {
         refundRequestId: refundRequest.id,
         orderId: rentalOrder.orderId,
         deliveryStatus: rentalOrder.deliveryStatus,
-        itemTotalAmount,
+        addedAmount,
+        itemTotalAmount: parseFloat(refundRequest.itemTotalAmount),
+        merged: !!existingRequest,
         requestedItems: items.map(i => ({ id: i.id, name: i.rentalItem?.name, quantity: i.quantity }))
       });
     }
