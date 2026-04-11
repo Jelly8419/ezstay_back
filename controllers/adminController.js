@@ -2294,7 +2294,7 @@ const getRentalOrders = async (req, res) => {
     return success(res, {
       orders: orders.map(order => ({
         id: order.id,
-        rentalOrderId: order.rentalOrderId,
+        orderId: order.orderId,
         orderType: order.orderType,
         status: order.status,
         deliveryStatus: order.deliveryStatus,
@@ -2395,7 +2395,7 @@ const getRentalOrderDetail = async (req, res) => {
     return success(res, {
       order: {
         id: order.id,
-        rentalOrderId: order.rentalOrderId,
+        orderId: order.orderId,
         orderType: order.orderType,
         status: order.status,
         deliveryStatus: order.deliveryStatus,
@@ -2522,7 +2522,7 @@ const getContractRentalHistory = async (req, res) => {
       summary,
       orders: orders.map(order => ({
         id: order.id,
-        rentalOrderId: order.rentalOrderId,
+        orderId: order.orderId,
         orderType: order.orderType,
         status: order.status,
         totalAmount: parseFloat(order.totalAmount),
@@ -2695,14 +2695,14 @@ const adminCancelRentalOrder = async (req, res) => {
           }, 502);
         }
 
-        console.log(`[adminCancelRentalOrder] PayTag 취소 완료: rentalOrderId=${order.rentalOrderId}, cancelamt=${finalRefundAmount}`);
+        console.log(`[adminCancelRentalOrder] PayTag 취소 완료: orderId=${order.orderId}, cancelamt=${finalRefundAmount}`);
       }
     }
 
     await transaction.commit();
 
     return updated(res, {
-      rentalOrderId: order.rentalOrderId,
+      orderId: order.orderId,
       cancelledItems: activeItems.map(item => ({
         id: item.id,
         name: item.rentalItem?.name,

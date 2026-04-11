@@ -1024,9 +1024,9 @@ exports.getPaymentLogs = async (req, res) => {
       };
     });
 
-    // === 3) 렌탈 결제/환불 (RentalOrderLog) ===
+    // === 3) 렌탈 결제/환불 (RentalOrderLog - ADDITIONAL 주문만) ===
     const rentalLogWhere = {
-      action: { [Op.in]: ['PAYMENT_COMPLETED', 'REFUND_COMPLETED'] }
+      action: { [Op.in]: ['PAYMENT_COMPLETED', 'REFUND_COMPLETED', 'ADMIN_REFUND', 'ORDER_CANCELLED'] }
     };
     if (startDate || endDate) Object.assign(rentalLogWhere, buildDateFilter('createdAt'));
 
@@ -1061,12 +1061,30 @@ exports.getPaymentLogs = async (req, res) => {
 
     const rentalEventLogs = rentalLogs.map(log => {
       const isPayment = log.action === 'PAYMENT_COMPLETED';
+      const isAdminRefund = log.action === 'ADMIN_REFUND';
+      const isOrderCancelled = log.action === 'ORDER_CANCELLED';
+
+      let transactionType;
+      if (isPayment) {
+        transactionType = '결제완료';
+      } else if (isOrderCancelled) {
+        // 잔액이 0이면 전체취소, 아니면 부분취소
+        transactionType = (log.balanceAfter === 0) ? '전체취소' : '부분취소';
+      } else {
+        transactionType = '부분취소';
+      }
+
+      let productType;
+      if (isAdminRefund) productType = '관리자환불(옵션)';
+      else if (isOrderCancelled) productType = '옵션(게스트취소)';
+      else productType = '옵션';
+
       return {
         occurredAt: log.createdAt,
-        transactionType: isPayment ? '결제완료' : '부분취소',
+        transactionType,
         paymentMethod: log.order?.payment?.method || null,
         easyPayProvider: log.order?.payment?.easyPayProvider || null,
-        productType: '옵션',
+        productType,
         amount: isPayment ? Math.abs(log.amountChange || 0) : -(Math.abs(log.amountChange || 0)),
         orderId: log.contract?.orderId || null,
         rentalOrderId: log.order?.orderId || null,
@@ -1076,8 +1094,38 @@ exports.getPaymentLogs = async (req, res) => {
       };
     });
 
-    // === 4) 전체 합산 및 정렬 ===
-    let allLogs = [...paymentLogs, ...refundLogs, ...rentalEventLogs];
+    // === 4) 관리자 직접 환불 (AdminRefund) ===
+    const adminRefundWhere = { refundStatus: 'COMPLETED' };
+    if (startDate || endDate) Object.assign(adminRefundWhere, buildDateFilter('completedAt'));
+
+    const adminRefunds = await AdminRefund.findAll({
+      where: adminRefundWhere,
+      include: [{
+        model: Contract,
+        as: 'contract',
+        attributes: ['id', 'orderId'],
+        include: [
+          { model: User, as: 'guest', attributes: ['id', 'name'] },
+          { model: Room, as: 'room', attributes: ['id', 'roomName'] }
+        ]
+      }],
+      order: [['completedAt', safeSortOrder]]
+    });
+
+    const adminRefundLogs = adminRefunds.map(ar => ({
+      occurredAt: ar.completedAt,
+      transactionType: ar.refundType === 'FULL' ? '전체취소' : '부분취소',
+      paymentMethod: ar.refundMethod || 'ORIGINAL_PAYMENT',
+      productType: '관리자환불',
+      amount: -(ar.finalRefundAmount || 0),
+      orderId: ar.contract?.orderId || null,
+      userName: ar.contract?.guest?.name || null,
+      userType: '게스트',
+      roomName: ar.contract?.room?.roomName || null
+    }));
+
+    // === 5) 전체 합산 및 정렬 ===
+    let allLogs = [...paymentLogs, ...refundLogs, ...rentalEventLogs, ...adminRefundLogs];
 
     // 검색 필터
     if (search) {
