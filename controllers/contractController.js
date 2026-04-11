@@ -2701,10 +2701,19 @@ const confirmPayment = async (req, res) => {
   try {
     const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
     if (chatRoom?.firebaseChatRoomId) {
-      await sendSystemMessage(chatRoom.firebaseChatRoomId, SystemMessageTypes.PAYMENT_COMPLETED, {
-        amount: payment.totalAmount,
-        paymentMethod: payment.method
-      });
+      await sendSystemMessage(
+        chatRoom.firebaseChatRoomId,
+        getSystemMessageTemplate(SystemMessageTypes.PAYMENT_COMPLETED, {
+          checkInDate: toKSTString(contract.checkInDate).split('T')[0],
+          checkOutDate: toKSTString(contract.checkOutDate).split('T')[0]
+        }),
+        SystemMessageTypes.PAYMENT_COMPLETED,
+        {
+          contractId: contract.id,
+          amount: payment.totalAmount,
+          paymentMethod: payment.method
+        }
+      );
     }
   } catch (chatErr) {
     console.error('채팅 시스템 메시지 실패 (무시됨):', chatErr);
