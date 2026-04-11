@@ -920,12 +920,22 @@ const getAvailableRentalItems = async (req, res) => {
 const cancelRentalItemsByGuest = async (req, res) => {
   try {
     const { contractId } = req.params;
-    const { itemIds, reason } = req.body;
+    const { items: cancelRequests, reason } = req.body;
     const userId = req.user.id;
 
-    if (!Array.isArray(itemIds) || itemIds.length === 0) {
+    // { id, cancelQuantity } 배열 검증
+    if (!Array.isArray(cancelRequests) || cancelRequests.length === 0) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { details: '취소할 아이템을 선택해주세요.' });
     }
+    for (const req_ of cancelRequests) {
+      if (!req_.id || !Number.isInteger(req_.cancelQuantity) || req_.cancelQuantity < 1) {
+        return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { details: `아이템(${req_.id})의 cancelQuantity가 올바르지 않습니다.` });
+      }
+    }
+
+    // cancelQuantity Map (itemId → cancelQuantity)
+    const cancelQtyMap = new Map(cancelRequests.map(r => [r.id, r.cancelQuantity]));
+    const itemIds = cancelRequests.map(r => r.id);
 
     // 계약 조회 + 권한 확인
     const contract = await Contract.findByPk(contractId);
@@ -939,12 +949,22 @@ const cancelRentalItemsByGuest = async (req, res) => {
       });
     }
 
-    // 아이템 그룹핑 + 유효성 검증 (중복 itemId 포함)
+    // 아이템 그룹핑 + 유효성 검증
     let groups;
     try {
       groups = await groupItemsByOrder(itemIds, parseInt(contractId), null);
     } catch (validErr) {
       return error(res, { code: validErr.code || 4460, message: validErr.message }, validErr.status || 400);
+    }
+
+    // cancelQuantity 범위 검증 (item.quantity 초과 불가)
+    for (const { items } of groups.values()) {
+      for (const item of items) {
+        const cancelQty = cancelQtyMap.get(item.id);
+        if (cancelQty > item.quantity) {
+          return error(res, { code: 4466, message: `아이템(${item.id})의 취소 수량(${cancelQty})이 보유 수량(${item.quantity})을 초과합니다.` }, 400);
+        }
+      }
     }
 
     // 배송전 상태 이중 검증
@@ -970,6 +990,15 @@ const cancelRentalItemsByGuest = async (req, res) => {
     let totalRefunded = 0;
     const now = new Date();
 
+    // 수량 부분/전체 취소를 통합 처리하는 내부 헬퍼
+    // isFullCancel: cancelQty === item.quantity
+    const buildItemCancelUpdate = (item, cancelQty) => {
+      const pricePerItem = parseFloat(item.pricePerItem);
+      const isFullCancel = cancelQty === item.quantity;
+      const itemRefundAmount = pricePerItem * cancelQty;
+      return { isFullCancel, itemRefundAmount };
+    };
+
     // ── [A] INITIAL 주문 처리 — 계약 결제(Payment) 기준, 선택 아이템 합산 1회 PG 취소 ──
     if (initialGroups.size > 0) {
       const contractPayment = await Payment.findOne({
@@ -986,7 +1015,10 @@ const cancelRentalItemsByGuest = async (req, res) => {
           continue;
         }
 
-        const refundAmount = items.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
+        const refundAmount = items.reduce((sum, item) => {
+          const cancelQty = cancelQtyMap.get(item.id);
+          return sum + parseFloat(item.pricePerItem) * cancelQty;
+        }, 0);
         const availableBalance = parseFloat(contractPayment.balanceAmount);
 
         if (refundAmount > availableBalance) {
@@ -1009,27 +1041,43 @@ const cancelRentalItemsByGuest = async (req, res) => {
         // DB 업데이트 (짧은 트랜잭션)
         const dbTx = await sequelize.transaction();
         try {
-          for (const item of items) {
-            await item.update({
-              status: 'CANCELLED',
-              cancelledAt: now,
-              cancelReason: reason || '게스트 취소',
-              refundAmount: parseFloat(item.totalPrice)
-            }, { transaction: dbTx });
-          }
-
-          // 재고 복구
+          const cancelledItemsSummary = [];
           const rentalTypeItemIds = [];
+
           for (const item of items) {
+            const cancelQty = cancelQtyMap.get(item.id);
+            const { isFullCancel, itemRefundAmount } = buildItemCancelUpdate(item, cancelQty);
+
+            if (isFullCancel) {
+              await item.update({
+                status: 'CANCELLED',
+                cancelledAt: now,
+                cancelReason: reason || '게스트 취소',
+                refundAmount: itemRefundAmount
+              }, { transaction: dbTx });
+            } else {
+              const remainQty = item.quantity - cancelQty;
+              await item.update({
+                quantity: remainQty,
+                totalPrice: parseFloat(item.pricePerItem) * remainQty,
+                cancelReason: reason || '게스트 취소',
+                refundAmount: (parseFloat(item.refundAmount) || 0) + itemRefundAmount
+              }, { transaction: dbTx });
+            }
+
+            // 재고 복구
             if (item.rentalItem?.salesType === 'SALE') {
               await RentalItem.increment('totalStock', {
-                by: item.quantity,
+                by: cancelQty,
                 where: { id: item.rentalItemId },
                 transaction: dbTx
               });
             } else {
-              rentalTypeItemIds.push(item.rentalItemId);
+              if (isFullCancel) rentalTypeItemIds.push(item.rentalItemId);
+              // 부분 취소 시 RENTAL 타입 예약은 수량 개념이 없으므로 유지
             }
+
+            cancelledItemsSummary.push({ id: item.id, name: item.rentalItem?.name, cancelQuantity: cancelQty, isFullCancel });
           }
 
           if (rentalTypeItemIds.length > 0) {
@@ -1072,7 +1120,7 @@ const cancelRentalItemsByGuest = async (req, res) => {
             metadata: {
               orderId: rentalOrder.orderId,
               orderType: 'INITIAL',
-              cancelledItemIds: items.map(i => i.id),
+              cancelledItems: cancelledItemsSummary,
               refundAmount,
               reason: reason || '게스트 취소'
             },
@@ -1086,11 +1134,7 @@ const cancelRentalItemsByGuest = async (req, res) => {
           contractPayment.balanceAmount = newBalance;
           contractPayment.status = newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED';
 
-          succeeded.push({
-            orderId: rentalOrder.orderId,
-            refundAmount,
-            cancelledItems: items.map(i => ({ id: i.id, name: i.rentalItem?.name, quantity: i.quantity }))
-          });
+          succeeded.push({ orderId: rentalOrder.orderId, refundAmount, cancelledItems: cancelledItemsSummary });
           totalRefunded += refundAmount;
         } catch (dbErr) {
           await dbTx.rollback();
@@ -1107,7 +1151,10 @@ const cancelRentalItemsByGuest = async (req, res) => {
         continue;
       }
 
-      const refundAmount = items.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
+      const refundAmount = items.reduce((sum, item) => {
+        const cancelQty = cancelQtyMap.get(item.id);
+        return sum + parseFloat(item.pricePerItem) * cancelQty;
+      }, 0);
       const availableBalance = parseFloat(rentalPayment.balanceAmount);
 
       if (refundAmount > availableBalance) {
@@ -1130,27 +1177,42 @@ const cancelRentalItemsByGuest = async (req, res) => {
       // DB 업데이트 (짧은 트랜잭션)
       const dbTx = await sequelize.transaction();
       try {
-        for (const item of items) {
-          await item.update({
-            status: 'CANCELLED',
-            cancelledAt: now,
-            cancelReason: reason || '게스트 취소',
-            refundAmount: parseFloat(item.totalPrice)
-          }, { transaction: dbTx });
-        }
-
-        // 재고 복구: RENTAL → Reservation CANCELLED, SALE → 배송 전이면 totalStock 복구
+        const cancelledItemsSummary = [];
         const rentalTypeItemIds = [];
+
         for (const item of items) {
+          const cancelQty = cancelQtyMap.get(item.id);
+          const { isFullCancel, itemRefundAmount } = buildItemCancelUpdate(item, cancelQty);
+
+          if (isFullCancel) {
+            await item.update({
+              status: 'CANCELLED',
+              cancelledAt: now,
+              cancelReason: reason || '게스트 취소',
+              refundAmount: itemRefundAmount
+            }, { transaction: dbTx });
+          } else {
+            const remainQty = item.quantity - cancelQty;
+            await item.update({
+              quantity: remainQty,
+              totalPrice: parseFloat(item.pricePerItem) * remainQty,
+              cancelReason: reason || '게스트 취소',
+              refundAmount: (parseFloat(item.refundAmount) || 0) + itemRefundAmount
+            }, { transaction: dbTx });
+          }
+
+          // 재고 복구: RENTAL → 전체 취소 시만 Reservation CANCELLED, SALE → cancelQty만큼 복구
           if (item.rentalItem?.salesType === 'SALE') {
             await RentalItem.increment('totalStock', {
-              by: item.quantity,
+              by: cancelQty,
               where: { id: item.rentalItemId },
               transaction: dbTx
             });
           } else {
-            rentalTypeItemIds.push(item.rentalItemId);
+            if (isFullCancel) rentalTypeItemIds.push(item.rentalItemId);
           }
+
+          cancelledItemsSummary.push({ id: item.id, name: item.rentalItem?.name, cancelQuantity: cancelQty, isFullCancel });
         }
 
         if (rentalTypeItemIds.length > 0) {
@@ -1192,7 +1254,7 @@ const cancelRentalItemsByGuest = async (req, res) => {
           balanceAfter: newBalance,
           metadata: {
             orderId: rentalOrder.orderId,
-            cancelledItemIds: items.map(i => i.id),
+            cancelledItems: cancelledItemsSummary,
             refundAmount,
             reason: reason || '게스트 취소'
           },
@@ -1202,11 +1264,7 @@ const cancelRentalItemsByGuest = async (req, res) => {
 
         await dbTx.commit();
 
-        succeeded.push({
-          orderId: rentalOrder.orderId,
-          refundAmount,
-          cancelledItems: items.map(i => ({ id: i.id, name: i.rentalItem?.name, quantity: i.quantity }))
-        });
+        succeeded.push({ orderId: rentalOrder.orderId, refundAmount, cancelledItems: cancelledItemsSummary });
         totalRefunded += refundAmount;
       } catch (dbErr) {
         await dbTx.rollback();

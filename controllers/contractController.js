@@ -1526,16 +1526,6 @@ const rejectContract = async (req, res) => {
     const { hostMessage } = req.body;
     const hostId = req.user.id;
 
-    // 거절 사유 확인
-    if (!hostMessage || hostMessage.trim() === '') {
-      await transaction.rollback();
-      return error(
-        res,
-        { code: 4402, message: '거절 사유를 입력해주세요' },
-        400
-      );
-    }
-
     // 계약 조회
     const contract = await Contract.findByPk(contractId, { transaction });
 
@@ -1550,21 +1540,28 @@ const rejectContract = async (req, res) => {
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
-    // 승인 대기 상태인지 확인
-    if (contract.status !== 'PENDING_APPROVAL') {
+    // 승인 대기 또는 결제 대기 상태인지 확인
+    if (!['PENDING_APPROVAL', 'APPROVED'].includes(contract.status)) {
       await transaction.rollback();
       return error(
         res,
-        { code: 4403, message: '승인 대기 상태의 계약만 거절할 수 있습니다' },
+        { code: 4403, message: '승인 대기 또는 결제 대기 상태의 계약만 거절(철회)할 수 있습니다' },
         400
       );
+    }
+
+    const fromStatus = contract.status;
+
+    // 결제 대기(APPROVED) 상태에서 거절 시 렌탈 아이템 예약 해제 (재고 복구)
+    if (fromStatus === 'APPROVED') {
+      await cancelRentalItemReservations(contractId, transaction);
     }
 
     // 계약 거절 처리
     await contract.update(
       {
         status: 'REJECTED',
-        cancellationReason: hostMessage,
+        cancellationReason: hostMessage || null,
         rejectedAt: new Date()
       },
       { transaction }
@@ -1573,11 +1570,11 @@ const rejectContract = async (req, res) => {
     // 상태 변경 로그 기록
     await ContractStatusLog.createLog({
       contractId: contract.id,
-      fromStatus: 'PENDING_APPROVAL',
+      fromStatus,
       toStatus: 'REJECTED',
       changedBy: 'HOST',
       changedByUserId: hostId,
-      reason: hostMessage,
+      reason: hostMessage || null,
       metadata: {
         rejectedAt: contract.rejectedAt
       },
@@ -1585,7 +1582,7 @@ const rejectContract = async (req, res) => {
       transaction
     });
 
-    // 채팅방이 있다면 시스템 메시지 발송 (거절 시에는 채팅방이 없을 수 있음)
+    // 채팅방이 있다면 시스템 메시지 발송 (PENDING_APPROVAL 거절 시에는 채팅방이 없을 수 있음)
     const chatRoom = await ChatRoom.findOne({
       where: { contractId },
       transaction
@@ -1606,8 +1603,6 @@ const rejectContract = async (req, res) => {
         console.error('시스템 메시지 발송 실패 (계약 거절은 완료됨):', err);
       });
     }
-
-    // TODO: 렌탈 아이템 예약 해제 (재고 복구)
 
     // 게스트에게 거절 알림 전송 + 알림톡
     try {
