@@ -805,6 +805,7 @@ async function autoReturnDeposit() {
       await Contract.update(
         {
           depositStatus: 'RETURNED',
+          depositReturnedAt: now,
           updatedAt: now
         },
         {
@@ -816,8 +817,62 @@ async function autoReturnDeposit() {
 
     await transaction.commit();
 
-    // 보증금 반환 완료 시점 기준 채팅 쓰기 마감 시각 설정 (비동기, 트랜잭션 외부)
+    // 트랜잭션 외부: PG 취소 + 채팅 마감 설정
     for (const contract of pendingDeposits) {
+      const refundableDeposit = contract.refundableDeposit || 0;
+
+      // PG 환불 (보증금이 있는 경우)
+      if (refundableDeposit > 0) {
+        try {
+          const payment = await Payment.findOne({
+            where: { contractId: contract.id, paymentType: 'CONTRACT', status: 'DONE' },
+            order: [['createdAt', 'DESC']]
+          });
+
+          if (payment) {
+            const { orderno, orgpaydate, orgtranamt, loginid } = paytagClient.extractCancelParams(payment);
+            const newBalance = payment.balanceAmount - refundableDeposit;
+            const canceltype = newBalance === 0 ? '0' : '1';
+
+            await paytagClient.cancelPayment({
+              orderno,
+              orgpaydate,
+              orgtranamt,
+              loginid,
+              cancelamt: refundableDeposit,
+              canceltype
+            });
+
+            await payment.update({
+              balanceAmount: newBalance,
+              status: newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED'
+            });
+
+            console.log(`[스케줄러] 보증금 PG 환불 완료: contractId=${contract.id}, amount=${refundableDeposit}`);
+          }
+        } catch (pgErr) {
+          console.error(`[스케줄러] 보증금 PG 환불 실패 (contractId=${contract.id}):`, pgErr.message);
+
+          await Contract.update(
+            { depositStatus: 'REFUND_FAILED' },
+            { where: { id: contract.id } }
+          );
+
+          await PaymentFailureLog.create({
+            contractId: contract.id,
+            orderId: `DEPOSIT_AUTO_RETURN_${contract.id}`,
+            failureCode: pgErr.paytagErrorCode || 'PG_CANCEL_FAILED',
+            failureMessage: pgErr.paytagErrorMessage || pgErr.message,
+            requestData: {
+              type: 'DEPOSIT_AUTO_RETURN',
+              cancelamt: refundableDeposit
+            },
+            responseData: pgErr.paytagResponse || null
+          });
+        }
+      }
+
+      // 채팅 쓰기 마감 설정
       const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
       if (chatRoom) {
         setChatWritableUntil(chatRoom.firebaseChatRoomId, now).catch(err => {
