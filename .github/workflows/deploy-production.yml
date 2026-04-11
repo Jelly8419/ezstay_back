@@ -38,7 +38,10 @@ jobs:
 
       - name: Get GitHub Actions Runner IP
         id: ip
-        uses: haythem/public-ip@v1.3
+        run: |
+          IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+          echo "ipv4=$IP" >> $GITHUB_OUTPUT
+          echo "Runner IP: $IP"
 
       - name: Add GitHub Actions IP to EC2 Security Group
         env:
