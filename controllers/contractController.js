@@ -2472,108 +2472,83 @@ const getPaymentInfo = async (req, res) => {
  * POST /api/contracts/:contractId/confirm-payment
  */
 const confirmPayment = async (req, res) => {
-  const transaction = await sequelize.transaction();
+  const { contractId } = req.params;
+  const { recvPayparam, payType, orderId, amount } = req.body;
+  const guestId = req.user.id;
 
+  // ── 1단계: 검증 및 조회 (트랜잭션 밖 — 락 불필요) ──
+  if (!recvPayparam || !orderId || !amount) {
+    return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+  }
+
+  const contract = await Contract.findOne({
+    where: { id: contractId, guestId },
+    include: [{ model: Room, as: 'room', attributes: ['id', 'roomName', 'hostId'] }]
+  });
+
+  if (!contract) return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+  if (contract.status !== 'APPROVED') return error(res, ErrorCodes.PAYMENT_NOT_AVAILABLE, 400);
+  if (contract.orderId !== orderId) return error(res, ErrorCodes.ORDER_ID_MISMATCH, 400);
+
+  // 금액 검증 (클라이언트 변조 방지)
+  // 프론트는 항상 실제 금액을 보냄. 테스트 모드에서는 PG만 테스트금액으로 결제됨.
+  // 가상계좌/링크결제는 최소금액 제한이 있어 테스트 금액 적용 제외
+  const testAmount = paytagClient.getTestAmount(payType);
+  const realAmount = contract.finalTotalAmount;
+
+  if (realAmount !== parseInt(amount, 10)) return error(res, ErrorCodes.AMOUNT_MISMATCH, 400);
+
+  if (testAmount) {
+    console.log(`🧪 테스트 결제 모드: PG 결제 ${testAmount}원 → DB 저장 ${realAmount}원`);
+  }
+
+  // ── 2단계: PG 결제 승인 (트랜잭션 밖) ──
+  let paytagResponse;
   try {
-    const { contractId } = req.params;
-    const { recvPayparam, payType, orderId, amount } = req.body;
-    const guestId = req.user.id;
-
-    // 필수 파라미터 검증
-    if (!recvPayparam || !orderId || !amount) {
-      await transaction.rollback();
-      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
-    }
-
-    // 계약 조회
-    const contract = await Contract.findOne({
-      where: { id: contractId, guestId },
-      include: [
-        {
-          model: Room,
-          as: 'room',
-          attributes: ['id', 'roomName', 'hostId']
-        }
-      ],
-      transaction
+    paytagResponse = await paytagClient.confirmPayment({
+      recvPayparam,
+      payType: payType || 'CARD'
     });
+  } catch (paytagError) {
+    await PaymentFailureLog.create({
+      contractId: contract.id,
+      orderId,
+      failureCode: paytagError.paytagErrorCode || 'UNKNOWN',
+      failureMessage: paytagError.paytagErrorMessage || paytagError.message,
+      requestData: { recvPayparam: '(encrypted)', payType, orderId, amount },
+      responseData: paytagError.paytagResponse || null,
+      userAgent: req.headers['user-agent'],
+      ipAddress: req.ip || req.connection.remoteAddress
+    });
+    console.error('PayTag 결제 승인 실패:', paytagError.message);
+    return error(res, ErrorCodes.PAYMENT_CONFIRMATION_FAILED, 400, {
+      pgErrorCode: paytagError.paytagErrorCode,
+      pgErrorMessage: paytagError.paytagErrorMessage
+    });
+  }
 
-    if (!contract) {
-      await transaction.rollback();
-      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
-    }
+  // ── 3단계: DB 업데이트 (짧은 트랜잭션 — PG 성공 후) ──
+  // PG 성공 후 DB 실패 시 즉시 PG 취소 (보상 트랜잭션)
+  const now = new Date();
+  const paymentMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
+  const easyPayProvider = paytagClient.mapEasyPayProvider(payType || 'CARD');
+  const pgPaymentKey = paytagResponse.tran_key || paytagResponse.recv_orderno || orderId;
 
-    // 결제 가능 상태 확인
-    if (contract.status !== 'APPROVED') {
-      await transaction.rollback();
-      return error(res, ErrorCodes.PAYMENT_NOT_AVAILABLE, 400);
-    }
+  // TODO: 가상계좌(VBANK) 결제 지원 - 오픈 스펙 제외, 추후 구현
+  // - VBANK 선택 시 status: 'WAITING_FOR_DEPOSIT', Contract APPROVED 유지
+  // - 웹훅으로 입금 확인 후 DONE + PAYMENT_COMPLETED 전환
+  // - 입금 마감시간 검증: min(승인+24h, 체크인시간)
+  // - 관련 파일: controllers/paytagWebhookController.js, server.js 웹훅 라우트
 
-    // orderId 검증
-    if (contract.orderId !== orderId) {
-      await transaction.rollback();
-      return error(res, ErrorCodes.ORDER_ID_MISMATCH, 400);
-    }
-
-    // 금액 검증 (클라이언트 변조 방지)
-    // 프론트는 항상 실제 금액을 보냄. 테스트 모드에서는 PG만 테스트금액으로 결제됨.
-    // 가상계좌/링크결제는 최소금액 제한이 있어 테스트 금액 적용 제외
-    const testAmount = paytagClient.getTestAmount(payType);
-    const realAmount = contract.finalTotalAmount;
-
-    if (realAmount !== parseInt(amount, 10)) {
-      await transaction.rollback();
-      return error(res, ErrorCodes.AMOUNT_MISMATCH, 400);
-    }
-
-    if (testAmount) {
-      console.log(`🧪 테스트 결제 모드: PG 결제 ${testAmount}원 → DB 저장 ${realAmount}원`);
-    }
-
-    // PayTag 결제 승인 API 호출
-    let paytagResponse;
-    try {
-      paytagResponse = await paytagClient.confirmPayment({
-        recvPayparam,
-        payType: payType || 'CARD'
-      });
-    } catch (paytagError) {
-      await transaction.rollback();
-
-      // 실패 로그 기록
-      await PaymentFailureLog.create({
-        contractId: contract.id,
-        orderId,
-        failureCode: paytagError.paytagErrorCode || 'UNKNOWN',
-        failureMessage: paytagError.paytagErrorMessage || paytagError.message,
-        requestData: { recvPayparam: '(encrypted)', payType, orderId, amount },
-        responseData: paytagError.paytagResponse || null,
-        userAgent: req.headers['user-agent'],
-        ipAddress: req.ip || req.connection.remoteAddress
-      });
-
-      console.error('PayTag 결제 승인 실패:', paytagError.message);
-      return error(res, ErrorCodes.PAYMENT_CONFIRMATION_FAILED, 400, {
-        pgErrorCode: paytagError.paytagErrorCode,
-        pgErrorMessage: paytagError.paytagErrorMessage
-      });
-    }
-
-    const now = new Date();
-    const paymentMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
-    const easyPayProvider = paytagClient.mapEasyPayProvider(payType || 'CARD');
-
-    // TODO: 가상계좌(VBANK) 결제 지원 - 오픈 스펙 제외, 추후 구현
-    // - VBANK 선택 시 status: 'WAITING_FOR_DEPOSIT', Contract APPROVED 유지
-    // - 웹훅으로 입금 확인 후 DONE + PAYMENT_COMPLETED 전환
-    // - 입금 마감시간 검증: min(승인+24h, 체크인시간)
-    // - 관련 파일: controllers/paytagWebhookController.js, server.js 웹훅 라우트
-
+  let payment;
+  let initialRentalOrder;
+  const transaction = await sequelize.transaction();
+  try {
     // Payment 레코드 생성 (테스트 모드에서도 실제 금액으로 저장)
-    const payment = await Payment.create({
+    payment = await Payment.create({
       contractId: contract.id,
       paymentType: 'CONTRACT',
-      paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
+      paymentKey: pgPaymentKey,
       orderId: contract.orderId,
       method: paymentMethod,
       easyPayProvider,
@@ -2588,7 +2563,7 @@ const confirmPayment = async (req, res) => {
       currency: 'KRW',
       receiptUrl: paytagResponse.receipt_url || null,
       checkoutUrl: null,
-      paymentResponse: paytagResponse // 전체 응답 JSON 저장
+      paymentResponse: paytagResponse
     }, { transaction });
 
     // Contract 상태 업데이트
@@ -2598,82 +2573,32 @@ const confirmPayment = async (req, res) => {
       paidAt: now
     }, { transaction });
 
-    // 상태 변경 로그 기록
-    await ContractStatusLog.createLog({
-      contractId: contract.id,
-      fromStatus: 'APPROVED',
-      toStatus: 'PAYMENT_COMPLETED',
-      changedBy: 'GUEST',
-      changedByUserId: guestId,
-      reason: '게스트가 결제를 완료했습니다',
-      metadata: {
-        paymentKey: payment.paymentKey,
-        paymentMethod: payment.method,
-        totalAmount: payment.totalAmount
-      },
-      req,
-      transaction
-    });
-
     // 렌탈 주문이 있으면 함께 결제 처리
-    let initialRentalOrder = await RentalOrder.findOne({
-      where: {
-        contractId: contract.id,
-        orderType: 'INITIAL',
-        status: 'PENDING'
-      },
+    initialRentalOrder = await RentalOrder.findOne({
+      where: { contractId: contract.id, orderType: 'INITIAL', status: 'PENDING' },
       transaction
     });
 
     // rental_orders가 없지만 contracts.rental_items에 데이터가 있는 경우 (레거시 데이터 마이그레이션)
     if (!initialRentalOrder && contract.rentalItems && Array.isArray(contract.rentalItems) && contract.rentalItems.length > 0) {
       console.log(`📦 레거시 렌탈 아이템 마이그레이션: contractId=${contract.id}`);
-
-      // contracts.rental_items JSON 형식을 createInitialRentalOrder 형식으로 변환
       const rentalItemsForOrder = contract.rentalItems.map(item => ({
         itemId: item.itemId,
         quantity: item.quantity
       }));
-
       initialRentalOrder = await createInitialRentalOrder(
-        contract.id,
-        rentalItemsForOrder,
-        contract.checkInDate,
-        contract.checkOutDate,
-        guestId,
-        req,
-        transaction
+        contract.id, rentalItemsForOrder,
+        contract.checkInDate, contract.checkOutDate,
+        guestId, req, transaction
       );
       console.log(`✅ 레거시 렌탈 주문 생성 완료: rentalOrderId=${initialRentalOrder.id}`);
     }
 
     if (initialRentalOrder) {
       await confirmRentalOrderPayment(
-        initialRentalOrder,
-        payment.paymentKey,
-        paymentMethod,
-        guestId,
-        req,
-        transaction
+        initialRentalOrder, payment.paymentKey, paymentMethod, guestId, req, transaction
       );
       console.log(`✅ 렌탈 주문 결제 완료: rentalOrderId=${initialRentalOrder.id}`);
-    }
-
-    // 채팅방에 시스템 메시지 전송
-    const chatRoom = await ChatRoom.findOne({
-      where: { contractId: contract.id },
-      transaction
-    });
-
-    if (chatRoom && chatRoom.firebaseChatRoomId) {
-      await sendSystemMessage(
-        chatRoom.firebaseChatRoomId,
-        SystemMessageTypes.PAYMENT_COMPLETED,
-        {
-          amount: payment.totalAmount,
-          paymentMethod: payment.method
-        }
-      );
     }
 
     // Settlement + Payout 생성 (CONTRACT_SETTLEMENT)
@@ -2696,13 +2621,12 @@ const confirmPayment = async (req, res) => {
       cleaningFee: settlementAmounts.cleaningFee,
       hostPlatformFee: settlementAmounts.platformFee,
       refundDeduction: 0,
-      grossAmount: settlementAmounts.grossAmount,       // 할인/수수료 전 총액
-      netAmount: settlementAmounts.grossSettlement,     // 수수료 차감 후 (초기 환불 없음)
+      grossAmount: settlementAmounts.grossAmount,
+      netAmount: settlementAmounts.grossSettlement,
       expectedDate: settlementExpectedDate,
       payoutAvailableDate
     }, { transaction });
 
-    // 호스트 계좌 정보 조회
     const hostBankAccount = await require('../models').UserBankAccount.findOne({
       where: { userId: contract.hostId, isPrimary: true }
     });
@@ -2723,81 +2647,135 @@ const confirmPayment = async (req, res) => {
 
     await transaction.commit();
 
-    // 트랜잭션 커밋 후 호스트 자동메시지 발송 (비동기, 실패해도 결제 성공에 영향 없음)
-    sendContractConfirmedMessages(contract.id, contract.roomId).catch(err => {
-      console.error(`[자동메시지] 계약 확정 메시지 발송 실패 (무시됨):`, err);
-    });
-
-    // 결제 완료 알림 (호스트 + 게스트) + 알림톡
-    // 옵션 상품 정보 조회 (있는 경우에만)
-    let optionItems = '';
-    if (initialRentalOrder) {
-      try {
-        const orderItems = await RentalOrderItem.findAll({
-          where: { rentalOrderId: initialRentalOrder.id },
-          include: [{ model: RentalItem, as: 'rentalItem', attributes: ['name'] }]
-        });
-        if (orderItems.length > 0) {
-          optionItems = orderItems.map(i => `${i.rentalItem?.name || '옵션'} ${i.quantity}개`).join('\n');
-        }
-      } catch (rentalErr) {
-        console.error('렌탈 아이템 조회 실패 (무시됨):', rentalErr);
-      }
-    }
-
-    NotificationService.notifyPaymentCompleted(contract, {
-      guest: await User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
-      host: await User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
-      room: contract.room,
-      paymentData: { guestAmount: payment.totalAmount, hostAmount: contract.totalUsageFee, optionItems }
-    }).catch(err => {
-      console.error('결제 완료 알림 전송 실패 (무시됨):', err);
-    });
-
-    // 예약된 결제 만료 알림 취소 + 새 알림 예약 (Bull Queue)
-    try {
-      const { cancelScheduledNotification, schedulePaymentCompletedNotifications } = require('../queues/notificationQueue');
-      // 결제 만료 알림 취소
-      await cancelScheduledNotification(contract.id);
-      // 입주 당일 + 옵션 마감 알림 예약
-      await schedulePaymentCompletedNotifications(contract.id, contract.checkInDate);
-    } catch (queueErr) {
-      console.error('알림 큐 처리 실패 (무시됨):', queueErr);
-    }
-
-    console.log(`✅ 결제 승인 완료: contractId=${contract.id}, paymentKey=${payment.paymentKey}`);
-
-    // 응답 데이터 구성
-    const responseData = {
-      contractId: contract.id,
-      orderId: contract.orderId,
-      status: contract.status,
-      payment: {
-        paymentKey: payment.paymentKey,
-        method: payment.method,
-        status: payment.status,
-        totalAmount: payment.totalAmount,
-        approvedAt: payment.approvedAt,
-        receiptUrl: payment.receiptUrl
-      }
-    };
-
-    // 렌탈 주문 정보 추가
-    if (initialRentalOrder) {
-      responseData.rentalOrder = {
-        rentalOrderId: initialRentalOrder.rentalOrderId,
-        totalAmount: parseFloat(initialRentalOrder.totalAmount),
-        status: 'PAID'
-      };
-    }
-
-    return success(res, responseData, '결제가 완료되었습니다');
-
-  } catch (err) {
+  } catch (dbErr) {
     await transaction.rollback();
-    console.error('결제 승인 오류:', err);
+    console.error('결제 DB 업데이트 실패 — PG 즉시 취소 시도:', dbErr);
+
+    // PG 성공 후 DB 실패 → 보상 트랜잭션: PG 즉시 취소
+    try {
+      const { orderno, orgpaydate, orgtranamt } = paytagClient.extractCancelParams({
+        paymentResponse: paytagResponse,
+        orderId
+      });
+      await paytagClient.cancelPayment({ orderno, orgpaydate, orgtranamt, loginid: null, cancelamt: realAmount, canceltype: '0' });
+      console.error(`결제 취소 완료 (보상): contractId=${contract.id}, orderId=${orderId}`);
+    } catch (cancelErr) {
+      // PG 취소도 실패한 경우 — 수동 처리 필요
+      console.error(`[긴급] PG 취소 실패 — 수동 환불 필요: contractId=${contract.id}, orderId=${orderId}`, cancelErr);
+      await PaymentFailureLog.create({
+        contractId: contract.id,
+        orderId,
+        failureCode: 'DB_FAIL_PG_CANCEL_FAIL',
+        failureMessage: `DB 업데이트 실패 후 PG 취소도 실패. 수동 환불 필요. DB오류: ${dbErr.message} / PG취소오류: ${cancelErr.message}`,
+        requestData: { payType, orderId, amount: realAmount },
+        responseData: paytagResponse
+      }).catch(() => {});
+    }
+
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
+
+  // ── 4단계: 커밋 후 후속 처리 (트랜잭션 밖) ──
+
+  // 상태 변경 로그 기록
+  try {
+    await ContractStatusLog.createLog({
+      contractId: contract.id,
+      fromStatus: 'APPROVED',
+      toStatus: 'PAYMENT_COMPLETED',
+      changedBy: 'GUEST',
+      changedByUserId: guestId,
+      reason: '게스트가 결제를 완료했습니다',
+      metadata: {
+        paymentKey: payment.paymentKey,
+        paymentMethod: payment.method,
+        totalAmount: payment.totalAmount
+      },
+      req
+    });
+  } catch (logErr) {
+    console.error('결제 상태 로그 기록 실패 (무시됨):', logErr);
+  }
+
+  // 채팅방 시스템 메시지
+  try {
+    const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
+    if (chatRoom?.firebaseChatRoomId) {
+      await sendSystemMessage(chatRoom.firebaseChatRoomId, SystemMessageTypes.PAYMENT_COMPLETED, {
+        amount: payment.totalAmount,
+        paymentMethod: payment.method
+      });
+    }
+  } catch (chatErr) {
+    console.error('채팅 시스템 메시지 실패 (무시됨):', chatErr);
+  }
+
+  // 트랜잭션 커밋 후 호스트 자동메시지 발송 (비동기, 실패해도 결제 성공에 영향 없음)
+  sendContractConfirmedMessages(contract.id, contract.roomId).catch(err => {
+    console.error(`[자동메시지] 계약 확정 메시지 발송 실패 (무시됨):`, err);
+  });
+
+  // 결제 완료 알림 (호스트 + 게스트) + 알림톡
+  // 옵션 상품 정보 조회 (있는 경우에만)
+  let optionItems = '';
+  if (initialRentalOrder) {
+    try {
+      const orderItems = await RentalOrderItem.findAll({
+        where: { rentalOrderId: initialRentalOrder.id },
+        include: [{ model: RentalItem, as: 'rentalItem', attributes: ['name'] }]
+      });
+      if (orderItems.length > 0) {
+        optionItems = orderItems.map(i => `${i.rentalItem?.name || '옵션'} ${i.quantity}개`).join('\n');
+      }
+    } catch (rentalErr) {
+      console.error('렌탈 아이템 조회 실패 (무시됨):', rentalErr);
+    }
+  }
+
+  NotificationService.notifyPaymentCompleted(contract, {
+    guest: await User.findByPk(contract.guestId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+    host: await User.findByPk(contract.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] }),
+    room: contract.room,
+    paymentData: { guestAmount: payment.totalAmount, hostAmount: contract.totalUsageFee, optionItems }
+  }).catch(err => {
+    console.error('결제 완료 알림 전송 실패 (무시됨):', err);
+  });
+
+  // 예약된 결제 만료 알림 취소 + 새 알림 예약 (Bull Queue)
+  try {
+    const { cancelScheduledNotification, schedulePaymentCompletedNotifications } = require('../queues/notificationQueue');
+    await cancelScheduledNotification(contract.id);
+    await schedulePaymentCompletedNotifications(contract.id, contract.checkInDate);
+  } catch (queueErr) {
+    console.error('알림 큐 처리 실패 (무시됨):', queueErr);
+  }
+
+  console.log(`✅ 결제 승인 완료: contractId=${contract.id}, paymentKey=${payment.paymentKey}`);
+
+  // 응답 데이터 구성
+  const responseData = {
+    contractId: contract.id,
+    orderId: contract.orderId,
+    status: contract.status,
+    payment: {
+      paymentKey: payment.paymentKey,
+      method: payment.method,
+      status: payment.status,
+      totalAmount: payment.totalAmount,
+      approvedAt: payment.approvedAt,
+      receiptUrl: payment.receiptUrl
+    }
+  };
+
+  if (initialRentalOrder) {
+    responseData.rentalOrder = {
+      rentalOrderId: initialRentalOrder.rentalOrderId,
+      totalAmount: parseFloat(initialRentalOrder.totalAmount),
+      status: 'PAID'
+    };
+  }
+
+  return success(res, responseData, '결제가 완료되었습니다');
 };
 
 /**
