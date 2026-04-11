@@ -1762,6 +1762,23 @@ exports.getRentalRefundRequestDetail = async (req, res) => {
       }
     });
 
+    // 해당 주문의 CANCEL_REQUESTED 로그에서 신청 사유 목록 추출
+    const cancelLogs = await RentalOrderLog.findAll({
+      where: {
+        rentalOrderId: refundRequest.rentalOrderId,
+        action: 'CANCEL_REQUESTED'
+      },
+      order: [['created_at', 'ASC']],
+      attributes: ['metadata', 'createdAt']
+    });
+    const cancelReasons = cancelLogs
+      .filter(log => log.metadata?.reason)
+      .map(log => ({
+        reason: log.metadata.reason,
+        cancelledItemIds: log.metadata.cancelledItemIds || [],
+        requestedAt: log.createdAt
+      }));
+
     return success(res, {
       id: refundRequest.id,
       status: refundRequest.status,
@@ -1777,6 +1794,7 @@ exports.getRentalRefundRequestDetail = async (req, res) => {
       retrievalStartedAt: refundRequest.retrievalStartedAt,
       retrievalCompletedAt: refundRequest.retrievalCompletedAt,
       cancelReason: refundRequest.cancelReason,
+      cancelReasons,
       rejectReason: refundRequest.rejectReason,
       adminId: refundRequest.adminId,
       processedAt: refundRequest.processedAt,
@@ -1798,7 +1816,8 @@ exports.getRentalRefundRequestDetail = async (req, res) => {
           quantity: item.quantity,
           pricePerItem: parseFloat(item.pricePerItem),
           totalPrice: parseFloat(item.totalPrice),
-          status: item.status
+          status: item.status,
+          cancelReason: item.cancelReason || null
         })),
         payment: refundRequest.rentalOrder.payment ? {
           balanceAmount: parseFloat(refundRequest.rentalOrder.payment.balanceAmount),
