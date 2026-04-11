@@ -1545,25 +1545,29 @@ const RETRIEVAL_SHIPPING_COST = 7000;
 
 /**
  * 반품 신청 전 환불 예상 금액 조회
- * GET /api/contracts/:contractId/rental-items/return-preview
+ * POST /api/contracts/:contractId/rental-items/return-preview
  *
  * @description 선택한 아이템에 대한 환불 예정 금액 및 수거비 차감 여부 미리 확인.
  *              관리자 승인 로직(approveRentalRefundRequest)과 동일한 기준으로 계산.
+ * @body { items: [{ id, returnQuantity }] }
  */
 const getReturnRefundPreview = async (req, res) => {
   try {
     const { contractId } = req.params;
-    const itemIdsRaw = req.query.itemIds;
+    const { items: returnRequests } = req.body;
     const userId = req.user.id;
 
-    if (!itemIdsRaw) {
-      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { details: 'itemIds 쿼리 파라미터가 필요합니다.' });
-    }
-
-    const itemIds = String(itemIdsRaw).split(',').map(Number).filter(Boolean);
-    if (itemIds.length === 0) {
+    if (!Array.isArray(returnRequests) || returnRequests.length === 0) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { details: '조회할 아이템을 선택해주세요.' });
     }
+    for (const r of returnRequests) {
+      if (!r.id || !Number.isInteger(r.returnQuantity) || r.returnQuantity < 1) {
+        return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { details: `아이템(${r.id})의 returnQuantity가 올바르지 않습니다.` });
+      }
+    }
+
+    const returnQtyMap = new Map(returnRequests.map(r => [r.id, r.returnQuantity]));
+    const itemIds = returnRequests.map(r => r.id);
 
     // 계약 조회 + 권한 확인
     const contract = await Contract.findByPk(contractId);
@@ -1576,6 +1580,16 @@ const getReturnRefundPreview = async (req, res) => {
       groups = await groupItemsByOrder(itemIds, parseInt(contractId), null);
     } catch (validErr) {
       return error(res, { code: validErr.code || 4460, message: validErr.message }, validErr.status || 400);
+    }
+
+    // returnQuantity 범위 검증
+    for (const { items } of groups.values()) {
+      for (const item of items) {
+        const returnQty = returnQtyMap.get(item.id);
+        if (returnQty > item.quantity) {
+          return error(res, { code: 4466, message: `아이템(${item.id})의 반품 수량(${returnQty})이 보유 수량(${item.quantity})을 초과합니다.` }, 400);
+        }
+      }
     }
 
     // 같은 계약 내 RETRIEVAL_PENDING 건 수 조회 (수거비 면제 판단)
@@ -1591,7 +1605,10 @@ const getReturnRefundPreview = async (req, res) => {
     let totalShippingDeduction = 0;
 
     for (const [, { rentalOrder, items }] of groups) {
-      const itemTotalAmount = items.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
+      const itemTotalAmount = items.reduce((sum, item) => {
+        const returnQty = returnQtyMap.get(item.id);
+        return sum + parseFloat(item.pricePerItem) * returnQty;
+      }, 0);
       const needsRetrieval = ['IN_TRANSIT', 'DELIVERED'].includes(rentalOrder.deliveryStatus);
 
       // 수거비 차감: 배송중/완료이고, 이미 수거 예정 건이 없을 때만 7000원 차감
@@ -1616,8 +1633,9 @@ const getReturnRefundPreview = async (req, res) => {
         items: items.map(i => ({
           id: i.id,
           name: i.rentalItem?.name,
-          quantity: i.quantity,
-          totalPrice: parseFloat(i.totalPrice)
+          returnQuantity: returnQtyMap.get(i.id),
+          pricePerItem: parseFloat(i.pricePerItem),
+          itemTotalAmount: parseFloat(i.pricePerItem) * returnQtyMap.get(i.id)
         }))
       });
 
