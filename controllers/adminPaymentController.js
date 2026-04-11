@@ -1479,6 +1479,16 @@ exports.processAdminRentalRefund = async (req, res) => {
       }
     }
 
+    // PENDING 환불 요청이 있을 경우 요청 총금액 초과 여부 검증
+    const pendingRefundRequestForValidation = await RentalOrderRefundRequest.findOne({
+      where: { rentalOrderId: rentalOrder.id, status: 'PENDING' }
+    });
+    if (pendingRefundRequestForValidation && finalRefundAmount > pendingRefundRequestForValidation.itemTotalAmount) {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, {
+        message: `환불 금액(${finalRefundAmount}원)이 게스트 환불 요청 금액(${pendingRefundRequestForValidation.itemTotalAmount}원)을 초과합니다.`
+      });
+    }
+
     const newBalance = availableBalance - finalRefundAmount;
     const newPaymentStatus = newBalance === 0 ? 'CANCELED' : 'PARTIAL_CANCELED';
     const newRefundedAmount = parseFloat(rentalOrder.refundedAmount || 0) + finalRefundAmount;
@@ -1529,6 +1539,22 @@ exports.processAdminRentalRefund = async (req, res) => {
         balanceAmount: newBalance,
         status: newPaymentStatus
       }, { transaction });
+
+      // 해당 주문에 PENDING 환불 요청이 있으면 APPROVED로 처리
+      // (게스트가 환불 요청을 넣은 상태에서 관리자가 직접 환불한 경우)
+      const pendingRefundRequest = await RentalOrderRefundRequest.findOne({
+        where: { rentalOrderId: rentalOrder.id, status: 'PENDING' },
+        transaction
+      });
+
+      if (pendingRefundRequest) {
+        await pendingRefundRequest.update({
+          status: 'APPROVED',
+          adminId,
+          processedAt: now,
+          finalRefundAmount
+        }, { transaction });
+      }
 
       await transaction.commit();
     } catch (dbErr) {
