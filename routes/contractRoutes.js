@@ -20,6 +20,7 @@ const {
   requestCheckout,
   confirmCheckout,
   getHostCancelPreview,
+  prepareHostCancelPayment,
   cancelContractByHost,
   requestCancelByHost,
   holdCheckout,
@@ -259,6 +260,12 @@ router.post('/:contractId/confirm-checkout', authenticateToken, confirmCheckout)
  * GET /api/contracts/:contractId/cancel-by-host/preview
  */
 router.get('/:contractId/cancel-by-host/preview', authenticateToken, getHostCancelPreview);
+
+/**
+ * 호스트 취소 결제 준비 — 호스트 부담금 결제용 orderId 발급
+ * POST /api/contracts/:contractId/cancel-by-host/prepare
+ */
+router.post('/:contractId/cancel-by-host/prepare', authenticateToken, prepareHostCancelPayment);
 
 /**
  * 호스트가 계약 취소 (부담금 결제 → 게스트 환불)

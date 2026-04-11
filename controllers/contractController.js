@@ -3237,8 +3237,6 @@ const getHostCancelPreview = async (req, res) => {
     const hostBurdenAmount = d.penaltyAmount + (d.guestServiceFeeRefunded ? 0 : d.originalPlatformFee);
 
     return success(res, {
-      orderId: contract.orderId,
-
       // 원본 결제 항목별 금액
       originalRentalFee: d.originalRentalFee,
       originalCleaningFee: d.originalCleaningFee,
@@ -3274,6 +3272,71 @@ const getHostCancelPreview = async (req, res) => {
     }, '호스트 취소 부담금 미리보기');
   } catch (err) {
     console.error('호스트 취소 미리보기 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 호스트 취소 결제 준비 — 호스트 부담금 결제용 orderId 발급
+ * POST /api/contracts/:contractId/cancel-by-host/prepare
+ *
+ * 호스트가 "취소 확정" 버튼을 누르는 시점에 호출.
+ * 이미 발급된 hostBurdenOrderId가 있으면 재사용, 없으면 새로 생성하여 저장.
+ * 프론트는 응답받은 orderId로 PG 결제창을 호출한다.
+ */
+const prepareHostCancelPayment = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { contractId } = req.params;
+    const hostId = req.user.id;
+
+    const contract = await Contract.findByPk(contractId, {
+      include: [{ model: User, as: 'host', attributes: ['name', 'phoneNumber'] }],
+      transaction
+    });
+
+    if (!contract) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.CONTRACT_NOT_FOUND, 404);
+    }
+
+    if (contract.hostId !== hostId) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.FORBIDDEN, 403);
+    }
+
+    if (contract.status !== 'PAYMENT_COMPLETED') {
+      await transaction.rollback();
+      return error(res, { code: 4621, message: '결제 완료 상태에서만 호스트 취소가 가능합니다.' }, 400);
+    }
+
+    // 호스트 부담금 계산
+    const refundResult = await calculateRefund(contract, new Date(), { faultType: 'HOST' });
+    if (!refundResult.success) {
+      await transaction.rollback();
+      return error(res, { code: 4623, message: `환불 계산 실패: ${refundResult.error.message}` }, 500);
+    }
+    const d = refundResult.data;
+    const hostBurdenAmount = d.penaltyAmount + (d.guestServiceFeeRefunded ? 0 : d.originalPlatformFee);
+
+    // 이미 발급된 orderId가 있으면 재사용 (멱등성 보장)
+    let hostBurdenOrderId = contract.hostBurdenOrderId;
+    if (!hostBurdenOrderId) {
+      hostBurdenOrderId = await generateOrderId(transaction);
+      await contract.update({ hostBurdenOrderId }, { transaction });
+    }
+
+    await transaction.commit();
+
+    return success(res, {
+      orderId: hostBurdenOrderId,
+      hostBurdenAmount,
+      customerName: contract.host.name,
+      customerPhone: contract.host.phoneNumber || null
+    }, '호스트 부담금 결제 준비 완료');
+  } catch (err) {
+    await transaction.rollback();
+    console.error('호스트 취소 결제 준비 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
 };
@@ -3331,7 +3394,7 @@ const cancelContractByHost = async (req, res) => {
         return error(res, { code: 4624, message: '부담금 결제 정보가 필요합니다. (recvPayparam, orderId, amount)' }, 400);
       }
 
-      if (contract.orderId !== orderId) {
+      if (!contract.hostBurdenOrderId || contract.hostBurdenOrderId !== orderId) {
         await transaction.rollback();
         return error(res, ErrorCodes.ORDER_ID_MISMATCH, 400);
       }
@@ -3363,7 +3426,7 @@ const cancelContractByHost = async (req, res) => {
         contractId: contract.id,
         paymentType: 'HOST_BURDEN',
         paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
-        orderId: contract.orderId,
+        orderId: contract.hostBurdenOrderId,
         method: paymentMethod,
         easyPayProvider,
         status: 'DONE',
@@ -4561,8 +4624,8 @@ const confirmHostBurdenPayment = async (req, res) => {
       }, 400);
     }
 
-    // orderId 검증 (계약 orderId 기반)
-    if (contract.orderId !== orderId) {
+    // orderId 검증 (prepare 시 발급한 hostBurdenOrderId 기반)
+    if (!contract.hostBurdenOrderId || contract.hostBurdenOrderId !== orderId) {
       await transaction.rollback();
       return error(res, ErrorCodes.ORDER_ID_MISMATCH, 400);
     }
@@ -4603,7 +4666,7 @@ const confirmHostBurdenPayment = async (req, res) => {
       contractId: contract.id,
       paymentType: 'HOST_BURDEN',
       paymentKey: paytagResponse.tran_key || paytagResponse.recv_orderno || orderId,
-      orderId: contract.orderId,
+      orderId: contract.hostBurdenOrderId,
       method: paymentMethod,
       easyPayProvider,
       status: 'DONE',
@@ -4849,6 +4912,7 @@ module.exports = {
   requestCheckout,
   confirmCheckout,
   getHostCancelPreview,
+  prepareHostCancelPayment,
   cancelContractByHost,
   requestCancelByHost,
   holdCheckout,
