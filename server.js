@@ -71,7 +71,7 @@ const corsOptions = {
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-  exposedHeaders: ['Content-Length', 'Content-Type']
+  exposedHeaders: ['Content-Length', 'Content-Type', 'Content-Disposition']
 };
 // KMC 본인인증 콜백은 KMC 서버에서 직접 POST하므로 CORS 건너뛰기
 const corsMiddleware = cors(corsOptions);

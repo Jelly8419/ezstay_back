@@ -524,6 +524,13 @@ const Contract = sequelize.define('Contract', {
     comment: '보류 승인 관리자 ID'
   },
 
+  hostBurdenOrderId: {
+    type: DataTypes.STRING(11),
+    allowNull: true,
+    field: 'host_burden_order_id',
+    comment: '호스트 부담금 결제용 주문번호 (cancel-by-host/prepare 호출 시 발급)'
+  },
+
   createdAt: {
     type: DataTypes.DATE,
     allowNull: false,
