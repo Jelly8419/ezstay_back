@@ -71,6 +71,7 @@ const getSettlements = async (req, res) => {
     // 계약 목록 조회
     const { count, rows: contracts } = await Contract.findAndCountAll({
       where: whereCondition,
+      subQuery: false,
       include: [
         {
           model: Settlement,
@@ -498,17 +499,11 @@ const exportSettlements = async (req, res) => {
     const periodStr = (startDate && endDate)
       ? `${startDate}~${endDate}`
       : (startDate ? `${startDate}~` : (endDate ? `~${endDate}` : '전체'));
-    const fileName = encodeURIComponent(`정산내역(${periodStr})`) + '.xlsx';
+    const rawFileName = `정산내역(${periodStr}).xlsx`;
 
     // 응답 헤더 설정
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    );
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${fileName}"; filename*=UTF-8''${fileName}`
-    );
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(rawFileName)}`);
 
     return res.send(buffer);
   } catch (err) {
