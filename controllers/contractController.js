@@ -3229,7 +3229,8 @@ const getHostCancelPreview = async (req, res) => {
     }
 
     const d = refundResult.data;
-    const hostBurdenAmount = d.penaltyAmount + d.originalPlatformFee;
+    // refundRate=100(무료 취소)이면 platformFee는 게스트 환불에 포함되므로 호스트 부담 불필요
+    const hostBurdenAmount = d.penaltyAmount + (d.guestServiceFeeRefunded ? 0 : d.originalPlatformFee);
 
     return success(res, {
       orderId: contract.orderId,
@@ -3315,7 +3316,8 @@ const cancelContractByHost = async (req, res) => {
     }
 
     const refundData = refundResult.data;
-    const hostBurdenAmount = refundData.penaltyAmount + refundData.originalPlatformFee;
+    // refundRate=100(무료 취소)이면 platformFee는 게스트 환불에 포함되므로 호스트 부담 불필요
+    const hostBurdenAmount = refundData.penaltyAmount + (refundData.guestServiceFeeRefunded ? 0 : refundData.originalPlatformFee);
 
     // [2] 호스트 부담금 PG 결제 (hostBurdenAmount > 0인 경우만)
     let hostPayment = null;
