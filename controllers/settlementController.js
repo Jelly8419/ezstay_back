@@ -2,7 +2,7 @@
  * Settlement Controller
  * 호스트 정산 관리 API
  */
-const { Contract, Room, RoomPhoto, User, Refund, UserBankAccount, EzService, Payout, DepositAgreement, sequelize } = require('../models');
+const { Contract, Room, RoomPhoto, User, Refund, UserBankAccount, EzService, Payout, DepositAgreement, Settlement, sequelize } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 const { toDateStrKST, todayKST, toKSTString } = require('../utils/dateHelper');
 const { toAbsoluteUrl } = require('../utils/urlHelper');
@@ -42,13 +42,6 @@ const getSettlements = async (req, res) => {
     } = req.query;
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    // 정산 기준일 (입주일 + 3영업일 ≈ 5 calendar days)
-    // 정산 예정일이 오늘 이전이면 완료, 이후면 대기
-    const settlementCutoffDate = new Date(today);
-    settlementCutoffDate.setDate(settlementCutoffDate.getDate() - 5);
 
     // 기본 WHERE 조건
     const whereCondition = {
@@ -56,63 +49,22 @@ const getSettlements = async (req, res) => {
       status: 'COMPLETED'
     };
 
-    // 탭에 따른 조건 분기 (입주일 기준)
+    // Settlement 탭 조건 (Settlement.status 기반)
+    const settlementWhere = { hostId };
     if (tab === 'pending') {
-      // 정산 대기:
-      //   1) 계약 정산 미완료 (입주일 + 3영업일 미경과)
-      //   OR
-      //   2) 보증금 차감 Payout이 아직 미지급 (PENDING/PAYABLE) 상태
-      whereCondition[Op.or] = [
-        { checkInDate: { [Op.gte]: settlementCutoffDate } },
-        {
-          id: {
-            [Op.in]: literal(
-              `(SELECT contract_id FROM payouts
-                WHERE payout_type = 'DEPOSIT_DEDUCTION'
-                  AND recipient_type = 'HOST'
-                  AND recipient_id = ${hostId}
-                  AND status IN ('PENDING', 'PAYABLE'))`
-            )
-          }
-        }
-      ];
+      settlementWhere.status = { [Op.in]: ['PENDING', 'READY', 'PROCESSING', 'ON_HOLD', 'FAILED'] };
     } else if (tab === 'completed') {
-      // 정산 완료:
-      //   계약 정산 완료 (입주일 + 3영업일 경과)
-      //   AND 차감 Payout이 없거나 모두 완료/취소된 상태
-      whereCondition.checkInDate = { [Op.lt]: settlementCutoffDate };
-      whereCondition.id = {
-        [Op.notIn]: literal(
-          `(SELECT contract_id FROM payouts
-            WHERE payout_type = 'DEPOSIT_DEDUCTION'
-              AND recipient_type = 'HOST'
-              AND recipient_id = ${hostId}
-              AND status IN ('PENDING', 'PAYABLE'))`
-        )
-      };
+      settlementWhere.status = 'COMPLETED';
 
-      // 완료 탭에서만 필터 적용
+      // 완료 탭에서만 방/날짜 필터 적용
       if (roomId) {
         whereCondition.roomId = parseInt(roomId);
       }
-
-      // 날짜 필터 (정산일 기준, 역산: 입주일 + 5일 ≈ 정산일)
       if (startDate || endDate) {
         const dateFilter = {};
-        if (startDate) {
-          const filterStart = new Date(startDate + 'T00:00:00');
-          filterStart.setDate(filterStart.getDate() - 5);
-          dateFilter[Op.gte] = filterStart;
-        }
-        if (endDate) {
-          const filterEnd = new Date(endDate + 'T00:00:00');
-          filterEnd.setDate(filterEnd.getDate() - 5);
-          dateFilter[Op.lte] = filterEnd;
-        }
-        whereCondition.checkInDate = {
-          ...whereCondition.checkInDate,
-          ...dateFilter
-        };
+        if (startDate) dateFilter[Op.gte] = startDate;
+        if (endDate) dateFilter[Op.lte] = endDate;
+        settlementWhere.expectedDate = dateFilter;
       }
     }
 
@@ -120,6 +72,13 @@ const getSettlements = async (req, res) => {
     const { count, rows: contracts } = await Contract.findAndCountAll({
       where: whereCondition,
       include: [
+        {
+          model: Settlement,
+          as: 'settlement',
+          attributes: ['status', 'expectedDate', 'netAmount', 'completedAt'],
+          where: settlementWhere,
+          required: true
+        },
         {
           model: Room,
           as: 'room',
@@ -164,7 +123,7 @@ const getSettlements = async (req, res) => {
           required: false
         }
       ],
-      order: [['checkOutDate', tab === 'pending' ? 'ASC' : 'DESC']],
+      order: [[{ model: Settlement, as: 'settlement' }, 'expectedDate', tab === 'pending' ? 'ASC' : 'DESC']],
       limit: parseInt(limit),
       offset
     });
@@ -172,15 +131,14 @@ const getSettlements = async (req, res) => {
     // 정산 정보 가공
     const settlements = contracts.map(contract => {
       const hasEzCleaningService = contract.snapshot?.ezService?.cleaningService || false;
-      const settlement = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
-      const status = getSettlementStatus(contract.checkInDate);
-      const settlementDate = calculateSettlementDate(contract.checkInDate);
+      const settlementCalc = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
+      const settlementRecord = contract.settlement;
 
       const depositDeductionPayout = contract.payouts?.find(p => p.payoutType === 'DEPOSIT_DEDUCTION') || null;
 
       return {
         contractId: contract.id,
-        contractNumber: contract.contractNumber,
+        contractNumber: contract.orderId,
         roomId: contract.room?.id,
         roomTitle: contract.room?.roomName,
         roomThumbnail: toAbsoluteUrl(contract.room?.photos?.[0]?.url || null),
@@ -188,13 +146,13 @@ const getSettlements = async (req, res) => {
         checkInDate: toKSTString(contract.checkInDate),
         checkOutDate: toKSTString(contract.checkOutDate),
         rentalDays: calculateRentalDays(contract.checkInDate, contract.checkOutDate),
-        settlementAmount: settlement.finalAmount,
-        settlementDate: toDateStrKST(settlementDate),
-        status,
-        statusLabel: SETTLEMENT_STATUS_LABELS[status],
-        hasRefund: settlement.refund.hasRefund,
-        refundAmount: settlement.refund.totalRefundAmount,
-        hasEzCleaningService,  // EZ청소서비스 사용 여부
+        settlementAmount: settlementRecord?.netAmount ?? settlementCalc.finalAmount,
+        settlementDate: settlementRecord?.expectedDate ?? toDateStrKST(calculateSettlementDate(contract.checkInDate)),
+        status: settlementRecord?.status ?? 'PENDING',
+        statusLabel: Settlement.STATUS_LABELS[settlementRecord?.status] ?? Settlement.STATUS_LABELS.PENDING,
+        hasRefund: settlementCalc.refund.hasRefund,
+        refundAmount: settlementCalc.refund.totalRefundAmount,
+        hasEzCleaningService,
         depositDeduction: depositDeductionPayout ? {
           amount: depositDeductionPayout.amount,
           status: depositDeductionPayout.status,
@@ -204,66 +162,25 @@ const getSettlements = async (req, res) => {
       };
     });
 
-    // 전체 건수 집계 (탭과 관계없이)
-    const pendingDeductionSubquery = `(SELECT contract_id FROM payouts
-      WHERE payout_type = 'DEPOSIT_DEDUCTION'
-        AND recipient_type = 'HOST'
-        AND recipient_id = ${hostId}
-        AND status IN ('PENDING', 'PAYABLE'))`;
-
+    // 전체 건수 집계 (탭과 관계없이, Settlement.status 기반)
     const [pendingCount, completedCount] = await Promise.all([
-      Contract.count({
+      Settlement.count({
         where: {
           hostId,
-          status: 'COMPLETED',
-          [Op.or]: [
-            { checkInDate: { [Op.gte]: settlementCutoffDate } },
-            { id: { [Op.in]: literal(pendingDeductionSubquery) } }
-          ]
+          status: { [Op.in]: ['PENDING', 'READY', 'PROCESSING', 'ON_HOLD', 'FAILED'] }
         }
       }),
-      Contract.count({
-        where: {
-          hostId,
-          status: 'COMPLETED',
-          checkInDate: { [Op.lt]: settlementCutoffDate },
-          id: { [Op.notIn]: literal(pendingDeductionSubquery) }
-        }
+      Settlement.count({
+        where: { hostId, status: 'COMPLETED' }
       })
     ]);
 
-    // totalSettlementAmount: calculateSettlementAmount()로 정확히 계산
-    // (hostPlatformFee=0 계약의 동적 3.3% 계산, discountAmount, EZ청소서비스, 환불 모두 반영)
-    const allContractsForSum = await Contract.findAll({
-      where: whereCondition,
-      attributes: [
-        'id', 'rentalFee', 'maintenanceFee', 'cleaningFee',
-        'discountAmount', 'hostPlatformFee', 'snapshot'
-      ],
-      include: [
-        {
-          model: Refund,
-          as: 'refunds',
-          attributes: ['refundStatus', 'rentalFeeRefundAmount', 'maintenanceFeeRefundAmount', 'cleaningFeeRefundAmount'],
-          required: false
-        },
-        {
-          model: Payout,
-          as: 'payouts',
-          attributes: ['amount', 'status'],
-          where: { payoutType: 'DEPOSIT_DEDUCTION', recipientType: 'HOST' },
-          required: false
-        }
-      ]
+    // totalSettlementAmount: Settlement.netAmount 합산 (저장값 우선, 없으면 런타임 계산)
+    const allSettlementsForSum = await Settlement.findAll({
+      where: settlementWhere,
+      attributes: ['contractId', 'netAmount']
     });
-
-    const totalSettlementAmount = allContractsForSum.reduce((sum, c) => {
-      const hasEzCleaningService = c.snapshot?.ezService?.cleaningService || false;
-      const s = calculateSettlementAmount(c, c.refunds || [], { hasEzCleaningService });
-      const deductionPayout = c.payouts?.find(p => ['PENDING', 'PAYABLE', 'COMPLETED'].includes(p.status));
-      const deductionAmount = deductionPayout ? deductionPayout.amount : 0;
-      return sum + s.finalAmount + deductionAmount;
-    }, 0);
+    const totalSettlementAmount = allSettlementsForSum.reduce((sum, s) => sum + (s.netAmount || 0), 0);
 
     // 호스트의 방 목록 (필터용)
     const hostRooms = await Room.findAll({
@@ -413,7 +330,7 @@ const getSettlementDetail = async (req, res) => {
     return success(res, {
       contract: {
         contractId: contract.id,
-        contractNumber: contract.contractNumber,
+        contractNumber: contract.orderId,
         status: contract.status,
         checkInDate: toKSTString(contract.checkInDate),
         checkOutDate: toKSTString(contract.checkOutDate),
@@ -481,56 +398,42 @@ const exportSettlements = async (req, res) => {
       endDate
     } = req.query;
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const settlementCutoffDate = new Date(today);
-    settlementCutoffDate.setDate(settlementCutoffDate.getDate() - 5); // 입주일 + 3영업일 ≈ 5일
-
     // 기본 WHERE 조건
     const whereCondition = {
       hostId,
       status: 'COMPLETED'
     };
 
-    // 탭에 따른 조건 (입주일 기준)
+    // Settlement 탭/필터 조건 (Settlement.status + expectedDate 기반)
+    const settlementWhere = { hostId };
     if (tab === 'pending') {
-      whereCondition.checkInDate = { [Op.gte]: settlementCutoffDate };
+      settlementWhere.status = { [Op.in]: ['PENDING', 'READY', 'PROCESSING', 'ON_HOLD', 'FAILED'] };
     } else if (tab === 'completed') {
-      whereCondition.checkInDate = { [Op.lt]: settlementCutoffDate };
+      settlementWhere.status = 'COMPLETED';
     }
 
-    // 필터 적용
     if (roomId) {
       whereCondition.roomId = parseInt(roomId);
     }
 
     if (startDate || endDate) {
       const dateFilter = {};
-      if (startDate) {
-        const filterStart = new Date(startDate + 'T00:00:00');
-        filterStart.setDate(filterStart.getDate() - 5);
-        dateFilter[Op.gte] = filterStart;
-      }
-      if (endDate) {
-        const filterEnd = new Date(endDate + 'T00:00:00');
-        filterEnd.setDate(filterEnd.getDate() - 5);
-        dateFilter[Op.lte] = filterEnd;
-      }
-
-      if (whereCondition.checkInDate) {
-        whereCondition.checkInDate = {
-          ...whereCondition.checkInDate,
-          ...dateFilter
-        };
-      } else {
-        whereCondition.checkInDate = dateFilter;
-      }
+      if (startDate) dateFilter[Op.gte] = startDate;
+      if (endDate) dateFilter[Op.lte] = endDate;
+      settlementWhere.expectedDate = dateFilter;
     }
 
     // 데이터 조회
     const contracts = await Contract.findAll({
       where: whereCondition,
       include: [
+        {
+          model: Settlement,
+          as: 'settlement',
+          attributes: ['status', 'expectedDate', 'netAmount'],
+          where: settlementWhere,
+          required: true
+        },
         {
           model: Room,
           as: 'room',
@@ -559,41 +462,43 @@ const exportSettlements = async (req, res) => {
           required: false
         }
       ],
-      order: [['checkOutDate', 'DESC']]
+      order: [[{ model: Settlement, as: 'settlement' }, 'expectedDate', 'DESC']]
     });
 
     // 엑셀 데이터 준비
     const excelData = contracts.map(contract => {
       const hasEzCleaningService = contract.snapshot?.ezService?.cleaningService || false;
-      const settlement = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
-      const status = getSettlementStatus(contract.checkInDate);
-      const settlementDate = calculateSettlementDate(contract.checkInDate);
+      const settlementCalc = calculateSettlementAmount(contract, contract.refunds || [], { hasEzCleaningService });
+      const settlementRecord = contract.settlement;
 
       return {
-        contractNumber: contract.contractNumber,
+        contractNumber: contract.orderId,
         roomTitle: contract.room?.roomName,
         guestName: contract.guest?.name,
         checkInDate: toKSTString(contract.checkInDate),
         checkOutDate: toKSTString(contract.checkOutDate),
         rentalDays: calculateRentalDays(contract.checkInDate, contract.checkOutDate),
-        rentalFee: settlement.rentalFee,
-        maintenanceFee: settlement.maintenanceFee,
-        cleaningFee: settlement.cleaningFee,  // EZ서비스 사용 시 0
+        rentalFee: settlementCalc.rentalFee,
+        maintenanceFee: settlementCalc.maintenanceFee,
+        cleaningFee: settlementCalc.cleaningFee,
         hasEzCleaningService,
-        subtotal: settlement.subtotal,
-        platformFee: settlement.platformFee,
-        refundAmount: settlement.refund.totalRefundAmount,
-        settlementAmount: settlement.finalAmount,
-        settlementDate: toDateStrKST(settlementDate),
-        status: SETTLEMENT_STATUS_LABELS[status]
+        subtotal: settlementCalc.subtotal,
+        platformFee: settlementCalc.platformFee,
+        refundAmount: settlementCalc.refund.totalRefundAmount,
+        settlementAmount: settlementRecord?.netAmount ?? settlementCalc.finalAmount,
+        settlementDate: settlementRecord?.expectedDate ?? toDateStrKST(calculateSettlementDate(contract.checkInDate)),
+        status: Settlement.STATUS_LABELS[settlementRecord?.status] ?? Settlement.STATUS_LABELS.PENDING
       };
     });
 
     // 엑셀 파일 생성
     const buffer = await createSettlementExcel(excelData);
 
-    // 파일명 생성
-    const fileName = `settlement_${todayKST()}.xlsx`;
+    // 파일명 생성: 정산내역(기간)
+    const periodStr = (startDate && endDate)
+      ? `${startDate}~${endDate}`
+      : (startDate ? `${startDate}~` : (endDate ? `~${endDate}` : '전체'));
+    const fileName = encodeURIComponent(`정산내역(${periodStr})`) + '.xlsx';
 
     // 응답 헤더 설정
     res.setHeader(
@@ -602,7 +507,7 @@ const exportSettlements = async (req, res) => {
     );
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${fileName}"`
+      `attachment; filename="${fileName}"; filename*=UTF-8''${fileName}`
     );
 
     return res.send(buffer);
@@ -624,7 +529,7 @@ const getDepositDeductionDetail = async (req, res) => {
     const contract = await Contract.findOne({
       where: { id: contractId, hostId, status: 'COMPLETED' },
       attributes: [
-        'id', 'contractNumber',
+        'id', 'orderId',
         'deposit', 'depositDeduction', 'deductionReason',
         'refundableDeposit', 'depositStatus',
         'checkoutStatus'
@@ -680,7 +585,7 @@ const getDepositDeductionDetail = async (req, res) => {
 
     return success(res, {
       contractId: contract.id,
-      contractNumber: contract.contractNumber,
+      contractNumber: contract.orderId,
       deposit: contract.deposit,
       depositDeduction: contract.depositDeduction,
       deductionReason: contract.deductionReason,
