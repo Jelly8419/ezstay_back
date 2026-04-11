@@ -2701,10 +2701,19 @@ const confirmPayment = async (req, res) => {
   try {
     const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
     if (chatRoom?.firebaseChatRoomId) {
-      await sendSystemMessage(chatRoom.firebaseChatRoomId, SystemMessageTypes.PAYMENT_COMPLETED, {
-        amount: payment.totalAmount,
-        paymentMethod: payment.method
-      });
+      await sendSystemMessage(
+        chatRoom.firebaseChatRoomId,
+        getSystemMessageTemplate(SystemMessageTypes.PAYMENT_COMPLETED, {
+          checkInDate: toKSTString(contract.checkInDate).split('T')[0],
+          checkOutDate: toKSTString(contract.checkOutDate).split('T')[0]
+        }),
+        SystemMessageTypes.PAYMENT_COMPLETED,
+        {
+          contractId: contract.id,
+          amount: payment.totalAmount,
+          paymentMethod: payment.method
+        }
+      );
     }
   } catch (chatErr) {
     console.error('채팅 시스템 메시지 실패 (무시됨):', chatErr);
@@ -3229,7 +3238,8 @@ const getHostCancelPreview = async (req, res) => {
     }
 
     const d = refundResult.data;
-    const hostBurdenAmount = d.penaltyAmount + d.originalPlatformFee;
+    // refundRate=100(무료 취소)이면 platformFee는 게스트 환불에 포함되므로 호스트 부담 불필요
+    const hostBurdenAmount = d.penaltyAmount + (d.guestServiceFeeRefunded ? 0 : d.originalPlatformFee);
 
     return success(res, {
       orderId: contract.orderId,
@@ -3315,7 +3325,8 @@ const cancelContractByHost = async (req, res) => {
     }
 
     const refundData = refundResult.data;
-    const hostBurdenAmount = refundData.penaltyAmount + refundData.originalPlatformFee;
+    // refundRate=100(무료 취소)이면 platformFee는 게스트 환불에 포함되므로 호스트 부담 불필요
+    const hostBurdenAmount = refundData.penaltyAmount + (refundData.guestServiceFeeRefunded ? 0 : refundData.originalPlatformFee);
 
     // [2] 호스트 부담금 PG 결제 (hostBurdenAmount > 0인 경우만)
     let hostPayment = null;
