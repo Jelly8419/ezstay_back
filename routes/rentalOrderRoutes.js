@@ -154,13 +154,13 @@ router.post(
 
 /**
  * 반품 신청 전 환불 예상 금액 조회
- * GET /api/contracts/:contractId/rental-items/return-preview?itemIds=1,2,3
+ * POST /api/contracts/:contractId/rental-items/return-preview
  *
  * @description 반품 신청 전 선택 아이템의 환불 예상 금액 및 수거비 차감 여부 확인.
  * @access 게스트
- * @query { itemIds: string } 콤마 구분 아이템 ID 목록 (예: "1,2,3")
+ * @body { items: [{ id, returnQuantity }] }
  */
-router.get(
+router.post(
   '/contracts/:contractId/rental-items/return-preview',
   authenticateToken,
   getReturnRefundPreview
