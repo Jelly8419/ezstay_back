@@ -26,89 +26,78 @@ const RENTAL_ORDER_EXPIRATION_MINUTES = 15;
  * -> CANCELLED 상태로 변경 + 재고 해제
  */
 async function expirePendingRentalOrders() {
-  const transaction = await sequelize.transaction();
-
   try {
     const now = new Date();
     const expirationTime = new Date(now.getTime() - RENTAL_ORDER_EXPIRATION_MINUTES * 60 * 1000);
 
-    // 만료 대상 주문 조회
+    // 만료 대상 주문 조회 (트랜잭션 밖 — 락 불필요)
     const expiredOrders = await RentalOrder.findAll({
       where: {
         status: 'PENDING',
         createdAt: { [Op.lte]: expirationTime }
-      },
-      include: [{
-        model: RentalOrderItem,
-        as: 'items'
-      }],
-      transaction
+      }
     });
 
-    if (expiredOrders.length === 0) {
-      await transaction.commit();
-      return 0;
-    }
+    if (expiredOrders.length === 0) return 0;
 
-    // 각 주문별 처리
+    let processedCount = 0;
+
+    // 주문별 개별 트랜잭션 — 락 범위를 1건으로 최소화
     for (const order of expiredOrders) {
-      // 1. RentalOrder 상태 변경
-      await order.update({
-        status: 'CANCELLED'
-      }, { transaction });
+      const transaction = await sequelize.transaction();
+      try {
+        await order.update({ status: 'CANCELLED' }, { transaction });
 
-      // 2. RentalOrderItem 상태 변경
-      await RentalOrderItem.update(
-        {
-          status: 'CANCELLED',
-          cancelledAt: now
-        },
-        {
-          where: { rentalOrderId: order.id },
-          transaction
-        }
-      );
+        await RentalOrderItem.update(
+          { status: 'CANCELLED', cancelledAt: now },
+          { where: { rentalOrderId: order.id }, transaction }
+        );
 
-      // 3. RentalItemReservation 상태 변경 (재고 해제)
-      await RentalItemReservation.update(
-        { status: 'CANCELLED' },
-        {
-          where: {
+        await RentalItemReservation.update(
+          { status: 'CANCELLED' },
+          {
+            where: { rentalOrderId: order.id, status: 'RESERVED' },
+            transaction
+          }
+        );
+
+        await transaction.commit();
+        processedCount++;
+
+        // 로그 기록 (커밋 후)
+        try {
+          await RentalOrderLog.create({
+            contractId: order.contractId,
             rentalOrderId: order.id,
-            status: 'RESERVED'  // CONFIRMED 상태는 건드리지 않음
-          },
-          transaction
+            action: 'ORDER_EXPIRED',
+            actor: 'SYSTEM',
+            actorId: null,
+            amountChange: 0,
+            balanceAfter: 0,
+            metadata: {
+              orderId: order.orderId,
+              orderType: order.orderType,
+              totalAmount: order.totalAmount,
+              expirationMinutes: RENTAL_ORDER_EXPIRATION_MINUTES,
+              createdAt: order.createdAt,
+              expiredAt: now
+            },
+            description: `미결제 주문 자동 만료 (${RENTAL_ORDER_EXPIRATION_MINUTES}분 경과)`
+          });
+        } catch (logErr) {
+          console.error(`[렌탈 스케줄러] 로그 기록 실패 (orderId=${order.id}):`, logErr);
         }
-      );
 
-      // 4. 로그 기록
-      await RentalOrderLog.create({
-        contractId: order.contractId,
-        rentalOrderId: order.id,
-        action: 'ORDER_EXPIRED',
-        actor: 'SYSTEM',
-        actorId: null,
-        amountChange: 0,
-        balanceAfter: 0,
-        metadata: {
-          orderId: order.orderId,
-          orderType: order.orderType,
-          totalAmount: order.totalAmount,
-          expirationMinutes: RENTAL_ORDER_EXPIRATION_MINUTES,
-          createdAt: order.createdAt,
-          expiredAt: now
-        },
-        description: `미결제 주문 자동 만료 (${RENTAL_ORDER_EXPIRATION_MINUTES}분 경과)`
-      }, { transaction });
+      } catch (err) {
+        await transaction.rollback();
+        console.error(`[렌탈 스케줄러] 주문 만료 처리 실패 (orderId=${order.id}):`, err);
+      }
     }
 
-    await transaction.commit();
-
-    console.log(`[렌탈 스케줄러] ${expiredOrders.length}건의 미결제 렌탈 주문을 만료 처리했습니다.`);
-    return expiredOrders.length;
+    console.log(`[렌탈 스케줄러] ${processedCount}건의 미결제 렌탈 주문을 만료 처리했습니다.`);
+    return processedCount;
 
   } catch (error) {
-    await transaction.rollback();
     console.error('[렌탈 스케줄러] 미결제 렌탈 주문 만료 처리 오류:', error);
     return 0;
   }
@@ -120,84 +109,77 @@ async function expirePendingRentalOrders() {
  * -> CANCELLED 상태로 변경 + 재고 해제
  */
 async function expireModifiableDeadlineOrders() {
-  const transaction = await sequelize.transaction();
-
   try {
     const now = new Date();
 
-    // 수정 기한 만료 대상 주문 조회
+    // 수정 기한 만료 대상 주문 조회 (트랜잭션 밖 — 락 불필요)
     const expiredOrders = await RentalOrder.findAll({
       where: {
         status: 'PENDING',
         modifiableUntil: { [Op.lt]: now }
-      },
-      transaction
+      }
     });
 
-    if (expiredOrders.length === 0) {
-      await transaction.commit();
-      return 0;
-    }
+    if (expiredOrders.length === 0) return 0;
 
-    // 각 주문별 처리
+    let processedCount = 0;
+
+    // 주문별 개별 트랜잭션 — 락 범위를 1건으로 최소화
     for (const order of expiredOrders) {
-      // 1. RentalOrder 상태 변경
-      await order.update({
-        status: 'CANCELLED'
-      }, { transaction });
+      const transaction = await sequelize.transaction();
+      try {
+        await order.update({ status: 'CANCELLED' }, { transaction });
 
-      // 2. RentalOrderItem 상태 변경
-      await RentalOrderItem.update(
-        {
-          status: 'CANCELLED',
-          cancelledAt: now
-        },
-        {
-          where: { rentalOrderId: order.id },
-          transaction
-        }
-      );
+        await RentalOrderItem.update(
+          { status: 'CANCELLED', cancelledAt: now },
+          { where: { rentalOrderId: order.id }, transaction }
+        );
 
-      // 3. RentalItemReservation 상태 변경 (재고 해제)
-      await RentalItemReservation.update(
-        { status: 'CANCELLED' },
-        {
-          where: {
+        await RentalItemReservation.update(
+          { status: 'CANCELLED' },
+          {
+            where: { rentalOrderId: order.id, status: 'RESERVED' },
+            transaction
+          }
+        );
+
+        await transaction.commit();
+        processedCount++;
+
+        // 로그 기록 (커밋 후)
+        try {
+          await RentalOrderLog.create({
+            contractId: order.contractId,
             rentalOrderId: order.id,
-            status: 'RESERVED'
-          },
-          transaction
+            action: 'ORDER_EXPIRED',
+            actor: 'SYSTEM',
+            actorId: null,
+            amountChange: 0,
+            balanceAfter: 0,
+            metadata: {
+              orderId: order.orderId,
+              orderType: order.orderType,
+              totalAmount: order.totalAmount,
+              expirationReason: 'MODIFIABLE_DEADLINE_PASSED',
+              modifiableUntil: order.modifiableUntil,
+              expiredAt: now
+            },
+            description: '입주일 5일 전 경과로 인한 미결제 주문 자동 만료'
+          });
+        } catch (logErr) {
+          console.error(`[렌탈 스케줄러] 로그 기록 실패 (orderId=${order.id}):`, logErr);
         }
-      );
 
-      // 4. 로그 기록
-      await RentalOrderLog.create({
-        contractId: order.contractId,
-        rentalOrderId: order.id,
-        action: 'ORDER_EXPIRED',
-        actor: 'SYSTEM',
-        actorId: null,
-        amountChange: 0,
-        balanceAfter: 0,
-        metadata: {
-          orderId: order.orderId,
-          orderType: order.orderType,
-          totalAmount: order.totalAmount,
-          expirationReason: 'MODIFIABLE_DEADLINE_PASSED',
-          modifiableUntil: order.modifiableUntil,
-          expiredAt: now
-        },
-        description: '입주일 5일 전 경과로 인한 미결제 주문 자동 만료'
-      }, { transaction });
+      } catch (err) {
+        await transaction.rollback();
+        console.error(`[렌탈 스케줄러] 수정 기한 만료 처리 실패 (orderId=${order.id}):`, err);
+      }
     }
 
-    await transaction.commit();
-
-    console.log(`[렌탈 스케줄러] ${expiredOrders.length}건의 렌탈 주문을 수정 기한 만료 처리했습니다.`);
-    return expiredOrders.length;
+    console.log(`[렌탈 스케줄러] ${processedCount}건의 렌탈 주문을 수정 기한 만료 처리했습니다.`);
+    return processedCount;
 
   } catch (error) {
-    await transaction.rollback();
     console.error('[렌탈 스케줄러] 수정 기한 만료 처리 오류:', error);
     return 0;
   }

@@ -1530,6 +1530,15 @@ exports.processAdminRentalRefund = async (req, res) => {
         status: newPaymentStatus
       }, { transaction });
 
+      await transaction.commit();
+    } catch (dbErr) {
+      await transaction.rollback();
+      console.error('렌탈 환불 DB 업데이트 오류 (PG는 이미 취소됨):', dbErr);
+      return error(res, { code: 4903, message: 'PG 취소는 완료됐으나 DB 업데이트에 실패했습니다. 관리자에게 문의하세요.' }, 500);
+    }
+
+    // ── 4단계: 트랜잭션 커밋 후 로그 기록 (락 범위 최소화) ──
+    try {
       await logRentalAction({
         contractId: rentalOrder.contractId,
         rentalOrderId: rentalOrder.id,
@@ -1548,15 +1557,10 @@ exports.processAdminRentalRefund = async (req, res) => {
             refundAmount: itemAmt
           })),
           pgResponse: pgCancelResp
-        },
-        transaction
+        }
       });
-
-      await transaction.commit();
-    } catch (dbErr) {
-      await transaction.rollback();
-      console.error('렌탈 환불 DB 업데이트 오류 (PG는 이미 취소됨):', dbErr);
-      return error(res, { code: 4903, message: 'PG 취소는 완료됐으나 DB 업데이트에 실패했습니다. 관리자에게 문의하세요.' }, 500);
+    } catch (logErr) {
+      console.error('렌탈 환불 로그 기록 실패 (환불은 완료됨):', logErr);
     }
 
     return success(res, {
