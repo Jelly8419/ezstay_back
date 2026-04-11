@@ -1310,8 +1310,8 @@ const cancelRentalItemsByGuest = async (req, res) => {
  * POST /api/contracts/:contractId/rental-items/return-request
  *
  * @access 게스트
- * @body { itemIds: number[], reason: string }
- * @description 배송중/배송완료 상태 아이템 복수 선택 반품 신청.
+ * @body { items: [{ id, returnQuantity }], reason: string }
+ * @description 배송중/배송완료 상태 아이템 복수 선택 반품 신청. 수량 부분 반품 지원.
  *              여러 주문건 혼합 가능. 주문별 RentalOrderRefundRequest 생성.
  *              단일 트랜잭션으로 전체 처리 (PG 호출 없음).
  */
@@ -1319,17 +1319,28 @@ const requestRentalItemsReturn = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
     const { contractId } = req.params;
-    const { itemIds, reason } = req.body;
+    const { items: returnRequests, reason } = req.body;
     const userId = req.user.id;
 
-    if (!Array.isArray(itemIds) || itemIds.length === 0) {
+    // { id, returnQuantity } 배열 검증
+    if (!Array.isArray(returnRequests) || returnRequests.length === 0) {
       await transaction.rollback();
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { details: '반품 신청할 아이템을 선택해주세요.' });
+    }
+    for (const r of returnRequests) {
+      if (!r.id || !Number.isInteger(r.returnQuantity) || r.returnQuantity < 1) {
+        await transaction.rollback();
+        return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { details: `아이템(${r.id})의 returnQuantity가 올바르지 않습니다.` });
+      }
     }
     if (!reason || !reason.trim()) {
       await transaction.rollback();
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400, { details: '반품 사유를 입력해주세요.' });
     }
+
+    // returnQuantity Map (itemId → returnQuantity)
+    const returnQtyMap = new Map(returnRequests.map(r => [r.id, r.returnQuantity]));
+    const itemIds = returnRequests.map(r => r.id);
 
     // 계약 조회 + 권한 확인
     const contract = await Contract.findByPk(contractId, { transaction });
@@ -1353,8 +1364,6 @@ const requestRentalItemsReturn = async (req, res) => {
     // 7일 기간 체크 (입주 중일 때만 적용)
     const now = new Date();
     if (contract.status === 'IN_PROGRESS') {
-      // checkedInAt은 DATE 컬럼 → 그대로 파싱
-      // checkInDate는 DATEONLY 컬럼 → 'T00:00:00' 붙여서 KST 자정으로 파싱
       const stayStartedAt = contract.checkedInAt ? new Date(contract.checkedInAt) : new Date(contract.checkInDate + 'T00:00:00');
       const cancelRequestDeadline = new Date(stayStartedAt.getTime() + RENTAL_CANCEL_REQUEST_DAYS * 24 * 60 * 60 * 1000);
       if (now > cancelRequestDeadline) {
@@ -1375,6 +1384,17 @@ const requestRentalItemsReturn = async (req, res) => {
       return error(res, { code: validErr.code || 4460, message: validErr.message }, validErr.status || 400);
     }
 
+    // returnQuantity 범위 검증 (item.quantity 초과 불가)
+    for (const { items } of groups.values()) {
+      for (const item of items) {
+        const returnQty = returnQtyMap.get(item.id);
+        if (returnQty > item.quantity) {
+          await transaction.rollback();
+          return error(res, { code: 4466, message: `아이템(${item.id})의 반품 수량(${returnQty})이 보유 수량(${item.quantity})을 초과합니다.` }, 400);
+        }
+      }
+    }
+
     // 배송중/완료 상태 이중 검증
     for (const [, { rentalOrder }] of groups) {
       if (!['IN_TRANSIT', 'DELIVERED'].includes(rentalOrder.deliveryStatus)) {
@@ -1383,8 +1403,7 @@ const requestRentalItemsReturn = async (req, res) => {
       }
     }
 
-    // 환불 예정 금액 마이너스 체크
-    // 수거비(7000원) 차감 후 환불액이 0 이하인 주문은 신청 불가
+    // 환불 예정 금액 마이너스 체크 (수거비 차감 후 0 이하인 주문은 신청 불가)
     const pendingRetrievalCount = await RentalOrderRefundRequest.count({
       where: {
         contractId: parseInt(contractId),
@@ -1393,7 +1412,10 @@ const requestRentalItemsReturn = async (req, res) => {
       transaction
     });
     for (const [, { rentalOrder, items }] of groups) {
-      const itemTotalAmount = items.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
+      const itemTotalAmount = items.reduce((sum, item) => {
+        const returnQty = returnQtyMap.get(item.id);
+        return sum + parseFloat(item.pricePerItem) * returnQty;
+      }, 0);
       const needsRetrieval = ['IN_TRANSIT', 'DELIVERED'].includes(rentalOrder.deliveryStatus);
       const shippingDeduction = needsRetrieval && pendingRetrievalCount === 0 ? RETRIEVAL_SHIPPING_COST : 0;
       if (itemTotalAmount - shippingDeduction <= 0) {
@@ -1405,14 +1427,47 @@ const requestRentalItemsReturn = async (req, res) => {
     // 주문별 반품 신청 생성 또는 기존 PENDING 요청에 병합 (단일 트랜잭션)
     const requestedOrders = [];
     for (const [, { rentalOrder, items }] of groups) {
+      const returnedItemsSummary = [];
+
       for (const item of items) {
-        await item.update({
-          status: 'CANCEL_REQUESTED',
-          cancelReason: reason
-        }, { transaction });
+        const returnQty = returnQtyMap.get(item.id);
+        const isFullReturn = returnQty === item.quantity;
+        const pricePerItem = parseFloat(item.pricePerItem);
+
+        if (isFullReturn) {
+          // 전체 반품: 기존 레코드를 CANCEL_REQUESTED로 전환
+          await item.update({
+            status: 'CANCEL_REQUESTED',
+            cancelReason: reason
+          }, { transaction });
+        } else {
+          // 부분 반품: 레코드 분리
+          // 1) 기존 레코드 → 남은 수량(ACTIVE 유지)
+          const remainQty = item.quantity - returnQty;
+          await item.update({
+            quantity: remainQty,
+            totalPrice: pricePerItem * remainQty
+          }, { transaction });
+
+          // 2) 신규 레코드 → 반품 수량(CANCEL_REQUESTED)
+          await RentalOrderItem.create({
+            rentalOrderId: item.rentalOrderId,
+            rentalItemId: item.rentalItemId,
+            quantity: returnQty,
+            pricePerItem: item.pricePerItem,
+            totalPrice: pricePerItem * returnQty,
+            status: 'CANCEL_REQUESTED',
+            cancelReason: reason
+          }, { transaction });
+        }
+
+        returnedItemsSummary.push({ id: item.id, name: item.rentalItem?.name, returnQuantity: returnQty, isFullReturn });
       }
 
-      const addedAmount = items.reduce((sum, item) => sum + parseFloat(item.totalPrice), 0);
+      const addedAmount = items.reduce((sum, item) => {
+        const returnQty = returnQtyMap.get(item.id);
+        return sum + parseFloat(item.pricePerItem) * returnQty;
+      }, 0);
 
       // 기존 PENDING 요청이 있으면 itemTotalAmount 누적, 없으면 신규 생성
       const existingRequest = await RentalOrderRefundRequest.findOne({
@@ -1449,7 +1504,7 @@ const requestRentalItemsReturn = async (req, res) => {
         metadata: {
           orderId: rentalOrder.orderId,
           refundRequestId: refundRequest.id,
-          cancelledItemIds: items.map(i => i.id),
+          returnedItems: returnedItemsSummary,
           addedAmount,
           reason,
           deliveryStatus: rentalOrder.deliveryStatus,
@@ -1468,7 +1523,7 @@ const requestRentalItemsReturn = async (req, res) => {
         addedAmount,
         itemTotalAmount: parseFloat(refundRequest.itemTotalAmount),
         merged: !!existingRequest,
-        requestedItems: items.map(i => ({ id: i.id, name: i.rentalItem?.name, quantity: i.quantity }))
+        requestedItems: returnedItemsSummary
       });
     }
 
