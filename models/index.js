@@ -47,6 +47,7 @@ const AdminRefund = require('./AdminRefund');
 const RentalOrderRefundRequest = require('./RentalOrderRefundRequest');
 const ServiceTaskModel = require('./ServiceTask');
 const ServiceTaskLogModel = require('./ServiceTaskLog');
+const ContractCancelRequestModel = require('./ContractCancelRequest');
 
 const sequelize = new Sequelize(process.env.DB_NAME || 'ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -99,6 +100,7 @@ const RentalPaymentFailureLog = RentalPaymentFailureLogModel(sequelize);
 // 서비스 태스크 모델 초기화
 const ServiceTask = ServiceTaskModel(sequelize);
 const ServiceTaskLog = ServiceTaskLogModel(sequelize);
+const ContractCancelRequest = ContractCancelRequestModel(sequelize);
 
 // 방 관리 모델 초기화
 const RoomMemoModel = require('./RoomMemo');
@@ -1017,6 +1019,34 @@ Admin.hasMany(Receipt, {
 });
 
 // =====================================================
+// ContractCancelRequest 관계 설정 (임대중 취소요청)
+// =====================================================
+Contract.hasMany(ContractCancelRequest, {
+  foreignKey: 'contractId',
+  as: 'cancelRequests',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+ContractCancelRequest.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+ContractCancelRequest.belongsTo(User, {
+  foreignKey: 'requesterUserId',
+  as: 'requester',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+ContractCancelRequest.belongsTo(Admin, {
+  foreignKey: 'adminId',
+  as: 'admin',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// =====================================================
 // ServiceTask 관계 설정 (청소·침구류 예약 관리)
 // =====================================================
 Contract.hasMany(ServiceTask, {
@@ -1094,5 +1124,6 @@ module.exports = {
   AdminRefund,
   RentalOrderRefundRequest,
   ServiceTask,
-  ServiceTaskLog
+  ServiceTaskLog,
+  ContractCancelRequest
 };

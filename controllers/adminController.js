@@ -1,6 +1,6 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
 const { toDateStrKST, toKSTString } = require('../utils/dateHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, ServiceTask, ServiceTaskLog, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ContractCancelRequest, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, ServiceTask, ServiceTaskLog, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -837,6 +837,118 @@ const getPropertyDetail = async (req, res) => {
     return success(res, responseData, '매물 상세 조회 성공');
   } catch (err) {
     console.error('매물 상세 조회 실패:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
+ * 취소요청 목록 조회 (관리자용)
+ * GET /api/admin/reservations/cancel-requests
+ * Query: page, limit, status(PENDING|APPROVED|REJECTED), requesterRole(HOST|GUEST),
+ *        search, startDate, endDate, sortOrder
+ */
+const getCancelRequests = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      status,
+      requesterRole,
+      search,
+      startDate,
+      endDate,
+      sortOrder = 'DESC'
+    } = req.query;
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    // ContractCancelRequest 조건
+    const cancelRequestWhere = {};
+    if (status && ['PENDING', 'APPROVED', 'REJECTED'].includes(status)) {
+      cancelRequestWhere.status = status;
+    }
+    if (requesterRole && ['HOST', 'GUEST'].includes(requesterRole)) {
+      cancelRequestWhere.requesterRole = requesterRole;
+    }
+    if (startDate) {
+      cancelRequestWhere.requestedAt = { ...cancelRequestWhere.requestedAt, [Op.gte]: new Date(startDate + 'T00:00:00') };
+    }
+    if (endDate) {
+      cancelRequestWhere.requestedAt = { ...cancelRequestWhere.requestedAt, [Op.lte]: new Date(endDate + 'T23:59:59') };
+    }
+
+    // 게스트 검색 조건
+    const guestInclude = {
+      model: User,
+      as: 'guest',
+      attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
+    };
+    if (search) {
+      guestInclude.where = {
+        [Op.or]: [
+          { name: { [Op.like]: `%${search}%` } },
+          { email: { [Op.like]: `%${search}%` } }
+        ]
+      };
+      guestInclude.required = true;
+    }
+
+    const { rows, count: total } = await ContractCancelRequest.findAndCountAll({
+      where: cancelRequestWhere,
+      include: [
+        {
+          model: Contract,
+          as: 'contract',
+          attributes: ['id', 'status', 'checkInDate', 'checkOutDate', 'finalTotalAmount'],
+          include: [
+            guestInclude,
+            { model: User, as: 'host', attributes: ['id', 'name', 'nickname', 'email'] },
+            { model: Room, as: 'room', attributes: ['id', 'roomName', 'address'] }
+          ]
+        },
+        {
+          model: Admin,
+          as: 'admin',
+          attributes: ['id', 'name', 'username'],
+          required: false
+        }
+      ],
+      order: [['requestedAt', sortOrder === 'ASC' ? 'ASC' : 'DESC']],
+      limit: parseInt(limit),
+      offset,
+      distinct: true
+    });
+
+    const result = rows.map(r => ({
+      cancelRequestId: r.id,
+      contractId: r.contractId,
+      contractStatus: r.contract ? r.contract.status : null,
+      requesterRole: r.requesterRole,
+      cancelReason: r.reason,
+      status: r.status,
+      requestedAt: toKSTString(r.requestedAt),
+      processedAt: r.processedAt ? toKSTString(r.processedAt) : null,
+      adminNote: r.adminNote,
+      processedBy: r.admin ? { id: r.admin.id, name: r.admin.name } : null,
+      checkInDate: r.contract ? toKSTString(r.contract.checkInDate) : null,
+      checkOutDate: r.contract ? toKSTString(r.contract.checkOutDate) : null,
+      finalTotalAmount: r.contract ? r.contract.finalTotalAmount : null,
+      guest: r.contract ? r.contract.guest : null,
+      host: r.contract ? r.contract.host : null,
+      room: r.contract ? r.contract.room : null
+    }));
+
+    return success(res, {
+      cancelRequests: result,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (err) {
+    console.error('취소요청 목록 조회 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500);
   }
 };
@@ -3027,16 +3139,10 @@ const approveHostCancelRequest = async (req, res) => {
       }, 400);
     }
 
-    // 호스트 또는 게스트 취소 요청 존재 확인 (ContractStatusLog에서)
-    const cancelRequest = await ContractStatusLog.findOne({
-      where: {
-        contractId,
-        [Op.or]: [
-          { metadata: { [Op.like]: '%CANCEL_REQUEST_BY_HOST%' } },
-          { metadata: { [Op.like]: '%CANCEL_REQUEST_BY_GUEST%' } }
-        ]
-      },
-      order: [['createdAt', 'DESC']],
+    // 취소요청 조회 (ContractCancelRequest 테이블)
+    const cancelRequest = await ContractCancelRequest.findOne({
+      where: { contractId, status: 'PENDING' },
+      order: [['requestedAt', 'DESC']],
       transaction
     });
 
@@ -3048,8 +3154,7 @@ const approveHostCancelRequest = async (req, res) => {
       }, 404);
     }
 
-    const cancelRequestMetadata = JSON.parse(cancelRequest.metadata || '{}');
-    const isGuestRequest = cancelRequestMetadata.type === 'CANCEL_REQUEST_BY_GUEST';
+    const isGuestRequest = cancelRequest.requesterRole === 'GUEST';
     const cancelledStatus = isGuestRequest ? 'CANCELLED_BY_GUEST' : 'CANCELLED_BY_HOST';
     const requesterLabel = isGuestRequest ? '게스트' : '호스트';
 
@@ -3060,6 +3165,14 @@ const approveHostCancelRequest = async (req, res) => {
       cancelledAt: new Date(),
       cancellationReason: `${requesterLabel} 취소 요청 승인 (관리자: ${adminNote || '사유 없음'})`,
       cancellationType: 'DURING_STAY'
+    }, { transaction });
+
+    // 취소요청 상태 업데이트
+    await cancelRequest.update({
+      status: 'APPROVED',
+      adminId,
+      adminNote: adminNote || null,
+      processedAt: new Date()
     }, { transaction });
 
     // TODO: 호스트 취소 위약금 중 플랫폼 귀속 금액이 있을 경우 영수증 발급 대기 목록 생성
@@ -3078,7 +3191,7 @@ const approveHostCancelRequest = async (req, res) => {
 
     const approvedMetadataType = isGuestRequest ? 'GUEST_CANCEL_REQUEST_APPROVED' : 'HOST_CANCEL_REQUEST_APPROVED';
 
-    // 상태 변경 로그
+    // 감사 로그
     await ContractStatusLog.createLog({
       contractId: contract.id,
       fromStatus: previousStatus,
@@ -3091,7 +3204,7 @@ const approveHostCancelRequest = async (req, res) => {
         withRefund,
         adminId,
         adminNote,
-        originalRequestLogId: cancelRequest.id
+        cancelRequestId: cancelRequest.id
       },
       transaction
     });
@@ -3200,16 +3313,10 @@ const rejectHostCancelRequest = async (req, res) => {
       }, 400);
     }
 
-    // 호스트 또는 게스트 취소 요청 존재 확인
-    const cancelRequest = await ContractStatusLog.findOne({
-      where: {
-        contractId,
-        [Op.or]: [
-          { metadata: { [Op.like]: '%CANCEL_REQUEST_BY_HOST%' } },
-          { metadata: { [Op.like]: '%CANCEL_REQUEST_BY_GUEST%' } }
-        ]
-      },
-      order: [['createdAt', 'DESC']],
+    // 취소요청 조회 (ContractCancelRequest 테이블)
+    const cancelRequest = await ContractCancelRequest.findOne({
+      where: { contractId, status: 'PENDING' },
+      order: [['requestedAt', 'DESC']],
       transaction
     });
 
@@ -3221,14 +3328,22 @@ const rejectHostCancelRequest = async (req, res) => {
       }, 404);
     }
 
-    const cancelRequestMetadata = JSON.parse(cancelRequest.metadata || '{}');
-    const isGuestRequest = cancelRequestMetadata.type === 'CANCEL_REQUEST_BY_GUEST';
+    const isGuestRequest = cancelRequest.requesterRole === 'GUEST';
     const requesterLabel = isGuestRequest ? '게스트' : '호스트';
     const rejectedMetadataType = isGuestRequest ? 'GUEST_CANCEL_REQUEST_REJECTED' : 'HOST_CANCEL_REQUEST_REJECTED';
 
     // CANCEL_REQUESTED → IN_PROGRESS 원복
     await contract.update({ status: 'IN_PROGRESS' }, { transaction });
 
+    // 취소요청 상태 업데이트
+    await cancelRequest.update({
+      status: 'REJECTED',
+      adminId,
+      adminNote: adminNote || null,
+      processedAt: new Date()
+    }, { transaction });
+
+    // 감사 로그
     await ContractStatusLog.createLog({
       contractId: contract.id,
       fromStatus: 'CANCEL_REQUESTED',
@@ -3240,7 +3355,7 @@ const rejectHostCancelRequest = async (req, res) => {
         type: rejectedMetadataType,
         adminId,
         adminNote,
-        originalRequestLogId: cancelRequest.id
+        cancelRequestId: cancelRequest.id
       },
       transaction
     });
@@ -4156,11 +4271,10 @@ const getAlimtalkLogs = async (req, res) => {
     if (req.query.startDate || req.query.endDate) {
       where.createdAt = {};
       if (req.query.startDate) {
-        where.createdAt[Op.gte] = new Date(req.query.startDate);
+        where.createdAt[Op.gte] = new Date(req.query.startDate + 'T00:00:00');
       }
       if (req.query.endDate) {
-        const endDate = new Date(req.query.endDate);
-        endDate.setHours(23, 59, 59, 999);
+        const endDate = new Date(req.query.endDate + 'T23:59:59');
         where.createdAt[Op.lte] = endDate;
       }
     }
@@ -4201,10 +4315,10 @@ const getAlimtalkStats = async (req, res) => {
   try {
     const { AlimtalkLog } = require('../models');
 
-    const endDate = req.query.endDate ? new Date(req.query.endDate) : new Date();
-    endDate.setHours(23, 59, 59, 999);
+    const endDate = req.query.endDate ? new Date(req.query.endDate + 'T23:59:59') : new Date();
+    if (!req.query.endDate) endDate.setHours(23, 59, 59, 999);
     const startDate = req.query.startDate
-      ? new Date(req.query.startDate)
+      ? new Date(req.query.startDate + 'T00:00:00')
       : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
 
     const dateFilter = {
@@ -4893,6 +5007,7 @@ module.exports = {
   deleteRoomMemo,
 
   // 예약 관리
+  getCancelRequests,
   getReservations,
   getReservationDetail,
   adminForceCancel,

@@ -1,4 +1,4 @@
-const { sequelize, Contract, Room, User, RoomPhoto, RoomAmenity, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement, AdminRefund, RentalOrderRefundRequest } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, RoomAmenity, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, ContractCancelRequest, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement, AdminRefund, RentalOrderRefundRequest } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const paytagClient = require('../utils/paytagClient');
@@ -317,8 +317,8 @@ const createContractRequest = async (req, res) => {
           400,
           {
             checkInDate,
-            requestedAt: now.toISOString(),
-            rentalDeadline: rentalDeadline.toISOString(),
+            requestedAt: toKSTString(now),
+            rentalDeadline: toKSTString(rentalDeadline),
             hint: '렌탈 아이템 없이 계약을 진행하거나, 입주 후 추가 렌탈 주문을 이용해주세요.'
           }
         );
@@ -1246,14 +1246,14 @@ const getContractDetail = async (req, res) => {
               status: da.status,
               statusLabel: DepositAgreement.STATUS_LABELS[da.status],
               holdReason: da.holdReason,
-              requestedAt: da.requestedAt,
-              rejectedAt: da.rejectedAt,
+              requestedAt: toKSTString(da.requestedAt),
+              rejectedAt: da.rejectedAt ? toKSTString(da.rejectedAt) : null,
               rejectedReason: da.rejectedReason,
-              adminApprovedAt: da.adminApprovedAt,
+              adminApprovedAt: da.adminApprovedAt ? toKSTString(da.adminApprovedAt) : null,
               deductAmount: da.deductAmount,
               agreementText: da.agreementText,
-              submittedAt: da.submittedAt,
-              acceptedAt: da.acceptedAt,
+              submittedAt: da.submittedAt ? toKSTString(da.submittedAt) : null,
+              acceptedAt: da.acceptedAt ? toKSTString(da.acceptedAt) : null,
               createdAt: da.createdAt
             })),
 
@@ -1262,10 +1262,10 @@ const getContractDetail = async (req, res) => {
           approvedAt: contract.approvedAt,
           rejectedAt: contract.rejectedAt,
           paidAt: contract.paidAt,
-          checkedInAt: contract.checkedInAt,
-          checkedOutAt: contract.checkedOutAt,
+          checkedInAt: contract.checkedInAt ? toKSTString(contract.checkedInAt) : null,
+          checkedOutAt: contract.checkedOutAt ? toKSTString(contract.checkedOutAt) : null,
           cancelledAt: contract.cancelledAt,
-          checkoutRequestedAt: contract.checkoutRequestedAt,
+          checkoutRequestedAt: contract.checkoutRequestedAt ? toKSTString(contract.checkoutRequestedAt) : null,
 
           // 결제/취소 내역
           paymentHistory
@@ -2247,8 +2247,8 @@ const requestRefund = async (req, res) => {
         autoApproved: autoApprove,
         totalRefundAmount: refund.totalRefundAmount,
         finalRefundAmount: refund.finalRefundAmount,
-        requestedAt: refund.requestedAt,
-        approvedAt: refund.approvedAt,
+        requestedAt: toKSTString(refund.requestedAt),
+        approvedAt: refund.approvedAt ? toKSTString(refund.approvedAt) : null,
         estimatedCompletionDate: toKSTString(estimatedCompletionDate)
       },
       message
@@ -2339,9 +2339,9 @@ const getContractRefunds = async (req, res) => {
           rejectionReason: refund.rejectionReason,
 
           // 타임스탬프
-          requestedAt: refund.requestedAt,
-          approvedAt: refund.approvedAt,
-          rejectedAt: refund.rejectedAt,
+          requestedAt: toKSTString(refund.requestedAt),
+          approvedAt: refund.approvedAt ? toKSTString(refund.approvedAt) : null,
+          rejectedAt: refund.rejectedAt ? toKSTString(refund.rejectedAt) : null,
           completedAt: refund.completedAt
         }))
       },
@@ -3041,7 +3041,7 @@ const requestCheckout = async (req, res) => {
     return updated(res, {
       contractId: contract.id,
       checkoutRequested: true,
-      checkoutRequestedAt: contract.checkoutRequestedAt,
+      checkoutRequestedAt: contract.checkoutRequestedAt ? toKSTString(contract.checkoutRequestedAt) : null,
       checkoutStatus: 'GUEST_COMPLETED'
     }, '퇴실 요청이 접수되었습니다. 호스트가 48시간 내 확인하지 않으면 자동 확정됩니다.');
 
@@ -3791,7 +3791,17 @@ const requestCancelByHost = async (req, res) => {
 
     await contract.update({ status: 'CANCEL_REQUESTED' });
 
-    // 관리자 확인 큐 등록 (ContractStatusLog에 메타데이터로 기록)
+    // 취소요청 테이블에 기록
+    await ContractCancelRequest.create({
+      contractId: contract.id,
+      requesterRole,
+      requesterUserId: userId,
+      reason,
+      status: 'PENDING',
+      requestedAt: new Date()
+    });
+
+    // 감사 로그
     await ContractStatusLog.create({
       contractId: contract.id,
       fromStatus: 'IN_PROGRESS',
@@ -4227,14 +4237,14 @@ const getDepositAgreement = async (req, res) => {
         id: latestDA.id,
         status: latestDA.status,
         statusLabel: DepositAgreement.STATUS_LABELS[latestDA.status],
-        requestedAt: latestDA.requestedAt,
-        rejectedAt: latestDA.rejectedAt,
+        requestedAt: toKSTString(latestDA.requestedAt),
+        rejectedAt: latestDA.rejectedAt ? toKSTString(latestDA.rejectedAt) : null,
         rejectedReason: latestDA.rejectedReason,
-        adminApprovedAt: latestDA.adminApprovedAt,
+        adminApprovedAt: latestDA.adminApprovedAt ? toKSTString(latestDA.adminApprovedAt) : null,
         deductAmount: latestDA.deductAmount,
         agreementText: latestDA.agreementText,
-        submittedAt: latestDA.submittedAt,
-        acceptedAt: latestDA.acceptedAt,
+        submittedAt: latestDA.submittedAt ? toKSTString(latestDA.submittedAt) : null,
+        acceptedAt: latestDA.acceptedAt ? toKSTString(latestDA.acceptedAt) : null,
         refundableAmount: latestDA.deductAmount != null ? (contract.deposit || 0) - latestDA.deductAmount : null
       },
       // 전체 이력
@@ -4242,8 +4252,8 @@ const getDepositAgreement = async (req, res) => {
         id: da.id,
         status: da.status,
         statusLabel: DepositAgreement.STATUS_LABELS[da.status],
-        requestedAt: da.requestedAt,
-        rejectedAt: da.rejectedAt,
+        requestedAt: toKSTString(da.requestedAt),
+        rejectedAt: da.rejectedAt ? toKSTString(da.rejectedAt) : null,
         rejectedReason: da.rejectedReason,
         createdAt: da.createdAt
       }))

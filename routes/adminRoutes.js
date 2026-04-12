@@ -131,6 +131,9 @@ router.delete('/properties/:roomId/memos/:memoId', adminController.deleteRoomMem
 // 예약 목록
 router.get('/reservations', adminController.getReservations);
 
+// 취소요청 목록 (/:contractId 보다 앞에 위치해야 함)
+router.get('/reservations/cancel-requests', adminController.getCancelRequests);
+
 // 예약 상세
 router.get('/reservations/:contractId', adminController.getReservationDetail);
 

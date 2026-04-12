@@ -539,9 +539,9 @@ function formatPayoutDetail(p) {
     status: p.status,
     statusLabel: Payout.STATUS_LABELS[p.status],
     payableAfter: p.payableAfter,
-    // 계좌 정보 (마스킹)
+    // 계좌 정보
     bankName: p.bankName,
-    accountNumber: p.accountNumber ? maskAccountNumber(p.accountNumber) : null,
+    accountNumber: p.accountNumber || null,
     accountHolder: p.accountHolder,
     // 처리 정보
     adminId: p.adminId,
