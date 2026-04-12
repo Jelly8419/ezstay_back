@@ -84,7 +84,7 @@ const getRentalOrders = async (req, res) => {
       statusLabel: RentalOrder.STATUS_LABELS[order.status],
       deliveryStatus: order.deliveryStatus,
       deliveryStatusLabel: RentalOrder.DELIVERY_STATUS_LABELS[order.deliveryStatus],
-      deliveredAt: order.deliveredAt,
+      deliveredAt: order.deliveredAt ? toKSTString(order.deliveredAt) : null,
       totalAmount: order.totalAmount,
       paidAmount: order.paidAmount,
       refundedAmount: order.refundedAmount,
@@ -109,7 +109,7 @@ const getRentalOrders = async (req, res) => {
 
     return success(res, {
       modifiable: modifiableInfo.modifiable,
-      modifiableUntil: modifiableInfo.modifiableUntil,
+      modifiableUntil: modifiableInfo.modifiableUntil ? toKSTString(modifiableInfo.modifiableUntil) : null,
       daysRemaining: modifiableInfo.daysRemaining,
       summary,
       orders
@@ -227,7 +227,7 @@ const createRentalOrder = async (req, res) => {
       orderType: createdOrder.orderType,
       totalAmount: createdOrder.totalAmount,
       status: createdOrder.status,
-      modifiableUntil: createdOrder.modifiableUntil,
+      modifiableUntil: createdOrder.modifiableUntil ? toKSTString(createdOrder.modifiableUntil) : null,
       items: createdOrder.items.map(item => ({
         id: item.id,
         name: item.rentalItem?.name,
@@ -896,7 +896,7 @@ const getAvailableRentalItems = async (req, res) => {
 
     return success(res, {
       modifiable: modifiableInfo.modifiable,
-      modifiableUntil: modifiableInfo.modifiableUntil,
+      modifiableUntil: modifiableInfo.modifiableUntil ? toKSTString(modifiableInfo.modifiableUntil) : null,
       checkInDate: toKSTString(contract.checkInDate),
       checkOutDate: toKSTString(contract.checkOutDate),
       hasPendingDelivery,

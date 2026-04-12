@@ -7,6 +7,7 @@ const { Op } = require('sequelize');
 const { getFileUrl, deleteFromS3 } = require('../middleware/upload');
 const isProduction = process.env.NODE_ENV === 'production';
 const { toAbsoluteUrl } = require('../utils/urlHelper');
+const { toKSTString } = require('../utils/dateHelper');
 
 // JSON 컬럼이 이중 직렬화된 경우를 대비한 안전 파싱 (문자열이면 파싱, 객체면 그대로)
 const safeParseJson = (val) => {
@@ -598,7 +599,7 @@ const submitReview = async (req, res) => {
     return success(res, {
       roomId: room.id,
       status: room.status,
-      submittedAt: room.submittedAt
+      submittedAt: room.submittedAt ? toKSTString(room.submittedAt) : null
     }, '심사 요청이 완료되었습니다.');
   } catch (err) {
     console.error('Submit review error:', err);
@@ -773,7 +774,7 @@ const getMyRooms = async (req, res) => {
             }))
           : [],
         registrationProgress,
-        submittedAt: room.submittedAt,
+        submittedAt: room.submittedAt ? toKSTString(room.submittedAt) : null,
         approvedAt: room.approvedAt,
         publishedAt: room.publishedAt,
         createdAt: room.createdAt,
@@ -892,7 +893,7 @@ const getRoom = async (req, res) => {
 
       // 상태
       status: room.status,
-      submittedAt: room.submittedAt,
+      submittedAt: room.submittedAt ? toKSTString(room.submittedAt) : null,
       approvedAt: room.approvedAt,
       publishedAt: room.publishedAt,
 

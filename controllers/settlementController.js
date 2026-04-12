@@ -567,14 +567,14 @@ const getDepositDeductionDetail = async (req, res) => {
         status: da.status,
         statusLabel: DepositAgreement.STATUS_LABELS[da.status],
         holdReason: da.holdReason,
-        requestedAt: da.requestedAt,
-        rejectedAt: da.rejectedAt,
+        requestedAt: da.requestedAt ? toKSTString(da.requestedAt) : null,
+        rejectedAt: da.rejectedAt ? toKSTString(da.rejectedAt) : null,
         rejectedReason: da.rejectedReason,
-        adminApprovedAt: da.adminApprovedAt,
+        adminApprovedAt: da.adminApprovedAt ? toKSTString(da.adminApprovedAt) : null,
         deductAmount: da.deductAmount,
         agreementText: da.agreementText,
-        submittedAt: da.submittedAt,
-        acceptedAt: da.acceptedAt,
+        submittedAt: da.submittedAt ? toKSTString(da.submittedAt) : null,
+        acceptedAt: da.acceptedAt ? toKSTString(da.acceptedAt) : null,
         createdAt: da.createdAt
       }));
 
