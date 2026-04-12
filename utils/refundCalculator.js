@@ -160,7 +160,10 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
       // ─── 호스트 귀책: 게스트 전액 환불 ───
       usageFeeRefundAmount = usageFee; // 임대료 100%
       depositRefundAmount = deposit;
-      guestServiceFeeRefunded = true;
+
+      // refundRate=100(무료 취소)이면 호스트 수수료 부담 없음 → 수수료도 게스트에게 환불
+      // refundRate<100이면 호스트가 수수료 부담 → 수수료는 hostBurdenAmount에 포함
+      guestServiceFeeRefunded = refundRate === 100;
 
       // 호스트 위약금 = 현재 시점 환불정책 기준 임대료 위약금
       penaltyAmount = Math.floor(usageFee * ((100 - refundRate) / 100));
