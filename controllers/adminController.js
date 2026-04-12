@@ -4156,11 +4156,10 @@ const getAlimtalkLogs = async (req, res) => {
     if (req.query.startDate || req.query.endDate) {
       where.createdAt = {};
       if (req.query.startDate) {
-        where.createdAt[Op.gte] = new Date(req.query.startDate);
+        where.createdAt[Op.gte] = new Date(req.query.startDate + 'T00:00:00');
       }
       if (req.query.endDate) {
-        const endDate = new Date(req.query.endDate);
-        endDate.setHours(23, 59, 59, 999);
+        const endDate = new Date(req.query.endDate + 'T23:59:59');
         where.createdAt[Op.lte] = endDate;
       }
     }
@@ -4201,10 +4200,10 @@ const getAlimtalkStats = async (req, res) => {
   try {
     const { AlimtalkLog } = require('../models');
 
-    const endDate = req.query.endDate ? new Date(req.query.endDate) : new Date();
-    endDate.setHours(23, 59, 59, 999);
+    const endDate = req.query.endDate ? new Date(req.query.endDate + 'T23:59:59') : new Date();
+    if (!req.query.endDate) endDate.setHours(23, 59, 59, 999);
     const startDate = req.query.startDate
-      ? new Date(req.query.startDate)
+      ? new Date(req.query.startDate + 'T00:00:00')
       : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
 
     const dateFilter = {
