@@ -1411,13 +1411,27 @@ const requestRentalItemsReturn = async (req, res) => {
       },
       transaction
     });
+
+    // 이번 신청 전체 기준으로 수거비 1회만 부과 여부 판단
+    const anyNeedsRetrievalForCheck = [...groups.values()].some(({ rentalOrder }) =>
+      ['IN_TRANSIT', 'DELIVERED'].includes(rentalOrder.deliveryStatus)
+    );
+    const applyShippingCostForCheck = anyNeedsRetrievalForCheck && pendingRetrievalCount === 0;
+    let shippingFeeAppliedForCheck = false;
+
     for (const [, { rentalOrder, items }] of groups) {
       const itemTotalAmount = items.reduce((sum, item) => {
         const returnQty = returnQtyMap.get(item.id);
         return sum + parseFloat(item.pricePerItem) * returnQty;
       }, 0);
       const needsRetrieval = ['IN_TRANSIT', 'DELIVERED'].includes(rentalOrder.deliveryStatus);
-      const shippingDeduction = needsRetrieval && pendingRetrievalCount === 0 ? RETRIEVAL_SHIPPING_COST : 0;
+
+      let shippingDeduction = 0;
+      if (needsRetrieval && applyShippingCostForCheck && !shippingFeeAppliedForCheck) {
+        shippingDeduction = RETRIEVAL_SHIPPING_COST;
+        shippingFeeAppliedForCheck = true;
+      }
+
       if (itemTotalAmount - shippingDeduction <= 0) {
         await transaction.rollback();
         return error(res, { code: 4425, message: `주문(${rentalOrder.orderId})의 환불 예정 금액(${itemTotalAmount}원)이 수거비(${shippingDeduction}원) 이하로 반품 신청이 불가합니다.` }, 400);
@@ -1600,6 +1614,15 @@ const getReturnRefundPreview = async (req, res) => {
       }
     });
 
+    // 이번 신청 전체 기준으로 수거비 1회만 부과 여부 판단
+    // - 이번 신청에 배송중/완료 주문이 하나라도 있고
+    // - 기존에 RETRIEVAL_PENDING 건이 없을 때만 7,000원 1회 차감
+    const anyNeedsRetrieval = [...groups.values()].some(({ rentalOrder }) =>
+      ['IN_TRANSIT', 'DELIVERED'].includes(rentalOrder.deliveryStatus)
+    );
+    const applyShippingCost = anyNeedsRetrieval && pendingRetrievalCount === 0;
+    let shippingFeeApplied = false;
+
     const orderPreviews = [];
     let totalItemAmount = 0;
     let totalShippingDeduction = 0;
@@ -1611,10 +1634,12 @@ const getReturnRefundPreview = async (req, res) => {
       }, 0);
       const needsRetrieval = ['IN_TRANSIT', 'DELIVERED'].includes(rentalOrder.deliveryStatus);
 
-      // 수거비 차감: 배송중/완료이고, 이미 수거 예정 건이 없을 때만 7000원 차감
-      const shippingDeduction = needsRetrieval && pendingRetrievalCount === 0
-        ? RETRIEVAL_SHIPPING_COST
-        : 0;
+      // 수거비: 이번 신청 전체에서 첫 번째 수거 대상 주문에만 1회 부과
+      let shippingDeduction = 0;
+      if (needsRetrieval && applyShippingCost && !shippingFeeApplied) {
+        shippingDeduction = RETRIEVAL_SHIPPING_COST;
+        shippingFeeApplied = true;
+      }
 
       const refundAmount = itemTotalAmount - shippingDeduction;
 
