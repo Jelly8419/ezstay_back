@@ -3243,13 +3243,13 @@ const getHostCancelPreview = async (req, res) => {
       policyDisplayName: d.policyDisplayName,
       applicableRuleDescription: d.applicableRuleDescription,
 
-      // 게스트 환불 항목
-      rentalFeeRefundAmount: d.rentalFeeRefundAmount,
-      refundRate: d.rentalFeeRefundRate,
-      // false면 호스트가 수수료 부담 → 수수료 항목 표시, true면 호스트 부담 없음 → 수수료 항목 숨김
+      // 호스트 부담 항목
+      penaltyAmount: d.penaltyAmount,                                               // 임대료 위약금
+      refundRate: d.rentalFeeRefundRate,                                            // 환불율 (위약금 = 임대료 × (100-refundRate)%)
+      // guestServiceFeeRefunded=true(무료취소)이면 0 → 프론트 수수료 항목 숨김
       platformFeeRefundAmount: d.guestServiceFeeRefunded ? 0 : d.originalPlatformFee,
 
-      // 호스트 부담금
+      // 호스트 부담금 합계
       hostBurdenAmount,
 
       // 안내 메시지
