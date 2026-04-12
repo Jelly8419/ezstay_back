@@ -54,7 +54,9 @@ async function calculateDiscount(baseRent, totalDays, checkInDate, room) {
   if (room.quickMoveIn && room.quickMoveInDiscount) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const checkIn = new Date(checkInDate);
+    const checkIn = new Date(typeof checkInDate === 'string' && checkInDate.length === 10
+      ? checkInDate + 'T00:00:00'
+      : checkInDate);
     checkIn.setHours(0, 0, 0, 0);
 
     const daysUntilCheckIn = Math.ceil((checkIn - today) / (1000 * 60 * 60 * 24));
