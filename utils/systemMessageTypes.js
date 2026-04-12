@@ -76,7 +76,7 @@ const getSystemMessageTemplate = (type, data = {}) => {
     [SystemMessageTypes.REFUND_APPROVED]: `환불이 자동 승인되었습니다.\n금액: ${data.refundAmount || '계산 중'}원\n영업일 기준 5일 내 처리됩니다.`,
     [SystemMessageTypes.REFUND_COMPLETED]: `환불이 완료되었습니다.\n금액: ${data.amount ? data.amount.toLocaleString() + '원' : '확인 필요'}`,
     [SystemMessageTypes.DEPOSIT_HOLD_REQUESTED]: `호스트가 퇴실 확인 보류를 신청했습니다. 관리자 승인을 기다리고 있습니다.`,
-    [SystemMessageTypes.DEPOSIT_HOLD_APPROVED]: `관리자가 보증금 보류를 승인했습니다. 합의 절차가 시작됩니다. (기한: 10일)`,
+    [SystemMessageTypes.DEPOSIT_HOLD_APPROVED]: `관리자가 보증금 보류를 승인했습니다. 합의 절차가 시작됩니다. (기한: ${data.deadline || '10일 이내'})`,
     [SystemMessageTypes.DEPOSIT_HOLD_REJECTED]: `관리자가 보증금 보류 신청을 거절했습니다. 호스트 퇴실확인 카운트다운이 재개됩니다.`,
     [SystemMessageTypes.DEPOSIT_FORCE_HELD]: `관리자에 의해 보증금이 반환보류 처리되었습니다. 합의 절차가 시작됩니다.`,
     [SystemMessageTypes.DEPOSIT_AGREEMENT_SUBMITTED]: `호스트가 합의 내용을 제출했습니다.\n차감 요청 금액: ${data.deductAmount != null ? data.deductAmount.toLocaleString() + '원' : '확인 필요'}`,

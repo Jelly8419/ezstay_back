@@ -3728,7 +3728,8 @@ const approveDepositHold = async (req, res) => {
     try {
       const chatRoom = await ChatRoom.findOne({ where: { contractId: contract.id } });
       if (chatRoom && chatRoom.firebaseChatRoomId) {
-        const messageText = getSystemMessageTemplate(SystemMessageTypes.DEPOSIT_HOLD_APPROVED);
+        const deadline = new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000);
+        const messageText = getSystemMessageTemplate(SystemMessageTypes.DEPOSIT_HOLD_APPROVED, { deadline: toDateStrKST(deadline) });
         await sendSystemMessage(chatRoom.firebaseChatRoomId, messageText, SystemMessageTypes.DEPOSIT_HOLD_APPROVED);
       }
     } catch (chatErr) {
