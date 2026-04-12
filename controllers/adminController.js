@@ -820,7 +820,7 @@ const getPropertyDetail = async (req, res) => {
 
       // 상태
       status: room.status,
-      submittedAt: room.submittedAt,
+      submittedAt: room.submittedAt ? toKSTString(room.submittedAt) : null,
       approvedAt: room.approvedAt,
       publishedAt: room.publishedAt,
       rejectionReason: room.rejectionReason,
@@ -1146,7 +1146,7 @@ const getReservationDetail = async (req, res) => {
           step: 'CHECKOUT_REQUESTED',
           label: '퇴실 확인 요청',
           actor: 'guest',
-          occurredAt: reservation.checkoutRequestedAt,
+          occurredAt: toKSTString(reservation.checkoutRequestedAt),
           isAuto: !reservation.checkoutRequested  // 스케줄러 자동 처리 여부
         });
       }
@@ -1157,7 +1157,7 @@ const getReservationDetail = async (req, res) => {
           step: 'CHECKOUT_CONFIRMED',
           label: '퇴실 확인',
           actor: 'host',
-          occurredAt: reservation.hostCheckedOutAt
+          occurredAt: toKSTString(reservation.hostCheckedOutAt)
         });
       }
 
@@ -1167,7 +1167,7 @@ const getReservationDetail = async (req, res) => {
           step: 'HOLD_REQUESTED',
           label: '보증금 보류 신청',
           actor: 'host',
-          occurredAt: reservation.holdRequestedAt,
+          occurredAt: toKSTString(reservation.holdRequestedAt),
           holdReason: reservation.deductionReason || null
         });
       }
@@ -1179,7 +1179,7 @@ const getReservationDetail = async (req, res) => {
           label: '보증금 보류 승인',
           actor: 'admin',
           occurredAt: reservation.holdApprovedAt,
-          agreementDeadline: new Date(new Date(reservation.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000)
+          agreementDeadline: toKSTString(new Date(new Date(reservation.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000))
         });
       }
 
@@ -1189,7 +1189,7 @@ const getReservationDetail = async (req, res) => {
           step: 'AGREEMENT_SUBMITTED',
           label: '합의 내용 제출',
           actor: 'host',
-          occurredAt: da.submittedAt,
+          occurredAt: toKSTString(da.submittedAt),
           deductAmount: da.deductAmount,
           agreementText: da.agreementText
         });
@@ -1201,7 +1201,7 @@ const getReservationDetail = async (req, res) => {
           step: 'AGREEMENT_ACCEPTED',
           label: '합의 동의',
           actor: 'guest',
-          occurredAt: da.acceptedAt,
+          occurredAt: toKSTString(da.acceptedAt),
           deductAmount: da.deductAmount
         });
       }
@@ -1222,7 +1222,7 @@ const getReservationDetail = async (req, res) => {
           step: 'CHECKOUT_CONFIRMED',
           label: '퇴실 확인 (합의 완료)',
           actor: 'system',
-          occurredAt: reservation.hostCheckedOutAt
+          occurredAt: toKSTString(reservation.hostCheckedOutAt)
         });
       }
 
@@ -1854,9 +1854,9 @@ const getRefunds = async (req, res) => {
           cancellationReason: refund.cancellationReason,
 
           // 타임스탬프
-          requestedAt: refund.requestedAt,
-          approvedAt: refund.approvedAt,
-          rejectedAt: refund.rejectedAt,
+          requestedAt: toKSTString(refund.requestedAt),
+          approvedAt: refund.approvedAt ? toKSTString(refund.approvedAt) : null,
+          rejectedAt: refund.rejectedAt ? toKSTString(refund.rejectedAt) : null,
           completedAt: refund.completedAt
         })),
         pagination: {
@@ -1932,7 +1932,7 @@ const getRefundDetail = async (req, res) => {
 
           // 환불 계산 정보
           policyTypeUsed: refund.policyTypeUsed,
-          cancellationDate: refund.cancellationDate,
+          cancellationDate: refund.cancellationDate ? toKSTString(refund.cancellationDate) : null,
           checkInDate: toKSTString(refund.checkInDate),
           daysBeforeCheckin: refund.daysBeforeCheckin,
           isSameDayCancellation: refund.isSameDayCancellation,
@@ -1965,9 +1965,9 @@ const getRefundDetail = async (req, res) => {
           adminNotes: refund.adminNotes,
 
           // 타임스탬프
-          requestedAt: refund.requestedAt,
-          approvedAt: refund.approvedAt,
-          rejectedAt: refund.rejectedAt,
+          requestedAt: toKSTString(refund.requestedAt),
+          approvedAt: refund.approvedAt ? toKSTString(refund.approvedAt) : null,
+          rejectedAt: refund.rejectedAt ? toKSTString(refund.rejectedAt) : null,
           completedAt: refund.completedAt,
           createdAt: refund.createdAt,
           updatedAt: refund.updatedAt
@@ -2299,10 +2299,10 @@ const getRentalOrders = async (req, res) => {
         status: order.status,
         deliveryStatus: order.deliveryStatus,
         deliveryStatusLabel: RentalOrder.DELIVERY_STATUS_LABELS[order.deliveryStatus],
-        deliveredAt: order.deliveredAt,
+        deliveredAt: order.deliveredAt ? toKSTString(order.deliveredAt) : null,
         totalAmount: parseFloat(order.totalAmount),
         refundedAmount: parseFloat(order.refundedAmount || 0),
-        modifiableUntil: order.modifiableUntil,
+        modifiableUntil: order.modifiableUntil ? toKSTString(order.modifiableUntil) : null,
         paidAt: order.paidAt,
         createdAt: order.createdAt,
         contract: order.contract ? {
@@ -2400,10 +2400,10 @@ const getRentalOrderDetail = async (req, res) => {
         status: order.status,
         deliveryStatus: order.deliveryStatus,
         deliveryStatusLabel: RentalOrder.DELIVERY_STATUS_LABELS[order.deliveryStatus],
-        deliveredAt: order.deliveredAt,
+        deliveredAt: order.deliveredAt ? toKSTString(order.deliveredAt) : null,
         totalAmount: parseFloat(order.totalAmount),
         refundedAmount: parseFloat(order.refundedAmount || 0),
-        modifiableUntil: order.modifiableUntil,
+        modifiableUntil: order.modifiableUntil ? toKSTString(order.modifiableUntil) : null,
         paymentKey: order.paymentKey,
         paidAt: order.paidAt,
         createdAt: order.createdAt,
@@ -3419,8 +3419,8 @@ const getDepositHolds = async (req, res) => {
           deposit: c.deposit,
           deductRequestAmount: latestDA?.deductAmount ?? null,
           holdReason: c.deductionReason,
-          holdRequestedAt: c.holdRequestedAt,
-          holdApprovedAt: c.holdApprovedAt,
+          holdRequestedAt: c.holdRequestedAt ? toKSTString(c.holdRequestedAt) : null,
+          holdApprovedAt: c.holdApprovedAt ? toKSTString(c.holdApprovedAt) : null,
           holdStatus: resolveStatus(c),
           // 거절 정보
           rejectedReason: c.checkoutStatus === 'HOLD_REJECTED' ? latestDA?.rejectedReason : null,
@@ -3496,8 +3496,8 @@ const getDepositHoldDetail = async (req, res) => {
       deposit: contract.deposit,
       holdStatus: resolveStatus(contract),
       holdReason: contract.deductionReason,
-      holdRequestedAt: contract.holdRequestedAt,
-      holdApprovedAt: contract.holdApprovedAt,
+      holdRequestedAt: contract.holdRequestedAt ? toKSTString(contract.holdRequestedAt) : null,
+      holdApprovedAt: contract.holdApprovedAt ? toKSTString(contract.holdApprovedAt) : null,
       refundableDeposit: contract.refundableDeposit,
       depositStatus: contract.depositStatus,
       // 보류 신청/합의 이력 전체 (최신순)
@@ -3506,14 +3506,14 @@ const getDepositHoldDetail = async (req, res) => {
         status: da.status,
         statusLabel: DepositAgreement.STATUS_LABELS[da.status],
         holdReason: da.holdReason,
-        requestedAt: da.requestedAt,
-        rejectedAt: da.rejectedAt,
+        requestedAt: da.requestedAt ? toKSTString(da.requestedAt) : null,
+        rejectedAt: da.rejectedAt ? toKSTString(da.rejectedAt) : null,
         rejectedReason: da.rejectedReason,
-        adminApprovedAt: da.adminApprovedAt,
+        adminApprovedAt: da.adminApprovedAt ? toKSTString(da.adminApprovedAt) : null,
         deductAmount: da.deductAmount,
         agreementText: da.agreementText,
-        submittedAt: da.submittedAt,
-        acceptedAt: da.acceptedAt,
+        submittedAt: da.submittedAt ? toKSTString(da.submittedAt) : null,
+        acceptedAt: da.acceptedAt ? toKSTString(da.acceptedAt) : null,
         createdAt: da.createdAt
       }))
     }, '보증금 보류 상세 조회 성공');

@@ -1839,8 +1839,8 @@ exports.getRentalRefundRequestDetail = async (req, res) => {
       retrievalStatusLabel: refundRequest.retrievalStatus
         ? RentalOrderRefundRequest.RETRIEVAL_STATUS_LABELS[refundRequest.retrievalStatus]
         : null,
-      retrievalStartedAt: refundRequest.retrievalStartedAt,
-      retrievalCompletedAt: refundRequest.retrievalCompletedAt,
+      retrievalStartedAt: refundRequest.retrievalStartedAt ? toKSTString(refundRequest.retrievalStartedAt) : null,
+      retrievalCompletedAt: refundRequest.retrievalCompletedAt ? toKSTString(refundRequest.retrievalCompletedAt) : null,
       cancelReason: refundRequest.cancelReason,
       cancelReasons,
       rejectReason: refundRequest.rejectReason,
@@ -2267,8 +2267,8 @@ exports.updateRentalRefundRetrieval = async (req, res) => {
       requestId: refundRequest.id,
       retrievalStatus,
       retrievalStatusLabel: RentalOrderRefundRequest.RETRIEVAL_STATUS_LABELS[retrievalStatus],
-      retrievalStartedAt: refundRequest.retrievalStartedAt,
-      retrievalCompletedAt: retrievalStatus === 'RETRIEVED' ? now : null
+      retrievalStartedAt: refundRequest.retrievalStartedAt ? toKSTString(refundRequest.retrievalStartedAt) : null,
+      retrievalCompletedAt: retrievalStatus === 'RETRIEVED' ? toKSTString(now) : null
     }, '수거 상태가 업데이트되었습니다.');
   } catch (err) {
     console.error('수거 상태 업데이트 오류:', err);
