@@ -842,6 +842,118 @@ const getPropertyDetail = async (req, res) => {
 };
 
 /**
+ * 취소요청 목록 조회 (관리자용)
+ * GET /api/admin/reservations/cancel-requests
+ * Query: page, limit, requesterRole(HOST|GUEST), search, startDate, endDate, sortOrder
+ */
+const getCancelRequests = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      requesterRole,
+      search,
+      startDate,
+      endDate,
+      sortOrder = 'DESC'
+    } = req.query;
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    // 게스트 검색 조건
+    const guestWhere = {};
+    if (search) {
+      guestWhere[Op.or] = [
+        { name: { [Op.like]: `%${search}%` } },
+        { email: { [Op.like]: `%${search}%` } }
+      ];
+    }
+
+    // 취소요청 로그 조건 (인덱스 사용: idx_to_status + idx_changed_by)
+    const logWhere = {
+      toStatus: 'CANCEL_REQUESTED',
+      changedBy: { [Op.in]: ['HOST', 'GUEST'] }
+    };
+    if (requesterRole && ['HOST', 'GUEST'].includes(requesterRole)) {
+      logWhere.changedBy = requesterRole;
+    }
+    if (startDate) {
+      logWhere.createdAt = { ...logWhere.createdAt, [Op.gte]: new Date(startDate + 'T00:00:00') };
+    }
+    if (endDate) {
+      logWhere.createdAt = { ...logWhere.createdAt, [Op.lte]: new Date(endDate + 'T23:59:59') };
+    }
+
+    const { rows: contracts, count: total } = await Contract.findAndCountAll({
+      where: { status: 'CANCEL_REQUESTED' },
+      include: [
+        {
+          model: ContractStatusLog,
+          as: 'statusLogs',
+          where: logWhere,
+          required: true,
+          attributes: ['id', 'changedBy', 'reason', 'createdAt'],
+          separate: false,
+          order: [['createdAt', 'DESC']],
+          limit: 1
+        },
+        {
+          model: User,
+          as: 'guest',
+          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber'],
+          where: Object.keys(guestWhere).length ? guestWhere : undefined,
+          required: !!search
+        },
+        {
+          model: User,
+          as: 'host',
+          attributes: ['id', 'name', 'nickname', 'email']
+        },
+        {
+          model: Room,
+          as: 'room',
+          attributes: ['id', 'roomName', 'address']
+        }
+      ],
+      order: [['createdAt', sortOrder === 'ASC' ? 'ASC' : 'DESC']],
+      limit: parseInt(limit),
+      offset,
+      distinct: true
+    });
+
+    const result = contracts.map(c => {
+      const log = c.statusLogs && c.statusLogs[0];
+      return {
+        contractId: c.id,
+        status: c.status,
+        requesterRole: log ? log.changedBy : null,
+        cancelReason: log ? log.reason : null,
+        requestedAt: log ? toKSTString(log.createdAt) : null,
+        checkInDate: toKSTString(c.checkInDate),
+        checkOutDate: toKSTString(c.checkOutDate),
+        finalTotalAmount: c.finalTotalAmount,
+        guest: c.guest,
+        host: c.host,
+        room: c.room
+      };
+    });
+
+    return success(res, {
+      contracts: result,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (err) {
+    console.error('취소요청 목록 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
+/**
  * 예약 목록 조회 (관리자용)
  * GET /api/admin/reservations
  */
@@ -4892,6 +5004,7 @@ module.exports = {
   deleteRoomMemo,
 
   // 예약 관리
+  getCancelRequests,
   getReservations,
   getReservationDetail,
   adminForceCancel,
