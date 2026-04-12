@@ -1179,7 +1179,7 @@ const getReservationDetail = async (req, res) => {
           label: '보증금 보류 승인',
           actor: 'admin',
           occurredAt: reservation.holdApprovedAt,
-          agreementDeadline: new Date(new Date(reservation.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000)
+          agreementDeadline: toKSTString(new Date(new Date(reservation.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000))
         });
       }
 

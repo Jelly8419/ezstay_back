@@ -755,7 +755,7 @@ const getGuestContracts = async (req, res) => {
 
           // 합의 기한 (HOST_PENDING 또는 AGREEMENT_SUBMITTED 상태일 때만 노출)
           agreementDeadline: ['HOST_PENDING', 'AGREEMENT_SUBMITTED'].includes(contract.checkoutStatus) && contract.holdApprovedAt
-            ? new Date(new Date(contract.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000)
+            ? toKSTString(new Date(new Date(contract.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000))
             : null,
 
           // 계약 시점 스냅샷
@@ -889,7 +889,7 @@ const getHostContracts = async (req, res) => {
             : null,
           // 합의 기한 (HOST_PENDING 또는 AGREEMENT_SUBMITTED 상태일 때만 노출)
           agreementDeadline: ['HOST_PENDING', 'AGREEMENT_SUBMITTED'].includes(contract.checkoutStatus) && contract.holdApprovedAt
-            ? new Date(new Date(contract.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000)
+            ? toKSTString(new Date(new Date(contract.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000))
             : null,
 
           // 게스트 정보 (연락처는 결제 완료 이후 상태에서만 노출)
