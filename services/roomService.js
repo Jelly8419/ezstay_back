@@ -29,7 +29,7 @@ const checkQuickDiscountEligibility = (room, checkInDate) => {
 
   let targetDate;
   if (checkInDate) {
-    targetDate = new Date(checkInDate);
+    targetDate = new Date(checkInDate + 'T00:00:00');
     targetDate.setHours(0, 0, 0, 0);
   } else {
     targetDate = today;
@@ -78,8 +78,8 @@ const checkLongTermDiscountEligibility = (room, checkInDate, checkOutDate) => {
     return result;
   }
 
-  const checkIn = new Date(checkInDate);
-  const checkOut = new Date(checkOutDate);
+  const checkIn = new Date(checkInDate + 'T00:00:00');
+  const checkOut = new Date(checkOutDate + 'T00:00:00');
   const diffDays = Math.ceil((checkOut - checkIn) / (1000 * 60 * 60 * 24));
   const stayWeeks = Math.floor(diffDays / 7);
   result.stayWeeks = stayWeeks;

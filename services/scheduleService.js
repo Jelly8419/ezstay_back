@@ -119,8 +119,8 @@ async function createBlockedPeriod(roomId, hostId, startDate, endDate, reason) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const start = new Date(startDate);
-  const end = new Date(endDate);
+  const start = new Date(startDate + 'T00:00:00');
+  const end = new Date(endDate + 'T00:00:00');
 
   // 과거 날짜 체크
   if (start < today) {
@@ -231,8 +231,8 @@ async function unblockPeriod(roomId, hostId, startDate, endDate) {
   const { sequelize } = require('../models');
 
   // 날짜 검증
-  const start = new Date(startDate);
-  const end = new Date(endDate);
+  const start = new Date(startDate + 'T00:00:00');
+  const end = new Date(endDate + 'T00:00:00');
 
   if (end < start) {
     throw new Error('INVALID_DATE_RANGE');

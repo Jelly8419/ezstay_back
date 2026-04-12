@@ -600,7 +600,7 @@ const cancelPaidRentalOrderByGuest = async (req, res) => {
 
     // 입주 중(IN_PROGRESS) → 취소 요청만 가능 (7일 제한)
     if (contract.status === 'IN_PROGRESS') {
-      const stayStartedAt = contract.checkedInAt ? new Date(contract.checkedInAt) : new Date(contract.checkInDate);
+      const stayStartedAt = contract.checkedInAt ? new Date(contract.checkedInAt) : new Date(contract.checkInDate + 'T00:00:00');
       const cancelRequestDeadline = new Date(stayStartedAt.getTime() + RENTAL_CANCEL_REQUEST_DAYS * 24 * 60 * 60 * 1000);
 
       if (now > cancelRequestDeadline) {
@@ -609,8 +609,8 @@ const cancelPaidRentalOrderByGuest = async (req, res) => {
           code: 4421,
           message: `입주 시작 후 ${RENTAL_CANCEL_REQUEST_DAYS}일이 경과하여 취소 요청이 불가합니다.`
         }, 400, {
-          stayStartedAt: stayStartedAt.toISOString(),
-          cancelRequestDeadline: cancelRequestDeadline.toISOString()
+          stayStartedAt: toKSTString(stayStartedAt),
+          cancelRequestDeadline: toKSTString(cancelRequestDeadline)
         });
       }
 
@@ -668,8 +668,8 @@ const cancelPaidRentalOrderByGuest = async (req, res) => {
             quantity: item.quantity
           })),
           reason,
-          requestedAt: now.toISOString(),
-          cancelRequestDeadline: cancelRequestDeadline.toISOString()
+          requestedAt: toKSTString(now),
+          cancelRequestDeadline: toKSTString(cancelRequestDeadline)
         },
         description: `입주 중 주문 전체 취소 요청: ${reason || '사유 없음'}`,
         req
@@ -1369,8 +1369,8 @@ const requestRentalItemsReturn = async (req, res) => {
       if (now > cancelRequestDeadline) {
         await transaction.rollback();
         return error(res, { code: 4421, message: `입주 시작 후 ${RENTAL_CANCEL_REQUEST_DAYS}일이 경과하여 반품 신청이 불가합니다.` }, 400, {
-          stayStartedAt: stayStartedAt.toISOString(),
-          cancelRequestDeadline: cancelRequestDeadline.toISOString()
+          stayStartedAt: toKSTString(stayStartedAt),
+          cancelRequestDeadline: toKSTString(cancelRequestDeadline)
         });
       }
     }
