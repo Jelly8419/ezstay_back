@@ -62,8 +62,8 @@ async function calculateDiscount(baseRent, totalDays, checkInDate, room) {
     const daysUntilCheckIn = Math.ceil((checkIn - today) / (1000 * 60 * 60 * 24));
 
     if (daysUntilCheckIn >= 0 && daysUntilCheckIn <= room.quickMoveIn) {
-      // quickMoveInDiscount는 고정 금액 (원)
-      quickMoveInDiscount = room.quickMoveInDiscount;
+      // quickMoveInDiscount는 고정 금액 (원), baseRent 초과 불가
+      quickMoveInDiscount = Math.min(room.quickMoveInDiscount, baseRent);
     }
   }
 
@@ -71,8 +71,8 @@ async function calculateDiscount(baseRent, totalDays, checkInDate, room) {
   // 조건: 선택 기간이 longTermWeeks주 이상
   const totalWeeks = Math.floor(totalDays / 7);
   if (room.longTermWeeks && room.longTermDiscount && totalWeeks >= room.longTermWeeks) {
-    // 빠른 입주 할인 적용 후 남은 임대료에 장기계약 할인율 적용
-    const adjustedRent = baseRent - quickMoveInDiscount;
+    // 빠른 입주 할인 적용 후 남은 임대료에 장기계약 할인율 적용 (0 이하 방어)
+    const adjustedRent = Math.max(0, baseRent - quickMoveInDiscount);
     longTermDiscount = Math.floor(adjustedRent * (room.longTermDiscount / 100));
   }
 
