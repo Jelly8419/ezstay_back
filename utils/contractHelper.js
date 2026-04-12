@@ -54,7 +54,9 @@ async function calculateDiscount(baseRent, totalDays, checkInDate, room) {
   if (room.quickMoveIn && room.quickMoveInDiscount) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const checkIn = new Date(checkInDate);
+    const checkIn = new Date(typeof checkInDate === 'string' && checkInDate.length === 10
+      ? checkInDate + 'T00:00:00'
+      : checkInDate);
     checkIn.setHours(0, 0, 0, 0);
 
     const daysUntilCheckIn = Math.ceil((checkIn - today) / (1000 * 60 * 60 * 24));
@@ -339,8 +341,12 @@ function calculateCleaningFee(room) {
  * @returns {Object} { valid, message, calculatedDays }
  */
 function validateDates(checkInDate, checkOutDate) {
-  const checkIn = new Date(checkInDate);
-  const checkOut = new Date(checkOutDate);
+  const checkIn = new Date(typeof checkInDate === 'string' && checkInDate.length === 10
+    ? checkInDate + 'T00:00:00'
+    : checkInDate);
+  const checkOut = new Date(typeof checkOutDate === 'string' && checkOutDate.length === 10
+    ? checkOutDate + 'T00:00:00'
+    : checkOutDate);
 
   // 과거 날짜 체크 (당일은 허용, 어제 이전만 거부)
   const today = new Date();
