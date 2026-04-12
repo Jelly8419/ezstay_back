@@ -3235,41 +3235,24 @@ const getHostCancelPreview = async (req, res) => {
     }
 
     const d = refundResult.data;
-    // refundRate=100(무료 취소)이면 platformFee는 게스트 환불에 포함되므로 호스트 부담 불필요
+    // refundRate=100이면 호스트 수수료 부담 없음, refundRate<100이면 수수료도 호스트 부담
     const hostBurdenAmount = d.penaltyAmount + (d.guestServiceFeeRefunded ? 0 : d.originalPlatformFee);
 
     return success(res, {
-      // 원본 결제 항목별 금액
-      originalRentalFee: d.originalRentalFee,
-      originalCleaningFee: d.originalCleaningFee,
-      originalMaintenanceFee: d.originalMaintenanceFee,
-      originalDeposit: d.originalDeposit,
-      originalPlatformFee: d.originalPlatformFee,
-      originalRentalItemsFee: d.originalRentalItemsFee,
-      originalTotalAmount: d.originalTotalAmount,
-
-      // 항목별 환불 금액
-      rentalFeeRefundAmount: d.rentalFeeRefundAmount,
-      cleaningFeeRefundAmount: d.cleaningFeeRefundAmount,
-      maintenanceFeeRefundAmount: d.maintenanceFeeRefundAmount,
-      depositRefundAmount: d.depositRefundAmount,
-      rentalItemsFeeRefundAmount: d.rentalItemsFeeRefundAmount,
-
-      // 호스트 납부
-      hostBurdenAmount,
-      penaltyAmount: d.penaltyAmount,
-
-      // 게스트 환불
-      guestRefundAmount: d.finalRefundAmount,
-
-      // 게스트 보전 (결제일+3영업일 후)
-      guestCompensationAmount: d.penaltyAmount,
-
-      // 참고 정보
-      daysBeforeCheckin: d.daysBeforeCheckin,
-      refundRate: d.rentalFeeRefundRate,
+      // 환불 정책
       policyDisplayName: d.policyDisplayName,
       applicableRuleDescription: d.applicableRuleDescription,
+
+      // 게스트 환불 항목
+      rentalFeeRefundAmount: d.rentalFeeRefundAmount,
+      refundRate: d.rentalFeeRefundRate,
+      // false면 호스트가 수수료 부담 → 수수료 항목 표시, true면 호스트 부담 없음 → 수수료 항목 숨김
+      platformFeeRefundAmount: d.guestServiceFeeRefunded ? 0 : d.originalPlatformFee,
+
+      // 호스트 부담금
+      hostBurdenAmount,
+
+      // 안내 메시지
       message: d.message
     }, '호스트 취소 부담금 미리보기');
   } catch (err) {
@@ -3319,6 +3302,7 @@ const prepareHostCancelPayment = async (req, res) => {
       return error(res, { code: 4623, message: `환불 계산 실패: ${refundResult.error.message}` }, 500);
     }
     const d = refundResult.data;
+    // refundRate=100이면 호스트 수수료 부담 없음, refundRate<100이면 수수료도 호스트 부담
     const hostBurdenAmount = d.penaltyAmount + (d.guestServiceFeeRefunded ? 0 : d.originalPlatformFee);
 
     // 이미 발급된 orderId가 있으면 재사용 (멱등성 보장)
@@ -3385,7 +3369,7 @@ const cancelContractByHost = async (req, res) => {
     }
 
     const refundData = refundResult.data;
-    // refundRate=100(무료 취소)이면 platformFee는 게스트 환불에 포함되므로 호스트 부담 불필요
+    // refundRate=100이면 호스트 수수료 부담 없음, refundRate<100이면 수수료도 호스트 부담
     const hostBurdenAmount = refundData.penaltyAmount + (refundData.guestServiceFeeRefunded ? 0 : refundData.originalPlatformFee);
 
     // [2] 호스트 부담금 PG 결제 (hostBurdenAmount > 0인 경우만)
