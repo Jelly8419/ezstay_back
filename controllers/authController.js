@@ -1,4 +1,4 @@
-const { User, LocalUser, SocialUser, UserBankAccount, EmailVerificationCode, UserSession, sequelize } = require('../models');
+const { User, LocalUser, SocialUser, UserBankAccount, EmailVerificationCode, KmcVerification, UserSession, sequelize } = require('../models');
 const { generateTokens, hashPassword, comparePassword, verifyToken } = require('../utils/auth');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
 const { validateEmail, validatePassword, generateNickname } = require('../utils/validator');
@@ -27,7 +27,7 @@ const getRefreshExpiresAt = () => {
  * @returns {201} 회원가입 성공 (사용자 정보 + JWT 토큰)
  */
 const register = async (req, res) => {
-  const { email, password, user_mode, name, phoneNumber, birth, gender, di, terms } = req.body;
+  let { email, password, user_mode, name, phoneNumber, birth, gender, di, terms } = req.body;
 
   const emailValidation = validateEmail(email);
   if (!emailValidation.valid) {
@@ -79,6 +79,26 @@ const register = async (req, res) => {
     return error(res, ErrorCodes.DUPLICATE_EMAIL, 400);
   }
 
+  // KMC 인증 결과 서버에서 직접 조회 (프론트 조작 방지, phoneNumber/di 덮어쓰기)
+  let kmcRecord = null;
+  if (di) {
+    kmcRecord = await KmcVerification.findOne({
+      where: { di, used: false },
+      order: [['created_at', 'DESC']]
+    });
+
+    if (kmcRecord) {
+      if (kmcRecord.expiresAt < new Date()) {
+        return error(res, { code: 4014, message: '본인인증이 만료되었습니다. 다시 인증해주세요.' }, 400);
+      }
+      // 서버 저장값으로 덮어쓰기 (프론트 전달값 무시)
+      phoneNumber = kmcRecord.phoneNumber;
+      name        = name || kmcRecord.name;
+      birth       = birth || kmcRecord.birth;
+      gender      = gender !== undefined ? gender : kmcRecord.gender;
+    }
+  }
+
   // DI 중복 체크 (같은 사람이 다른 이메일로 가입 방지)
   if (di) {
     const existingDi = await User.findOne({ where: { di, isActive: true } });
@@ -107,11 +127,16 @@ const register = async (req, res) => {
       })
     }, { transaction });
 
+    // KMC 인증 임시 레코드 사용 처리 (재사용 방지)
+    if (kmcRecord) {
+      await kmcRecord.update({ used: true }, { transaction });
+    }
+
     const hashedPassword = await hashPassword(password);
     await LocalUser.create({
       userId: newUser.id,
       password: hashedPassword,
-      emailVerified: true, // ✅ 인증 완료 상태로 생성
+      emailVerified: true,
       emailVerificationToken: null
     }, { transaction });
 
