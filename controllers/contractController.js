@@ -968,11 +968,22 @@ const getContractDetail = async (req, res) => {
     const paymentHistory = [];
 
     if (isHost) {
-      // 호스트: HOST_BURDEN 결제/환불만
-      const hostPayments = await Payment.findAll({
-        where: { contractId: contract.id, paymentType: 'HOST_BURDEN' },
-        order: [['createdAt', 'ASC']]
-      });
+      // 호스트: HOST_BURDEN 결제/환불 + 정산금/보증금 차감 지급
+      const [hostPayments, hostPayouts] = await Promise.all([
+        Payment.findAll({
+          where: { contractId: contract.id, paymentType: 'HOST_BURDEN' },
+          order: [['createdAt', 'ASC']]
+        }),
+        Payout.findAll({
+          where: {
+            contractId: contract.id,
+            recipientType: 'HOST',
+            payoutType: { [Op.in]: ['CONTRACT_SETTLEMENT', 'DEPOSIT_DEDUCTION', 'GUEST_PENALTY'] },
+            status: 'COMPLETED'
+          },
+          order: [['processedAt', 'ASC']]
+        })
+      ]);
 
       hostPayments.forEach(p => {
         if (p.status === 'READY') return;
@@ -992,6 +1003,21 @@ const getContractDetail = async (req, res) => {
           }
         }
       });
+
+      const payoutDescriptions = {
+        CONTRACT_SETTLEMENT: '정산금 지급',
+        DEPOSIT_DEDUCTION:   '보증금 차감 지급',
+        GUEST_PENALTY:       '게스트 위약금 지급'
+      };
+      hostPayouts.forEach(p => {
+        paymentHistory.push({
+          occurredAt: toKSTString(p.processedAt),
+          amount: p.amount,
+          description: payoutDescriptions[p.payoutType] || '지급'
+        });
+      });
+
+      paymentHistory.sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt));
     } else {
       // 게스트: 계약 결제 + 환불 + 관리자 환불 + ADDITIONAL 렌탈 결제/취소
       const [guestPayments, refunds, adminRefunds, rentalLogs] = await Promise.all([
