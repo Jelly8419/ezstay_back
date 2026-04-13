@@ -91,6 +91,7 @@ const register = async (req, res) => {
     const newUser = await User.create({
       email,
       userType: 'local',
+      userMode: 'guest',
       ...(name && { name }),
       nickname: generateNickname(),
       ...(phoneNumber && { phoneNumber, phoneVerified: true, phoneVerifiedAt: new Date() }),
@@ -138,7 +139,7 @@ const register = async (req, res) => {
         nickname: newUser.nickname || null,
         profileImageUrl: newUser.profileImageUrl,
         userType: newUser.userType,
-        userMode: user_mode === 'host' ? 'host' : 'guest',
+        mode: newUser.userMode,
         phoneVerified: newUser.phoneVerified || false,
         hasBank: false
       },
@@ -257,7 +258,10 @@ const login = async (req, res) => {
       expiresAt: getRefreshExpiresAt()
     }, { transaction });
 
-    await user.update({ lastLoginAt: new Date() }, { transaction });
+    await user.update({
+      lastLoginAt: new Date(),
+      ...(user.userMode !== userMode && { userMode })
+    }, { transaction });
 
     await transaction.commit();
 
@@ -269,7 +273,7 @@ const login = async (req, res) => {
         nickname: user.nickname,
         profileImageUrl: user.profileImageUrl,
         userType: user.userType,
-        userMode: userMode,
+        mode: userMode,
         phoneVerified: user.phoneVerified || false,
         hasBank: !!bankAccount
       },
@@ -400,10 +404,40 @@ const getProfile = async (req, res) => {
         nickname: user.nickname,
         profileImageUrl: user.profileImageUrl,
         userType: user.userType,
+        mode: user.userMode,
         phoneVerified: user.phoneVerified || false,
         hasBank: !!bankAccount
       }
     });
+  } catch (err) {
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * 유저 모드 전환
+ * @route PATCH /api/auth/mode
+ * @body {string} mode - 전환할 모드 (guest | host)
+ */
+const switchUserMode = async (req, res) => {
+  try {
+    const user = req.user;
+    const { mode } = req.body;
+
+    if (!mode || !['guest', 'host'].includes(mode)) {
+      return error(res, { code: 4000, message: 'mode는 guest 또는 host여야 합니다.' }, 400);
+    }
+
+    if (mode === 'host') {
+      const bankAccount = await UserBankAccount.findOne({ where: { userId: user.id } });
+      if (!bankAccount) {
+        return error(res, { code: 4030, message: '호스트 모드 전환은 계좌 등록 후 가능합니다.' }, 403);
+      }
+    }
+
+    await user.update({ userMode: mode });
+
+    return success(res, { mode });
   } catch (err) {
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
@@ -617,6 +651,7 @@ module.exports = {
   refreshToken,
   logout,
   getProfile,
+  switchUserMode,
   devBypassLogin,
   resetPassword
 };
