@@ -291,7 +291,9 @@ const getRoomsForMap = async (req, res) => {
       return error(res, boundsValidation.error, 400);
     }
 
-    const coords = boundsValidation.coords;
+    // 요청 좌표를 격자에 스냅 → 캐시 키·DB 쿼리 범위를 격자 단위로 통일
+    // sw(남서)는 내림, ne(북동)는 올림으로 스냅하여 경계 매물 누락 방지
+    const coords = roomService.snapToGrid(boundsValidation.coords, zoom);
     const dateFilter = checkIn && checkOut ? `${checkIn}_${checkOut}` : 'any';
 
     // ETag 생성 및 HTTP 캐시 검증
