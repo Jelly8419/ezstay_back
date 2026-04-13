@@ -16,11 +16,13 @@ const {
   updateRoomStatus,
   deleteRoom,
   duplicateRoom,
-  getHostAccount,
-  getReceipt,
-  upsertReceipt,
-  deleteReceipt
+  getHostAccount
 } = require('../controllers/hostController');
+const {
+  getReceiptSetting,
+  upsertReceiptSetting,
+  deleteReceiptSetting
+} = require('../controllers/receiptSettingController');
 const {
   getAutoMessageTemplates,
   getAutoMessageTemplate,
@@ -122,13 +124,13 @@ router.get('/rooms/:roomId/auto-messages', getRoomAutoMessageTemplates);
 // ========================================
 
 // 26. 영수증 설정 조회
-router.get('/receipt', getReceipt);
+router.get('/receipt', getReceiptSetting);
 
 // 27. 영수증 설정 저장/수정
-router.put('/receipt', upsertReceipt);
+router.put('/receipt', upsertReceiptSetting);
 
 // 28. 영수증 설정 삭제
-router.delete('/receipt', deleteReceipt);
+router.delete('/receipt', deleteReceiptSetting);
 
 // ========================================
 // 정산 관리 API

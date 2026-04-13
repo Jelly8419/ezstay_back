@@ -15,8 +15,7 @@ const {
   RentalOrderLog,
   RentalItem,
   RentalItemReservation,
-  RentalPayment,
-  Contract
+  RentalPayment
 } = require('../models');
 
 /**

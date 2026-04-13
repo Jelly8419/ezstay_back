@@ -7,7 +7,6 @@ const { toDateStrKST, nowKSTString } = require('../utils/dateHelper');
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
 const { calculateSettlementDate, calculateSettlementAmount, calculatePayoutAvailableDate } = require('../services/settlementService');
-const { createReceiptsForReadySettlements } = require('../services/receiptService');
 const { cancelRentalItemReservations } = require('../utils/contractHelper');
 const paytagClient = require('../utils/paytagClient');
 
@@ -642,13 +641,6 @@ async function updateSettlementReady() {
 
     if (updatedCount > 0) {
       console.log(`[스케줄러] ${updatedCount}건의 정산을 READY 상태로 변경했습니다.`);
-
-      // 정산 READY로 변경된 건에 대해 영수증 자동 생성
-      try {
-        await createReceiptsForReadySettlements();
-      } catch (receiptErr) {
-        console.error('[스케줄러] 영수증 자동 생성 오류:', receiptErr);
-      }
     }
 
     return updatedCount;

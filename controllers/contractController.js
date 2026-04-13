@@ -1690,10 +1690,6 @@ const cancelContractByGuest = async (req, res) => {
       { transaction }
     );
 
-    // TODO: 게스트 취소 위약금 중 플랫폼 귀속 금액이 있을 경우 영수증 발급 대기 목록 생성
-    // const { createCancelFeeReceipt } = require('../services/receiptService');
-    // await createCancelFeeReceipt({ contractId, hostId: contract.hostId, targetType: 'GUEST_CANCEL_FEE', platformFeeAmount, date }, transaction);
-
     // 상태 변경 로그 기록
     await ContractStatusLog.createLog({
       contractId: contract.id,
