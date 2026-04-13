@@ -284,7 +284,27 @@ const validateMapBounds = (swLat, swLng, neLat, neLng) => {
 };
 
 /**
+ * 줌 레벨에 따른 캐시 키 정밀도 결정
+ * 줌이 낮을수록(넓은 영역) 격자를 크게 잡아 캐시 HIT율을 높임
+ *
+ * 카카오맵 줌 레벨: 숫자가 작을수록 확대(상세), 클수록 축소(광역)
+ * zoom 1~2 (가장 확대, 건물/거리 수준) → 소수점 3자리 (약 110m 격자)
+ * zoom 3~4 (구 수준)                   → 소수점 2자리 (약 1.1km 격자)
+ * zoom 5+  (광역, 시/도 수준)          → 소수점 1자리 (약 11km 격자)
+ *
+ * @param {string|number} zoom - 줌 레벨
+ * @returns {number} 소수점 자리수
+ */
+const getCachePrecision = (zoom) => {
+  const zoomLevel = parseInt(zoom) || 0;
+  if (zoomLevel <= 2) return 3;
+  if (zoomLevel <= 4) return 2;
+  return 1;
+};
+
+/**
  * 캐시 키 생성
+ * 줌 레벨에 따라 격자 크기를 동적으로 결정하여 드래그 시 캐시 HIT율을 높임
  * @param {object} coords - 좌표 객체
  * @param {string} zoom - 줌 레벨
  * @param {string} dateFilter - 날짜 필터 문자열
@@ -292,7 +312,7 @@ const validateMapBounds = (swLat, swLng, neLat, neLng) => {
  */
 const generateCacheKey = (coords, zoom, dateFilter) => {
   const { swLatNum, swLngNum, neLatNum, neLngNum } = coords;
-  const precision = appConfig.map.coordinate.PRECISION;
+  const precision = getCachePrecision(zoom);
 
   const roundedSwLat = swLatNum.toFixed(precision);
   const roundedSwLng = swLngNum.toFixed(precision);
@@ -564,7 +584,7 @@ const cacheRooms = async (cacheKey, data) => {
  * @param {string} zoom - 줌 레벨
  * @returns {Promise<void>}
  */
-const prefetchAdjacentAreas = async (swLatNum, swLngNum, neLatNum, neLngNum, zoom) => {
+const prefetchAdjacentAreas = async (swLatNum, swLngNum, neLatNum, neLngNum, zoom, dateFilter) => {
   const latDiff = neLatNum - swLatNum;
   const lngDiff = neLngNum - swLngNum;
 
@@ -583,7 +603,7 @@ const prefetchAdjacentAreas = async (swLatNum, swLngNum, neLatNum, neLngNum, zoo
       neLngNum: area.neLng
     };
 
-    const cacheKey = generateCacheKey(coords, zoom, 'any');
+    const cacheKey = generateCacheKey(coords, zoom, dateFilter || 'any');
     const exists = await safeRedisOperation(async (client) => {
       return await client.exists(cacheKey);
     });
