@@ -374,14 +374,14 @@ const calculateLimit = (zoom, userLimit) => {
 
   const zoomLevel = parseInt(zoom);
   if (zoomLevel >= MAX) {
-    return 0; // 매물 미표시
+    return 0;             // 너무 축소 → 매물 미표시
   } else if (zoomLevel >= MEDIUM) {
-    return limits.DETAIL;
+    return limits.DEFAULT; // 광역 → 많이 (500개)
   } else if (zoomLevel >= DETAIL) {
-    return limits.MEDIUM;
+    return limits.MEDIUM;  // 중간 → 중간 (300개)
+  } else {
+    return limits.DETAIL;  // 상세 확대 → 적게 (200개, 어차피 좁은 범위)
   }
-
-  return limits.DEFAULT;
 };
 
 /**
