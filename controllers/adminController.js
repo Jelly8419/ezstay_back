@@ -3175,10 +3175,6 @@ const approveHostCancelRequest = async (req, res) => {
       processedAt: new Date()
     }, { transaction });
 
-    // TODO: 호스트 취소 위약금 중 플랫폼 귀속 금액이 있을 경우 영수증 발급 대기 목록 생성
-    // const { createCancelFeeReceipt } = require('../services/receiptService');
-    // await createCancelFeeReceipt({ contractId: contract.id, hostId: contract.hostId, targetType: 'HOST_CANCEL_FEE', platformFeeAmount, date: new Date().toISOString().split('T')[0] }, transaction);
-
     // 취소 승인 시 Payout/Settlement 보류 처리 (PG 환불 미호출 — 관리자가 별도 수동 처리)
     await Payout.update(
       { status: 'ON_HOLD', note: `${requesterLabel} 취소 승인으로 인한 지급 보류` },

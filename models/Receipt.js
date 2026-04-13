@@ -41,9 +41,9 @@ const Receipt = sequelize.define('Receipt', {
     comment: '영수증 종류 (설정에서 스냅샷)'
   },
   targetType: {
-    type: DataTypes.ENUM('CONTRACT_FEE', 'HOST_CANCEL_FEE', 'GUEST_CANCEL_FEE', 'OPTION_SALE'),
+    type: DataTypes.ENUM('CONTRACT_FEE', 'HOST_CANCEL_FEE', 'GUEST_CANCEL_FEE', 'OPTION_SALE', 'CLEANING_FEE', 'OPTION_SALE_REFUND', 'CLEANING_FEE_REFUND'),
     allowNull: false,
-    comment: '발급 유형 (CONTRACT_FEE: 계약수수료, HOST_CANCEL_FEE: 호스트취소수수료, GUEST_CANCEL_FEE: 게스트취소위약금 플랫폼귀속, OPTION_SALE: 옵션상품)'
+    comment: '발급 유형 (CONTRACT_FEE: 계약수수료, HOST_CANCEL_FEE: 호스트취소수수료, GUEST_CANCEL_FEE: 게스트취소위약금, OPTION_SALE: 옵션상품판매, CLEANING_FEE: 이지청소비, OPTION_SALE_REFUND: 옵션상품환불, CLEANING_FEE_REFUND: 이지청소환불)'
   },
   amount: {
     type: DataTypes.INTEGER,

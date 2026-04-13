@@ -12,6 +12,7 @@ const { Op } = require('sequelize');
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
 const { maskAccountNumber } = require('../services/settlementService');
 const { toDateStrKST, todayKST, toKSTString } = require('../utils/dateHelper');
+const { createContractFeeReceipt } = require('../services/receiptService');
 
 /**
  * 지급 목록 조회
@@ -176,12 +177,18 @@ exports.executePayout = async (req, res) => {
       changedBy: 'ADMIN'
     }, { transaction });
 
-    // CONTRACT_SETTLEMENT 타입이면 Settlement도 COMPLETED로 업데이트
+    // CONTRACT_SETTLEMENT 타입이면 Settlement도 COMPLETED로 업데이트 + 영수증 생성
     if (payout.payoutType === 'CONTRACT_SETTLEMENT' && payout.settlementId) {
       await Settlement.update(
         { status: 'COMPLETED', completedAt: new Date(), adminId },
         { where: { id: payout.settlementId }, transaction }
       );
+
+      // 호스트 플랫폼 수수료 영수증 생성 (ReceiptSetting 등록한 호스트만)
+      const settlement = await Settlement.findByPk(payout.settlementId, { transaction });
+      if (settlement) {
+        await createContractFeeReceipt(settlement, transaction);
+      }
     }
 
     await transaction.commit();

@@ -10,6 +10,11 @@ const {
   deleteAccount
 } = require('../controllers/userController');
 const { authenticateToken } = require('../middleware/auth');
+const {
+  getReceiptSetting,
+  upsertReceiptSetting,
+  deleteReceiptSetting
+} = require('../controllers/receiptSettingController');
 
 // 게스트 본인인증정보 저장
 router.post('/guest/verification', authenticateToken, saveGuestVerification);
@@ -31,5 +36,18 @@ router.patch('/nickname', authenticateToken, changeNickname);
 
 // 회원 탈퇴
 router.delete('/account', authenticateToken, deleteAccount);
+
+// ========================================
+// 영수증 설정 API (게스트)
+// ========================================
+
+// 영수증 설정 조회
+router.get('/receipt', authenticateToken, getReceiptSetting);
+
+// 영수증 설정 저장/수정
+router.put('/receipt', authenticateToken, upsertReceiptSetting);
+
+// 영수증 설정 삭제
+router.delete('/receipt', authenticateToken, deleteReceiptSetting);
 
 module.exports = router;
