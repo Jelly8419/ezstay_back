@@ -322,17 +322,22 @@ const snapToGrid = (coords, zoom) => {
 };
 
 /**
- * 캐시 키 생성 (스냅된 좌표 기준)
- * @param {object} snappedCoords - snapToGrid() 결과
- * @param {string} zoom
- * @param {string} dateFilter
- * @returns {string}
+ * 캐시 키 생성
+ * @param {object} coords - 좌표 객체
+ * @param {string} zoom - 줌 레벨
+ * @param {string} dateFilter - 날짜 필터 문자열
+ * @returns {string} 캐시 키
  */
-const generateCacheKey = (snappedCoords, zoom, dateFilter) => {
-  const { swLatNum, swLngNum, neLatNum, neLngNum } = snappedCoords;
-  const precision = appConfig.map.coordinate.PRECISION; // 표시용 소수점 (4자리)
+const generateCacheKey = (coords, zoom, dateFilter) => {
+  const { swLatNum, swLngNum, neLatNum, neLngNum } = coords;
+  const precision = appConfig.map.coordinate.PRECISION;
 
-  return `rooms:map:${swLatNum.toFixed(precision)},${swLngNum.toFixed(precision)},${neLatNum.toFixed(precision)},${neLngNum.toFixed(precision)}:zoom${zoom || 'default'}:date${dateFilter}`;
+  const roundedSwLat = swLatNum.toFixed(precision);
+  const roundedSwLng = swLngNum.toFixed(precision);
+  const roundedNeLat = neLatNum.toFixed(precision);
+  const roundedNeLng = neLngNum.toFixed(precision);
+
+  return `rooms:map:${roundedSwLat},${roundedSwLng},${roundedNeLat},${roundedNeLng}:zoom${zoom || 'default'}:date${dateFilter}`;
 };
 
 /**
@@ -609,13 +614,12 @@ const prefetchAdjacentAreas = async (swLatNum, swLngNum, neLatNum, neLngNum, zoo
   ];
 
   for (const area of adjacentAreas) {
-    const rawCoords = {
+    const coords = {
       swLatNum: area.swLat,
       swLngNum: area.swLng,
       neLatNum: area.neLat,
       neLngNum: area.neLng
     };
-    const coords = snapToGrid(rawCoords, zoom);
 
     const cacheKey = generateCacheKey(coords, zoom, dateFilter || 'any');
     const exists = await safeRedisOperation(async (client) => {

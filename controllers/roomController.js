@@ -291,14 +291,11 @@ const getRoomsForMap = async (req, res) => {
       return error(res, boundsValidation.error, 400);
     }
 
-    const rawCoords = boundsValidation.coords;
-    // 캐시 키용: 스냅 좌표 (드래그 시 HIT율 향상)
-    // DB 쿼리용: 원본 좌표 (정확한 화면 범위만 조회)
-    const snappedCoords = roomService.snapToGrid(rawCoords, zoom);
+    const coords = boundsValidation.coords;
     const dateFilter = checkIn && checkOut ? `${checkIn}_${checkOut}` : 'any';
 
     // ETag 생성 및 HTTP 캐시 검증
-    const etag = await roomService.generateETag(snappedCoords, zoom, dateFilter);
+    const etag = await roomService.generateETag(coords, zoom, dateFilter);
     if (req.headers['if-none-match'] === etag) {
       console.log('✅ HTTP 304 Not Modified - 브라우저 캐시 사용');
       return res.status(304).end();
@@ -314,8 +311,8 @@ const getRoomsForMap = async (req, res) => {
       }, '지도를 더 확대하면 매물을 확인할 수 있습니다.');
     }
 
-    // Redis 캐시 확인 (스냅 좌표 기준 키)
-    const cacheKey = roomService.generateCacheKey(snappedCoords, zoom, dateFilter);
+    // Redis 캐시 확인
+    const cacheKey = roomService.generateCacheKey(coords, zoom, dateFilter);
     const cachedData = await roomService.getCachedRooms(cacheKey);
 
     if (cachedData) {
@@ -330,8 +327,8 @@ const getRoomsForMap = async (req, res) => {
     // 예약 불가능한 방 ID 조회
     const unavailableRoomIds = await roomService.getUnavailableRoomIds(checkIn, checkOut);
 
-    // DB에서 방 목록 조회 (원본 좌표 기준 — 정확한 화면 범위)
-    const rooms = await roomService.fetchRoomsFromDB(rawCoords, [], limit);
+    // DB에서 방 목록 조회
+    const rooms = await roomService.fetchRoomsFromDB(coords, [], limit);
 
     // 응답 데이터 가공 (할인 적용 여부 계산 + 예약 가능 여부 포함)
     const responseData = roomService.transformRoomsForMap(rooms, checkIn, checkOut, unavailableRoomIds);
@@ -342,10 +339,10 @@ const getRoomsForMap = async (req, res) => {
     // 인접 영역 사전 캐싱 (비동기)
     setImmediate(() => {
       roomService.prefetchAdjacentAreas(
-        rawCoords.swLatNum,
-        rawCoords.swLngNum,
-        rawCoords.neLatNum,
-        rawCoords.neLngNum,
+        coords.swLatNum,
+        coords.swLngNum,
+        coords.neLatNum,
+        coords.neLngNum,
         zoom,
         dateFilter
       ).catch(err => {
