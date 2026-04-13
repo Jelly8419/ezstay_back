@@ -48,6 +48,7 @@ const RentalOrderRefundRequest = require('./RentalOrderRefundRequest');
 const ServiceTaskModel = require('./ServiceTask');
 const ServiceTaskLogModel = require('./ServiceTaskLog');
 const ContractCancelRequestModel = require('./ContractCancelRequest');
+const KmcVerificationModel = require('./KmcVerification');
 
 const sequelize = new Sequelize(process.env.DB_NAME || 'ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
   host: process.env.DB_HOST || 'localhost',
@@ -101,6 +102,7 @@ const RentalPaymentFailureLog = RentalPaymentFailureLogModel(sequelize);
 const ServiceTask = ServiceTaskModel(sequelize);
 const ServiceTaskLog = ServiceTaskLogModel(sequelize);
 const ContractCancelRequest = ContractCancelRequestModel(sequelize);
+const KmcVerification = KmcVerificationModel(sequelize);
 
 // 방 관리 모델 초기화
 const RoomMemoModel = require('./RoomMemo');
@@ -1125,5 +1127,6 @@ module.exports = {
   RentalOrderRefundRequest,
   ServiceTask,
   ServiceTaskLog,
-  ContractCancelRequest
+  ContractCancelRequest,
+  KmcVerification
 };

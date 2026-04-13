@@ -9,7 +9,7 @@
  */
 const axios = require('axios');
 const kmcExec = require('../utils/kmcCrypto');
-const { User, sequelize } = require('../models');
+const { User, KmcVerification, sequelize } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 
 const KMC_API_URL = 'https://www.kmcert.com/kmcis/api/kmcisToken_api.jsp';
@@ -224,9 +224,23 @@ const verifyResult = async (req, res) => {
       }, {
         where: { id: userId }
       });
+    } else {
+      // 비로그인 상태: 인증 결과를 임시 저장 (register에서 꺼내 쓸 용도)
+      await KmcVerification.upsert({
+        certNum: verificationData.certNum,
+        name: verificationData.name,
+        phoneNumber: verificationData.phoneNo,
+        birth: verificationData.birth,
+        gender: verificationData.gender,
+        ci: verificationData.ci,
+        di: verificationData.di,
+        used: false,
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        ipAddress: req.ip || null
+      });
     }
 
-    // 7. 프론트에 인증 결과 반환
+    // 8. 프론트에 인증 결과 반환
     return success(res, {
       verified: true,
       name: verificationData.name,
