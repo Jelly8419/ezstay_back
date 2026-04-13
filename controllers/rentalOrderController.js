@@ -1109,6 +1109,10 @@ const cancelRentalItemsByGuest = async (req, res) => {
             status: remainingActive === 0 ? 'FULLY_REFUNDED' : 'PARTIAL_REFUND'
           }, { transaction: dbTx });
 
+          // 계약의 rentalItemsFee에서 취소된 금액 차감
+          const newRentalItemsFee = Math.max(0, (contract.rentalItemsFee || 0) - refundAmount);
+          await contract.update({ rentalItemsFee: newRentalItemsFee }, { transaction: dbTx });
+
           await logRentalAction({
             contractId: parseInt(contractId),
             rentalOrderId: rentalOrder.id,
