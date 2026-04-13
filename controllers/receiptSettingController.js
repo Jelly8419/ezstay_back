@@ -1,5 +1,6 @@
 const { ReceiptSetting } = require('../models');
 const { ErrorCodes, success, updated, deleted, error } = require('../utils/responseHelper');
+const { checkBusinessStatus } = require('../utils/ntsClient');
 
 /**
  * 영수증 설정 조회
@@ -65,6 +66,24 @@ const upsertReceiptSetting = async (req, res) => {
     // 숫자만 추출하여 저장
     const cleanedNumber = number.replace(/[^0-9]/g, '');
 
+    // 4. 국세청 사업자 상태 조회 (tax_invoice는 사업자등록번호 필수)
+    let businessWarning = null;
+    try {
+      const { status } = await checkBusinessStatus(cleanedNumber);
+      if (status === 'closed') {
+        return error(res, ErrorCodes.BUSINESS_CLOSED, 400);
+      }
+      if (status === 'not_found') {
+        return error(res, ErrorCodes.BUSINESS_NOT_FOUND, 400);
+      }
+      if (status === 'suspended') {
+        businessWarning = '휴업 상태의 사업자입니다.';
+      }
+    } catch (ntsErr) {
+      console.error('[receiptSettingController] 국세청 API 오류:', ntsErr.message);
+      return error(res, ErrorCodes.BUSINESS_STATUS_CHECK_FAILED, 503);
+    }
+
     const updateData = {
       userId,
       receiptType: type,
@@ -86,6 +105,7 @@ const upsertReceiptSetting = async (req, res) => {
 
     const responseData = setting.toJSON();
     delete responseData.userId;
+    if (businessWarning) responseData.warning = businessWarning;
 
     return updated(res, responseData, '영수증 정보가 저장되었습니다.');
   } catch (err) {

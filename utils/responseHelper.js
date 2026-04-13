@@ -149,6 +149,9 @@ const ErrorCodes = {
   RECEIPT_BUSINESS_NAME_REQUIRED: { code: 4414, message: '세금계산서 발급 시 사업자명은 필수입니다.' },
   RECEIPT_REP_NAME_REQUIRED: { code: 4415, message: '세금계산서 발급 시 대표자명은 필수입니다.' },
   RECEIPT_ALREADY_ISSUED: { code: 4416, message: '이미 발급 완료된 영수증입니다.' },
+  BUSINESS_CLOSED: { code: 4417, message: '폐업된 사업자입니다. 저장할 수 없습니다.' },
+  BUSINESS_NOT_FOUND: { code: 4418, message: '국세청에 등록되지 않은 사업자등록번호입니다.' },
+  BUSINESS_STATUS_CHECK_FAILED: { code: 4419, message: '사업자 상태 확인에 실패했습니다. 잠시 후 다시 시도해주세요.' },
 
   // 서버 관련 (5xxx)
   INTERNAL_ERROR: { code: 5001, message: '서버 오류가 발생했습니다.' },
