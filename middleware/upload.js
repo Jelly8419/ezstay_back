@@ -1,8 +1,17 @@
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const sharp = require('sharp');
 
 const isProduction = process.env.NODE_ENV === 'production';
+
+// 리사이징 설정
+const RESIZE_CONFIG = {
+  maxWidth: 1200,
+  maxHeight: 900,
+  quality: 82,       // WebP 품질 (0~100)
+  maxSizeKB: 300,    // 목표 최대 용량
+};
 
 let s3Client, PutObjectCommand, DeleteObjectCommand;
 const BUCKET_NAME = 'ezstay-images';
@@ -47,17 +56,29 @@ const upload = multer({
   fileFilter: fileFilter
 });
 
+// 이미지 리사이징 (sharp)
+const resizeImage = async (buffer) => {
+  const { maxWidth, maxHeight, quality } = RESIZE_CONFIG;
+  return await sharp(buffer)
+    .resize(maxWidth, maxHeight, {
+      fit: 'inside',        // 비율 유지, 박스 안에 맞춤
+      withoutEnlargement: true,  // 원본보다 크게 늘리지 않음
+    })
+    .webp({ quality })
+    .toBuffer();
+};
+
 // S3 업로드 (프로덕션만)
 const uploadToS3 = async (file) => {
   const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-  const ext = path.extname(file.originalname);
-  const key = `rooms/room-${uniqueSuffix}${ext}`;
+  const resized = await resizeImage(file.buffer);
+  const key = `rooms/room-${uniqueSuffix}.webp`;
 
   await s3Client.send(new PutObjectCommand({
     Bucket: BUCKET_NAME,
     Key: key,
-    Body: file.buffer,
-    ContentType: file.mimetype,
+    Body: resized,
+    ContentType: 'image/webp',
   }));
 
   return `https://images.ezstay.io/${key}`;
@@ -86,7 +107,19 @@ const getFileUrl = async (file) => {
   if (isProduction) {
     return await uploadToS3(file);
   }
-  return `/uploads/rooms/${file.filename}`;
+  // 로컬: 디스크에 저장된 파일을 sharp로 리사이징 후 webp로 덮어쓰기
+  const originalPath = file.path;
+  const webpFilename = file.filename.replace(/\.[^.]+$/, '.webp');
+  const webpPath = path.join(uploadDir, webpFilename);
+  await sharp(originalPath)
+    .resize(RESIZE_CONFIG.maxWidth, RESIZE_CONFIG.maxHeight, {
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
+    .webp({ quality: RESIZE_CONFIG.quality })
+    .toFile(webpPath);
+  fs.unlink(originalPath, () => {});  // 원본 삭제
+  return `/uploads/rooms/${webpFilename}`;
 };
 
 const uploadRoomPhotos = upload.array('photos', 20);
