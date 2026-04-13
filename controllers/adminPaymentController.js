@@ -490,6 +490,11 @@ exports.getPaymentDetail = async (req, res) => {
           model: Refund,
           as: 'refunds',
           required: false
+        },
+        {
+          model: AdminRefund,
+          as: 'adminRefunds',
+          required: false
         }
       ]
     });
@@ -526,7 +531,7 @@ exports.getPaymentDetail = async (req, res) => {
       });
     });
 
-    // 환불 완료 이력 추가
+    // 환불 완료 이력 추가 (게스트/호스트 귀책 환불 - Refund 테이블)
     (contract.refunds || []).forEach(r => {
       if (r.refundStatus === 'COMPLETED') {
         let description = '계약 환불';
@@ -551,6 +556,21 @@ exports.getPaymentDetail = async (req, res) => {
       }
     });
 
+    // 관리자 환불 이력 추가 (AdminRefund 테이블)
+    (contract.adminRefunds || []).forEach(ar => {
+      if (ar.refundStatus === 'COMPLETED') {
+        timeline.push({
+          occurredAt: ar.completedAt || ar.updatedAt,
+          type: '환불완료',
+          amount: -(ar.finalRefundAmount || 0),
+          description: `관리자 환불${ar.refundReason ? ` (${ar.refundReason})` : ''}`,
+          actor: 'admin',
+          actorName: null,
+          adminRefundId: ar.id
+        });
+      }
+    });
+
     // 시간순 정렬
     timeline.sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt));
 
@@ -559,9 +579,13 @@ exports.getPaymentDetail = async (req, res) => {
     const hostBurdenPaidAmount = (contract.payments || [])
       .filter(p => p.paymentType === 'HOST_BURDEN' && p.status === 'DONE')
       .reduce((sum, p) => sum + (p.totalAmount || 0), 0);
-    const contractRefundTotal = (contract.refunds || [])
-      .filter(r => r.refundStatus === 'COMPLETED')
-      .reduce((sum, r) => sum + (r.finalRefundAmount || 0), 0);
+    const contractRefundTotal =
+      (contract.refunds || [])
+        .filter(r => r.refundStatus === 'COMPLETED')
+        .reduce((sum, r) => sum + (r.finalRefundAmount || 0), 0) +
+      (contract.adminRefunds || [])
+        .filter(ar => ar.refundStatus === 'COMPLETED')
+        .reduce((sum, ar) => sum + (ar.finalRefundAmount || 0), 0);
 
     return success(res, {
       orderType: 'contract',
@@ -991,7 +1015,7 @@ exports.getPaymentLogs = async (req, res) => {
         include: [
           { model: User, as: 'guest', attributes: ['id', 'name'] },
           { model: Room, as: 'room', attributes: ['id', 'roomName'] },
-          { model: Payment, as: 'payment', attributes: ['totalAmount', 'balanceAmount'], required: false }
+          { model: Payment, as: 'payment', attributes: ['totalAmount', 'balanceAmount', 'method', 'easyPayProvider'], required: false }
         ]
       }]
     });
@@ -1014,7 +1038,8 @@ exports.getPaymentLogs = async (req, res) => {
       return {
         occurredAt: r.completedAt,
         transactionType: isFullCancel ? '전체취소' : '부분취소',
-        paymentMethod: r.refundMethod || 'ORIGINAL_PAYMENT',
+        paymentMethod: payment?.method || null,
+        easyPayProvider: payment?.easyPayProvider || null,
         productType: refundProductType,
         amount: -(r.finalRefundAmount || 0),
         orderId: r.contract?.orderId || null,
@@ -1041,7 +1066,8 @@ exports.getPaymentLogs = async (req, res) => {
           attributes: ['id', 'orderId'],
           include: [
             { model: User, as: 'guest', attributes: ['id', 'name'] },
-            { model: Room, as: 'room', attributes: ['id', 'roomName'] }
+            { model: Room, as: 'room', attributes: ['id', 'roomName'] },
+            { model: Payment, as: 'payment', attributes: ['method', 'easyPayProvider'], required: false }
           ]
         },
         {
@@ -1083,11 +1109,17 @@ exports.getPaymentLogs = async (req, res) => {
       else if (isOrderCancelled) productType = '옵션(게스트취소)';
       else productType = '옵션';
 
+      // INITIAL 주문은 계약 Payment로 결제되므로 계약 Payment의 결제수단 사용
+      const isInitial = log.order?.orderType === 'INITIAL';
+      const paymentInfo = isInitial
+        ? log.contract?.payment
+        : log.order?.payment;
+
       return {
         occurredAt: log.createdAt,
         transactionType,
-        paymentMethod: log.order?.payment?.method || null,
-        easyPayProvider: log.order?.payment?.easyPayProvider || null,
+        paymentMethod: paymentInfo?.method || null,
+        easyPayProvider: paymentInfo?.easyPayProvider || null,
         productType,
         amount: isPayment ? Math.abs(log.amountChange || 0) : -(Math.abs(log.amountChange || 0)),
         orderId: log.contract?.orderId || null,
@@ -1110,7 +1142,8 @@ exports.getPaymentLogs = async (req, res) => {
         attributes: ['id', 'orderId'],
         include: [
           { model: User, as: 'guest', attributes: ['id', 'name'] },
-          { model: Room, as: 'room', attributes: ['id', 'roomName'] }
+          { model: Room, as: 'room', attributes: ['id', 'roomName'] },
+          { model: Payment, as: 'payment', attributes: ['method', 'easyPayProvider'], required: false }
         ]
       }],
       order: [['completedAt', safeSortOrder]]
@@ -1119,7 +1152,8 @@ exports.getPaymentLogs = async (req, res) => {
     const adminRefundLogs = adminRefunds.map(ar => ({
       occurredAt: ar.completedAt,
       transactionType: ar.refundType === 'FULL' ? '전체취소' : '부분취소',
-      paymentMethod: ar.refundMethod || 'ORIGINAL_PAYMENT',
+      paymentMethod: ar.contract?.payment?.method || null,
+      easyPayProvider: ar.contract?.payment?.easyPayProvider || null,
       productType: '관리자환불',
       amount: -(ar.finalRefundAmount || 0),
       orderId: ar.contract?.orderId || null,
