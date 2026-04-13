@@ -1024,7 +1024,9 @@ exports.getPaymentLogs = async (req, res) => {
       };
     });
 
-    // === 3) 렌탈 결제/환불 (RentalOrderLog - ADDITIONAL 주문만) ===
+    // === 3) 렌탈 결제/환불 (RentalOrderLog) ===
+    // INITIAL 주문의 PAYMENT_COMPLETED는 계약 결제(Payment)에 포함되므로 제외
+    // INITIAL 주문의 ORDER_CANCELLED(배송전 취소 환불)는 포함
     const rentalLogWhere = {
       action: { [Op.in]: ['PAYMENT_COMPLETED', 'REFUND_COMPLETED', 'ADMIN_REFUND', 'ORDER_CANCELLED'] }
     };
@@ -1046,7 +1048,6 @@ exports.getPaymentLogs = async (req, res) => {
           model: RentalOrder,
           as: 'order',
           attributes: ['id', 'orderId', 'orderType'],
-          where: { orderType: { [Op.ne]: 'INITIAL' } },
           required: true,
           include: [{
             model: RentalPayment,
@@ -1059,7 +1060,10 @@ exports.getPaymentLogs = async (req, res) => {
       order: [['createdAt', safeSortOrder]]
     });
 
-    const rentalEventLogs = rentalLogs.map(log => {
+    const rentalEventLogs = rentalLogs
+      // INITIAL 주문의 결제는 계약 결제(Payment)에 포함되어 있으므로 중복 제외
+      .filter(log => !(log.order?.orderType === 'INITIAL' && log.action === 'PAYMENT_COMPLETED'))
+      .map(log => {
       const isPayment = log.action === 'PAYMENT_COMPLETED';
       const isAdminRefund = log.action === 'ADMIN_REFUND';
       const isOrderCancelled = log.action === 'ORDER_CANCELLED';
