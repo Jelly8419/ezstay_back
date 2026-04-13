@@ -490,6 +490,11 @@ exports.getPaymentDetail = async (req, res) => {
           model: Refund,
           as: 'refunds',
           required: false
+        },
+        {
+          model: AdminRefund,
+          as: 'adminRefunds',
+          required: false
         }
       ]
     });
@@ -526,7 +531,7 @@ exports.getPaymentDetail = async (req, res) => {
       });
     });
 
-    // 환불 완료 이력 추가
+    // 환불 완료 이력 추가 (게스트/호스트 귀책 환불 - Refund 테이블)
     (contract.refunds || []).forEach(r => {
       if (r.refundStatus === 'COMPLETED') {
         let description = '계약 환불';
@@ -551,6 +556,21 @@ exports.getPaymentDetail = async (req, res) => {
       }
     });
 
+    // 관리자 환불 이력 추가 (AdminRefund 테이블)
+    (contract.adminRefunds || []).forEach(ar => {
+      if (ar.refundStatus === 'COMPLETED') {
+        timeline.push({
+          occurredAt: ar.completedAt || ar.updatedAt,
+          type: '환불완료',
+          amount: -(ar.finalRefundAmount || 0),
+          description: `관리자 환불${ar.refundReason ? ` (${ar.refundReason})` : ''}`,
+          actor: 'admin',
+          actorName: null,
+          adminRefundId: ar.id
+        });
+      }
+    });
+
     // 시간순 정렬
     timeline.sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt));
 
@@ -559,9 +579,13 @@ exports.getPaymentDetail = async (req, res) => {
     const hostBurdenPaidAmount = (contract.payments || [])
       .filter(p => p.paymentType === 'HOST_BURDEN' && p.status === 'DONE')
       .reduce((sum, p) => sum + (p.totalAmount || 0), 0);
-    const contractRefundTotal = (contract.refunds || [])
-      .filter(r => r.refundStatus === 'COMPLETED')
-      .reduce((sum, r) => sum + (r.finalRefundAmount || 0), 0);
+    const contractRefundTotal =
+      (contract.refunds || [])
+        .filter(r => r.refundStatus === 'COMPLETED')
+        .reduce((sum, r) => sum + (r.finalRefundAmount || 0), 0) +
+      (contract.adminRefunds || [])
+        .filter(ar => ar.refundStatus === 'COMPLETED')
+        .reduce((sum, ar) => sum + (ar.finalRefundAmount || 0), 0);
 
     return success(res, {
       orderType: 'contract',
