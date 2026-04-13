@@ -23,7 +23,13 @@ module.exports = {
 
     // 좌표 설정
     coordinate: {
-      PRECISION: 4,     // 소수점 자리수 (약 11m 정밀도)
+      // 줌 레벨별 캐시 키 소수점 자리수 (카카오맵: 숫자 작을수록 확대)
+      // zoom 1~2 (상세, 뷰포트 ~1km)  → 소수점 3자리 (111m 단위)
+      // zoom 3~4 (중간, 뷰포트 ~5km)  → 소수점 2자리 (1.1km 단위)
+      // zoom 5+  (광역, 뷰포트 ~30km) → 소수점 1자리 (11km 단위)
+      PRECISION_DETAIL: 3,
+      PRECISION_MEDIUM: 2,
+      PRECISION_WIDE: 1,
       LATITUDE_MIN: -90,
       LATITUDE_MAX: 90,
       LONGITUDE_MIN: -180,
