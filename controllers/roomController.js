@@ -343,7 +343,8 @@ const getRoomsForMap = async (req, res) => {
         coords.swLngNum,
         coords.neLatNum,
         coords.neLngNum,
-        zoom
+        zoom,
+        dateFilter
       ).catch(err => {
         console.error('사전 캐싱 실패:', err.message);
       });
