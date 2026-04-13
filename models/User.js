@@ -121,6 +121,12 @@ const User = sequelize.define('User', {
     type: DataTypes.STRING(1),
     allowNull: true,
     comment: '성별 (M/F)'
+  },
+  userMode: {
+    type: DataTypes.ENUM('guest', 'host'),
+    allowNull: false,
+    defaultValue: 'guest',
+    comment: '현재 활성 모드 (guest | host)'
   }
 }, {
   tableName: 'users',
