@@ -322,6 +322,22 @@ const snapToGrid = (coords, zoom) => {
 };
 
 /**
+ * 줌 레벨에 따른 캐시 키 정밀도 결정
+ * 카카오맵: 숫자 작을수록 확대(상세), 클수록 축소(광역)
+ * @param {string|number} zoom
+ * @returns {number} 소수점 자리수
+ */
+const getCachePrecision = (zoom) => {
+  const { PRECISION_DETAIL, PRECISION_MEDIUM, PRECISION_WIDE } = appConfig.map.coordinate;
+  const { DETAIL, MEDIUM } = appConfig.map.zoom; // DETAIL=3, MEDIUM=5
+  const zoomLevel = parseInt(zoom) || 0;
+
+  if (zoomLevel <= DETAIL) return PRECISION_DETAIL; // zoom 1~3: 소수점 3자리 (111m)
+  if (zoomLevel <= MEDIUM) return PRECISION_MEDIUM;  // zoom 4~5: 소수점 2자리 (1.1km)
+  return PRECISION_WIDE;                             // zoom 6+:  소수점 1자리 (11km)
+};
+
+/**
  * 캐시 키 생성
  * @param {object} coords - 좌표 객체
  * @param {string} zoom - 줌 레벨
@@ -330,7 +346,7 @@ const snapToGrid = (coords, zoom) => {
  */
 const generateCacheKey = (coords, zoom, dateFilter) => {
   const { swLatNum, swLngNum, neLatNum, neLngNum } = coords;
-  const precision = appConfig.map.coordinate.PRECISION;
+  const precision = getCachePrecision(zoom);
 
   const roundedSwLat = swLatNum.toFixed(precision);
   const roundedSwLng = swLngNum.toFixed(precision);
