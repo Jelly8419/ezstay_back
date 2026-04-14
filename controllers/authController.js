@@ -24,7 +24,7 @@ const getRefreshExpiresAt = () => {
  * @body {string} email
  * @body {string} password
  * @body {string} user_mode  'guest' | 'host'
- * @body {string} [di]       KMC 본인인증 DI
+ * @body {string} [ci]       KMC 본인인증 CI
  * @body {string} [name]     이름 (di 없으면 직접 전달)
  * @body {string} [phoneNumber]
  * @body {string} [birth]
@@ -36,7 +36,7 @@ const getRefreshExpiresAt = () => {
  * @returns {201} 회원가입 성공 (사용자 정보 + JWT 토큰)
  */
 const register = async (req, res) => {
-  let { email, password, user_mode, name, phone_number: phoneNumber, birth, gender, di, terms,
+  let { email, password, user_mode, name, phone_number: phoneNumber, birth, gender, ci, terms,
         bank_code, account_num, account_holder_name } = req.body;
 
   const emailValidation = validateEmail(email);
@@ -90,13 +90,13 @@ const register = async (req, res) => {
   }
 
   // KMC 본인인증 필수
-  if (!di) {
+  if (!ci) {
     return error(res, { code: 4015, message: '본인인증이 필요합니다.' }, 400);
   }
 
-  // KMC 인증 결과 서버에서 직접 조회 (프론트 조작 방지, phoneNumber/di 덮어쓰기)
+  // KMC 인증 결과 서버에서 직접 조회 (프론트 조작 방지, phoneNumber/ci 덮어쓰기)
   const kmcRecord = await KmcVerification.findOne({
-    where: { di, used: false },
+    where: { ci, used: false },
     order: [['created_at', 'DESC']]
   });
 
@@ -119,9 +119,9 @@ const register = async (req, res) => {
     return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
   }
 
-  // DI 중복 체크 (같은 사람이 다른 이메일로 가입 방지)
-  const existingDi = await User.findOne({ where: { di, isActive: true } });
-  if (existingDi) {
+  // CI 중복 체크 (같은 사람이 다른 이메일로 가입 방지)
+  const existingCi = await User.findOne({ where: { ci, isActive: true } });
+  if (existingCi) {
     return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
   }
 
@@ -135,7 +135,7 @@ const register = async (req, res) => {
       ...(phoneNumber && { phoneNumber, phoneVerified: true, phoneVerifiedAt: new Date() }),
       ...(birth !== undefined && birth !== null && birth !== '' && { birth }),
       ...(gender !== undefined && gender !== null && { gender }),
-      ...(di !== undefined && di !== null && di !== '' && { di }),
+      ...(ci !== undefined && ci !== null && ci !== '' && { ci }),
       ...(terms && {
         serviceTermsAgreed: terms.service_terms || false,
         privacyPolicyAgreed: terms.privacy_policy || false,
@@ -703,20 +703,20 @@ const resetPassword = async (req, res) => {
 /**
  * 아이디 찾기 (본인인증 기반)
  * @route POST /api/auth/find-id
- * @body {string} di - KMC 본인인증 완료 후 받은 DI
+ * @body {string} ci - KMC 본인인증 완료 후 받은 CI
  * @returns 이메일 (로컬 계정만)
  */
 const findId = async (req, res) => {
   try {
-    const { di } = req.body;
+    const { ci } = req.body;
 
-    if (!di) {
+    if (!ci) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
-    // DI로 로컬 계정 조회 (소셜 계정 제외)
+    // CI로 로컬 계정 조회 (소셜 계정 제외)
     const user = await User.findOne({
-      where: { di, isActive: true, userType: 'local' }
+      where: { ci, isActive: true, userType: 'local' }
     });
 
     if (!user) {
@@ -780,15 +780,15 @@ const checkEmailForPasswordReset = async (req, res) => {
  * 비밀번호 찾기 — 본인인증 후 새 비밀번호 설정 (2단계)
  * @route POST /api/auth/find-password/reset
  * @body {string} email
- * @body {string} di       - KMC 본인인증 완료 후 받은 DI
+ * @body {string} ci       - KMC 본인인증 완료 후 받은 CI
  * @body {string} newPassword
  */
 const findPasswordReset = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { email, di, newPassword } = req.body;
+    const { email, ci, newPassword } = req.body;
 
-    if (!email || !di || !newPassword) {
+    if (!email || !ci || !newPassword) {
       await transaction.rollback();
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
@@ -805,9 +805,9 @@ const findPasswordReset = async (req, res) => {
       return error(res, { code: 4004, message: passwordValidation.message }, 400);
     }
 
-    // 이메일 + DI 동시 매칭으로 본인 확인 (로컬 계정만)
+    // 이메일 + CI 동시 매칭으로 본인 확인 (로컬 계정만)
     const user = await User.findOne({
-      where: { email, di, isActive: true, userType: 'local' },
+      where: { email, ci, isActive: true, userType: 'local' },
       transaction
     });
 
