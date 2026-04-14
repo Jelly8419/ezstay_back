@@ -176,8 +176,15 @@ const verifyResult = async (req, res) => {
     const recCert = await kmcExec('dec', tmpDec2);
     const recArr = recCert.split('/');
 
+    console.log('[KMC] recArr 전체:', recArr);
+    console.log('[KMC] recArr 길이:', recArr.length);
+    recArr.forEach((v, i) => console.log(`[KMC] recArr[${i}]:`, v));
+
     const CI = await kmcExec('dec', recArr[2]);
     const DI = await kmcExec('dec', recArr[17]);
+
+    console.log('[KMC] CI 복호화 결과:', CI ? CI.substring(0, 20) + '...' : '(empty)');
+    console.log('[KMC] DI 복호화 결과:', DI || '(empty)');
 
     const verificationData = {
       certNum: recArr[0],       // 요청번호
