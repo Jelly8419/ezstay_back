@@ -34,8 +34,8 @@ router.get('/kakao', async (req, res) => {
 
   if (code) {
     try {
-      // code를 body로 변환해서 kakaoLogin 호출
-      req.body = { code };
+      // code를 body로 변환해서 kakaoLogin 호출 (state도 함께 전달)
+      req.body = { code, user_mode: state };
 
       // 응답을 가로채서 프론트엔드로 리디렉트
       const originalJson = res.json;
