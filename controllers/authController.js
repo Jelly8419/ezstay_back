@@ -714,13 +714,23 @@ const findId = async (req, res) => {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
 
-    // CI로 로컬 계정 조회 (소셜 계정 제외)
+    // CI로 계정 조회
     const user = await User.findOne({
-      where: { ci, isActive: true, userType: 'local' }
+      where: { ci, isActive: true }
     });
 
     if (!user) {
       return error(res, ErrorCodes.FIND_ID_NOT_FOUND, 404);
+    }
+
+    // 소셜 계정이면 플랫폼 안내
+    if (user.userType === 'social') {
+      const socialAccount = await SocialUser.findOne({ where: { userId: user.id } });
+      const platform = socialAccount?.provider || '소셜';
+      return error(res, {
+        ...ErrorCodes.SOCIAL_ACCOUNT_NO_PASSWORD,
+        message: `소셜 계정(${platform})으로 가입된 계정입니다. ${platform} 로그인을 이용해주세요.`
+      }, 400);
     }
 
     return success(res, { email: user.email }, '아이디 조회에 성공했습니다.');
