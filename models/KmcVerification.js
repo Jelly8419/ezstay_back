@@ -65,7 +65,7 @@ module.exports = (sequelize) => {
     indexes: [
       { unique: true, fields: ['cert_num'], name: 'uq_kmc_cert_num' },
       { fields: ['expires_at'], name: 'idx_kmc_expires_at' },
-      { fields: ['di'], name: 'idx_kmc_di' }
+      { fields: ['ci'], name: 'idx_kmc_ci' }
     ]
   });
 };

@@ -10,6 +10,7 @@ const ErrorCodes = {
   INVALID_TOKEN: { code: 1002, message: '유효하지 않은 토큰입니다.' },
   TOKEN_EXPIRED: { code: 1003, message: '토큰이 만료되었습니다.' },
   ACCOUNT_LOCKED: { code: 1004, message: '로그인 시도가 여러 번 실패하여 10분간 로그인할 수 없습니다.' },
+  LOGIN_FAILED: { code: 1005, message: '이메일 또는 비밀번호가 올바르지 않습니다.' },
   ACCOUNT_SUSPENDED: { code: 1006, message: '회원님의 계정이 정지되었습니다. 고객센터로 문의 부탁드립니다.' },
   ACCOUNT_WITHDRAWN: { code: 1007, message: '탈퇴한 계정입니다. 재가입 하시겠습니까?' },
 
@@ -131,6 +132,11 @@ const ErrorCodes = {
   // 정산 관련 (49xx)
   SETTLEMENT_NOT_FOUND: { code: 4901, message: '정산 정보를 찾을 수 없습니다.' },
   INVALID_USER_MODE: { code: 4802, message: 'userMode는 guest 또는 host여야 합니다.' },
+
+  // 아이디/비밀번호 찾기 관련 (442x)
+  FIND_ID_NOT_FOUND: { code: 4420, message: '본인인증 정보와 일치하는 계정이 없습니다.' },
+  FIND_PW_MISMATCH: { code: 4421, message: '이메일과 본인인증 정보가 일치하지 않습니다.' },
+  SOCIAL_ACCOUNT_NO_PASSWORD: { code: 4422, message: '소셜 계정은 비밀번호 찾기를 사용할 수 없습니다.' },
 
   // KMC 본인인증 관련 (44xx)
   KMC_ENCRYPTION_FAILED: { code: 4401, message: '인증 요청 생성에 실패했습니다.' },

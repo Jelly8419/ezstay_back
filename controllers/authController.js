@@ -24,7 +24,7 @@ const getRefreshExpiresAt = () => {
  * @body {string} email
  * @body {string} password
  * @body {string} user_mode  'guest' | 'host'
- * @body {string} [di]       KMC 본인인증 DI
+ * @body {string} [certNum]  KMC 본인인증 완료 후 받은 certNum
  * @body {string} [name]     이름 (di 없으면 직접 전달)
  * @body {string} [phoneNumber]
  * @body {string} [birth]
@@ -36,7 +36,7 @@ const getRefreshExpiresAt = () => {
  * @returns {201} 회원가입 성공 (사용자 정보 + JWT 토큰)
  */
 const register = async (req, res) => {
-  let { email, password, user_mode, name, phone_number: phoneNumber, birth, gender, di, terms,
+  let { email, password, user_mode, name, phone_number: phoneNumber, birth, gender, certNum, terms,
         bank_code, account_num, account_holder_name } = req.body;
 
   const emailValidation = validateEmail(email);
@@ -90,13 +90,13 @@ const register = async (req, res) => {
   }
 
   // KMC 본인인증 필수
-  if (!di) {
+  if (!certNum) {
     return error(res, { code: 4015, message: '본인인증이 필요합니다.' }, 400);
   }
 
-  // KMC 인증 결과 서버에서 직접 조회 (프론트 조작 방지, phoneNumber/di 덮어쓰기)
+  // KMC 인증 결과 서버에서 직접 조회 (certNum은 숫자라 인코딩 문제 없음)
   const kmcRecord = await KmcVerification.findOne({
-    where: { di, used: false },
+    where: { certNum, used: false },
     order: [['created_at', 'DESC']]
   });
 
@@ -107,7 +107,8 @@ const register = async (req, res) => {
     return error(res, { code: 4014, message: '본인인증이 만료되었습니다. 다시 인증해주세요.' }, 400);
   }
 
-  // 서버 저장값으로 덮어쓰기 (프론트 전달값 무시)
+  // 서버 저장값으로 덮어쓰기 (프론트 전달값 무시, ci는 서버에서 직접 참조)
+  const ci = kmcRecord.ci;
   phoneNumber = kmcRecord.phoneNumber;
   name        = name || kmcRecord.name;
   birth       = birth || kmcRecord.birth;
@@ -119,9 +120,9 @@ const register = async (req, res) => {
     return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
   }
 
-  // DI 중복 체크 (같은 사람이 다른 이메일로 가입 방지)
-  const existingDi = await User.findOne({ where: { di, isActive: true } });
-  if (existingDi) {
+  // CI 중복 체크 (같은 사람이 다른 이메일로 가입 방지)
+  const existingCi = await User.findOne({ where: { ci, isActive: true } });
+  if (existingCi) {
     return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
   }
 
@@ -135,7 +136,7 @@ const register = async (req, res) => {
       ...(phoneNumber && { phoneNumber, phoneVerified: true, phoneVerifiedAt: new Date() }),
       ...(birth !== undefined && birth !== null && birth !== '' && { birth }),
       ...(gender !== undefined && gender !== null && { gender }),
-      ...(di !== undefined && di !== null && di !== '' && { di }),
+      ...(ci && { ci }),
       ...(terms && {
         serviceTermsAgreed: terms.service_terms || false,
         privacyPolicyAgreed: terms.privacy_policy || false,
@@ -243,7 +244,7 @@ const login = async (req, res) => {
 
     if (!user) {
       await transaction.rollback();
-      return error(res, ErrorCodes.USER_NOT_FOUND, 401);
+      return error(res, ErrorCodes.LOGIN_FAILED, 401);
     }
 
     // 계정 상태 확인 (비밀번호 검증 전)
@@ -278,7 +279,7 @@ const login = async (req, res) => {
       await localProfile.update(updateData, { transaction });
       await transaction.commit();
 
-      return error(res, ErrorCodes.PASSWORD_MISMATCH, 401);
+      return error(res, ErrorCodes.LOGIN_FAILED, 401);
     }
 
     // 로그인 성공 시 실패 횟수 초기화
@@ -700,6 +701,164 @@ const resetPassword = async (req, res) => {
   }
 };
 
+/**
+ * 아이디 찾기 (본인인증 기반)
+ * @route POST /api/auth/find-id
+ * @body {string} ci - KMC 본인인증 완료 후 받은 CI
+ * @returns 이메일 (로컬 계정만)
+ */
+const findId = async (req, res) => {
+  try {
+    const { ci } = req.body;
+
+    if (!ci) {
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    }
+
+    // CI로 계정 조회
+    const user = await User.findOne({
+      where: { ci, isActive: true }
+    });
+
+    if (!user) {
+      return error(res, ErrorCodes.FIND_ID_NOT_FOUND, 404);
+    }
+
+    // 소셜 계정이면 플랫폼 안내
+    if (user.userType === 'social') {
+      const socialAccount = await SocialUser.findOne({ where: { userId: user.id } });
+      const platform = socialAccount?.provider || '소셜';
+      return error(res, {
+        ...ErrorCodes.SOCIAL_ACCOUNT_NO_PASSWORD,
+        message: `소셜 계정(${platform})으로 가입된 계정입니다. ${platform} 로그인을 이용해주세요.`
+      }, 400);
+    }
+
+    return success(res, { email: user.email }, '아이디 조회에 성공했습니다.');
+
+  } catch (err) {
+    console.error('아이디 찾기 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500,
+      process.env.NODE_ENV === 'development' ? err.message : undefined);
+  }
+};
+
+/**
+ * 비밀번호 찾기 — 이메일 존재 확인 (1단계)
+ * 소셜 계정이면 에러 반환 (비밀번호 없음)
+ * @route POST /api/auth/find-password/check-email
+ * @body {string} email
+ */
+const checkEmailForPasswordReset = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    }
+
+    const emailValidation = validateEmail(email);
+    if (!emailValidation.valid) {
+      return error(res, ErrorCodes.INVALID_EMAIL, 400);
+    }
+
+    const user = await User.findOne({ where: { email, isActive: true } });
+
+    if (!user) {
+      return error(res, ErrorCodes.USER_NOT_FOUND, 404);
+    }
+
+    // 소셜 계정은 비밀번호 찾기 불가
+    if (user.userType === 'social') {
+      const socialAccount = await SocialUser.findOne({ where: { userId: user.id } });
+      const platform = socialAccount?.provider || '소셜';
+      return error(res, {
+        ...ErrorCodes.SOCIAL_ACCOUNT_NO_PASSWORD,
+        message: `소셜 계정(${platform})으로 가입된 이메일입니다. ${platform} 로그인을 이용해주세요.`
+      }, 400);
+    }
+
+    return success(res, null, '이메일이 확인되었습니다. 본인인증을 진행해주세요.');
+
+  } catch (err) {
+    console.error('이메일 확인 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500,
+      process.env.NODE_ENV === 'development' ? err.message : undefined);
+  }
+};
+
+/**
+ * 비밀번호 찾기 — 본인인증 후 새 비밀번호 설정 (2단계)
+ * @route POST /api/auth/find-password/reset
+ * @body {string} email
+ * @body {string} ci       - KMC 본인인증 완료 후 받은 CI
+ * @body {string} newPassword
+ */
+const findPasswordReset = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { email, ci, newPassword } = req.body;
+
+    if (!email || !ci || !newPassword) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+    }
+
+    const emailValidation = validateEmail(email);
+    if (!emailValidation.valid) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.INVALID_EMAIL, 400);
+    }
+
+    const passwordValidation = validatePassword(newPassword);
+    if (!passwordValidation.valid) {
+      await transaction.rollback();
+      return error(res, { code: 4004, message: passwordValidation.message }, 400);
+    }
+
+    // 이메일 + CI 동시 매칭으로 본인 확인 (로컬 계정만)
+    const user = await User.findOne({
+      where: { email, ci, isActive: true, userType: 'local' },
+      transaction
+    });
+
+    if (!user) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.FIND_PW_MISMATCH, 400);
+    }
+
+    const localUser = await LocalUser.findOne({
+      where: { userId: user.id },
+      transaction
+    });
+
+    if (!localUser) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.USER_NOT_FOUND, 404);
+    }
+
+    // 기존 비밀번호와 동일 여부 확인
+    const isSamePassword = await comparePassword(newPassword, localUser.password);
+    if (isSamePassword) {
+      await transaction.rollback();
+      return error(res, { code: 4007, message: '새 비밀번호는 현재 비밀번호와 달라야 합니다.' }, 400);
+    }
+
+    const hashedPassword = await hashPassword(newPassword);
+    await localUser.update({ password: hashedPassword }, { transaction });
+
+    await transaction.commit();
+
+    return success(res, null, '비밀번호가 재설정되었습니다.');
+
+  } catch (err) {
+    await transaction.rollback();
+    console.error('비밀번호 찾기 재설정 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500,
+      process.env.NODE_ENV === 'development' ? err.message : undefined);
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -708,5 +867,8 @@ module.exports = {
   getProfile,
   switchUserMode,
   devBypassLogin,
-  resetPassword
+  resetPassword,
+  findId,
+  checkEmailForPasswordReset,
+  findPasswordReset
 };

@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const { register, login, refreshToken, logout, getProfile, switchUserMode, devBypassLogin, resetPassword } = require('../controllers/authController');
+const { register, login, refreshToken, logout, getProfile, switchUserMode, devBypassLogin, resetPassword,
+        findId, checkEmailForPasswordReset, findPasswordReset } = require('../controllers/authController');
 const { kakaoLogin } = require('../controllers/oauthController');
 const { sendVerificationCode, verifyEmail, resendVerificationCode } = require('../controllers/emailVerificationController');
 const { authenticateToken } = require('../middleware/auth');
-const { authLimiter, loginLimiter, passwordResetLimiter } = require('../middleware/rateLimiter');
+const { authLimiter, loginLimiter, passwordResetLimiter, findAccountLimiter } = require('../middleware/rateLimiter');
 
 const isTest = process.env.NODE_ENV === 'test';
 
@@ -19,6 +20,11 @@ router.post('/login', ...(isTest ? [] : [loginLimiter]), login);
 
 // === 비밀번호 재설정 (비로그인, 이메일 인증 후) ===
 router.post('/reset-password', ...(isTest ? [] : [passwordResetLimiter]), resetPassword);
+
+// === 아이디 찾기 / 비밀번호 찾기 (KMC 본인인증 기반) ===
+router.post('/find-id', ...(isTest ? [] : [findAccountLimiter]), findId);
+router.post('/find-password/check-email', ...(isTest ? [] : [findAccountLimiter]), checkEmailForPasswordReset);
+router.post('/find-password/reset', ...(isTest ? [] : [passwordResetLimiter]), findPasswordReset);
 router.post('/refresh', refreshToken);
 router.post('/logout', authenticateToken, logout);
 

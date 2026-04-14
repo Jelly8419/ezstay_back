@@ -216,6 +216,23 @@ const adminAuthLimiter = rateLimit({
 });
 
 /**
+ * 아이디 찾기 / 비밀번호 찾기 이메일 확인용 Rate Limiter
+ * 1시간 동안 최대 5회 (성공 포함 모두 카운트)
+ * 계정 열거 공격 방지 — skipSuccessfulRequests 없음
+ */
+const findAccountLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: {
+    success: false,
+    code: 4297,
+    message: '요청 횟수를 초과했습니다. 1시간 후 다시 시도해주세요.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+/**
  * KMC 본인인증 전용 Rate Limiter
  * 1일 3회 (가입 1회 + 실패 재시도 여유 2회)
  * 성공 시 카운트 차감 없음 — 실패/재시도만 소모
@@ -265,5 +282,6 @@ module.exports = {
   contractRequestLimiter,
   adminAuthLimiter,
   adminApiLimiter,
-  kmcVerifyLimiter
+  kmcVerifyLimiter,
+  findAccountLimiter
 };

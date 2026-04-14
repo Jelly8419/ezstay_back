@@ -83,7 +83,8 @@ const requestVerification = async (req, res) => {
  */
 const verifyResult = async (req, res) => {
   try {
-    let { apiToken, certNum } = req.body;
+    // purpose: 'register'(기본) | 'find_id' | 'find_password' | 'update'
+    let { apiToken, certNum, purpose = 'register' } = req.body;
 
     if (!apiToken || !certNum) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
@@ -130,7 +131,6 @@ const verifyResult = async (req, res) => {
           phoneVerified: true,
           phoneVerifiedAt: new Date(),
           ci: cached.ci,
-          di: cached.di,
           birth: cached.birth,
           gender: cached.gender
         }, { where: { id: req.user.id } });
@@ -138,11 +138,12 @@ const verifyResult = async (req, res) => {
 
       return success(res, {
         verified: true,
+        certNum: cached.certNum,
         name: cached.name,
         phoneNumber: cached.phoneNumber,
         birth: cached.birth,
         gender: cached.gender,
-        di: cached.di
+        ci: cached.ci
       }, '본인인증이 완료되었습니다.');
     }
 
@@ -213,15 +214,11 @@ const verifyResult = async (req, res) => {
     const recArr = recCert.split('/');
 
     const CI = await kmcExec('dec', recArr[2]);
-    const DI = await kmcExec('dec', recArr[17]);
-
-    // DI가 없는 인증수단(카드 등)은 CI로 대체
-    const effectiveDI = DI || CI;
 
     const verificationData = {
       certNum: recArr[0],       // 요청번호
       date: recArr[1],          // 요청일시
-      ci: CI,                   // 연계정보 (CI)
+      ci: CI,                   // 연계정보 (CI) — 인증수단 무관하게 항상 동일
       phoneNo: recArr[3],       // 휴대폰번호
       phoneCorp: recArr[4],     // 이동통신사
       birth: recArr[5],         // 생년월일
@@ -231,17 +228,16 @@ const verifyResult = async (req, res) => {
       result: recArr[9],        // 결과값
       certMet: recArr[10],      // 인증방법
       plusInfo: recArr[16],     // 추가 데이터 (사용자 ID)
-      di: effectiveDI           // DI 없으면 CI로 대체
     };
 
-    // 7. DI(또는 CI 대체) 중복 가입 체크 (1인 1계정)
-    if (verificationData.di) {
-      const existingDiUser = await User.findOne({
-        where: { di: verificationData.di, isActive: true }
+    // 7. CI 중복 가입 체크 (1인 1계정) — 아이디/비밀번호 찾기는 기존 가입자 대상이므로 스킵
+    if (verificationData.ci && purpose !== 'find_id' && purpose !== 'find_password') {
+      const existingCiUser = await User.findOne({
+        where: { ci: verificationData.ci, isActive: true }
       });
 
-      if (existingDiUser && (!req.user || existingDiUser.id !== req.user.id)) {
-        console.log('[KMC] DI 중복 차단 - existingDiUser.id:', existingDiUser.id, '| req.user:', req.user ? req.user.id : 'null');
+      if (existingCiUser && (!req.user || existingCiUser.id !== req.user.id)) {
+        console.log('[KMC] CI 중복 차단 - existingCiUser.id:', existingCiUser.id, '| req.user:', req.user ? req.user.id : 'null');
         return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
       }
     }
@@ -256,7 +252,6 @@ const verifyResult = async (req, res) => {
         phoneVerified: true,
         phoneVerifiedAt: new Date(),
         ci: verificationData.ci,
-        di: verificationData.di,
         birth: verificationData.birth,
         gender: verificationData.gender
       }, {
@@ -272,7 +267,6 @@ const verifyResult = async (req, res) => {
         birth: verificationData.birth,
         gender: verificationData.gender,
         ci: verificationData.ci,
-        di: verificationData.di,
         used: false,
         expiresAt: new Date(Date.now() + 10 * 60 * 1000),
         ipAddress: req.ip || null
@@ -282,11 +276,12 @@ const verifyResult = async (req, res) => {
     // 9. 프론트에 인증 결과 반환
     return success(res, {
       verified: true,
+      certNum: verificationData.certNum,
       name: verificationData.name,
       phoneNumber: verificationData.phoneNo,
       birth: verificationData.birth,
       gender: verificationData.gender,
-      di: verificationData.di
+      ci: verificationData.ci
     }, '본인인증이 완료되었습니다.');
 
   } catch (err) {
@@ -318,7 +313,7 @@ const handleCallback = async (req, res) => {
     if (!apiToken || !certNum) {
       console.error('[KMC] 콜백 파라미터 누락:', { apiToken: !!apiToken, certNum: !!certNum });
       const frontendUrl = process.env.KMC_FRONTEND_CALLBACK_URL || process.env.FRONTEND_URL || 'https://ezstay.io';
-      return res.redirect(`${frontendUrl}/kmc/callback?kmc_error=missing_params`);
+      return res.redirect(`${frontendUrl}/kmc-callback.html?kmc_error=missing_params`);
     }
 
     // 프론트 콜백 URL로 리다이렉트 (토큰을 쿼리 파라미터로 전달)
@@ -326,11 +321,11 @@ const handleCallback = async (req, res) => {
     const encodedToken = encodeURIComponent(apiToken);
     const encodedCertNum = encodeURIComponent(certNum);
 
-    return res.redirect(`${frontendUrl}/kmc/callback?apiToken=${encodedToken}&certNum=${encodedCertNum}`);
+    return res.redirect(`${frontendUrl}/kmc-callback.html?apiToken=${encodedToken}&certNum=${encodedCertNum}`);
   } catch (err) {
     console.error('[KMC] 콜백 처리 실패:', err.message);
     const frontendUrl = process.env.KMC_FRONTEND_CALLBACK_URL || process.env.FRONTEND_URL || 'https://ezstay.io';
-    return res.redirect(`${frontendUrl}/kmc/callback?kmc_error=callback_failed`);
+    return res.redirect(`${frontendUrl}/kmc-callback.html?kmc_error=callback_failed`);
   }
 };
 
