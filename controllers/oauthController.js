@@ -128,12 +128,15 @@ const kakaoLogin = async (req, res) => {
 
       if (!user) {
         // 완전 신규 사용자 - 자동 회원가입
+        // user_mode: GET 콜백(state)과 POST body 둘 다 고려
+        const initialUserMode = user_mode === 'host' ? 'host' : 'guest';
         user = await User.create({
           email: email,
           name: kakaoName || kakaoNickname,
           nickname: generateNickname(),
           profileImageUrl: profile?.profile_image_url,
-          userType: 'social'
+          userType: 'social',
+          userMode: initialUserMode
         }, { transaction });
       }
 
