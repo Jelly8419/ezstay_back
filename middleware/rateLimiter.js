@@ -216,6 +216,24 @@ const adminAuthLimiter = rateLimit({
 });
 
 /**
+ * KMC 본인인증 전용 Rate Limiter
+ * 1일 3회 (가입 1회 + 실패 재시도 여유 2회)
+ * 성공 시 카운트 차감 없음 — 실패/재시도만 소모
+ */
+const kmcVerifyLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  max: 5,
+  message: {
+    success: false,
+    code: 4296,
+    message: '오늘 본인인증 횟수를 초과했습니다. 내일 다시 시도해주세요.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true
+});
+
+/**
  * 관리자 일반 API용 Rate Limiter
  * 15분 동안 최대 300회
  * 인증된 관리자는 userId 기준으로 카운트
@@ -246,5 +264,6 @@ module.exports = {
   contractReadLimiter,
   contractRequestLimiter,
   adminAuthLimiter,
-  adminApiLimiter
+  adminApiLimiter,
+  kmcVerifyLimiter
 };

@@ -8,6 +8,7 @@
  * 4. verifyResult: apiToken으로 KMC API 호출 → 복호화 → 검증 → 결과 반환
  */
 const axios = require('axios');
+const { Op } = require('sequelize');
 const kmcExec = require('../utils/kmcCrypto');
 const { User, KmcVerification, sequelize } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
@@ -110,7 +111,42 @@ const verifyResult = async (req, res) => {
       return error(res, ErrorCodes.KMC_DECRYPTION_FAILED, 500);
     }
 
-    // 2. KMC API 호출 (토큰 검증 및 결과 수신)
+    // 2. 캐시 확인 — 동일 certNum이 미사용·유효 상태면 KMC API 재호출 없이 응답
+    const cached = await KmcVerification.findOne({
+      where: {
+        certNum: tmpCertNum,
+        used: false,
+        expiresAt: { [Op.gt]: new Date() }
+      }
+    });
+    if (cached) {
+      console.log('[KMC] 캐시 응답 (certNum:', tmpCertNum, ')');
+
+      if (req.user && req.user.phoneVerified) {
+        await User.update({
+          name: cached.name,
+          nickname: cached.name,
+          phoneNumber: cached.phoneNumber,
+          phoneVerified: true,
+          phoneVerifiedAt: new Date(),
+          ci: cached.ci,
+          di: cached.di,
+          birth: cached.birth,
+          gender: cached.gender
+        }, { where: { id: req.user.id } });
+      }
+
+      return success(res, {
+        verified: true,
+        name: cached.name,
+        phoneNumber: cached.phoneNumber,
+        birth: cached.birth,
+        gender: cached.gender,
+        di: cached.di
+      }, '본인인증이 완료되었습니다.');
+    }
+
+    // 3. KMC API 호출 (토큰 검증 및 결과 수신)
     const response = await axios.post(KMC_API_URL, {
       apiToken: tmpApiToken,
       apiDate: tmpApiDate
@@ -153,7 +189,7 @@ const verifyResult = async (req, res) => {
         return error(res, ErrorCodes.KMC_VERIFY_FAILED, 400);
     }
 
-    // 3. 암호화된 결과 복호화
+    // 4. 암호화된 결과 복호화
     const apiRecCert = jsonObj.apiRecCert;
 
     const tmpDec1 = await kmcExec('dec', apiRecCert);
@@ -164,7 +200,7 @@ const verifyResult = async (req, res) => {
     const tmpDec2 = tmpDec1.substring(0, inf1);          // 암호화된 통합 파라미터
     const tmpMsg1 = tmpDec1.substring(inf1 + 1, inf2);   // 암호화된 통합 파라미터의 Hash값
 
-    // 4. 위변조 검증
+    // 5. 위변조 검증
     const tmpMsg2 = await kmcExec('msg', tmpDec2);
 
     if (tmpMsg1 !== tmpMsg2) {
@@ -172,7 +208,7 @@ const verifyResult = async (req, res) => {
       return error(res, ErrorCodes.KMC_TAMPERING_DETECTED, 400);
     }
 
-    // 5. 최종 복호화 및 결과 파싱
+    // 6. 최종 복호화 및 결과 파싱
     const recCert = await kmcExec('dec', tmpDec2);
     const recArr = recCert.split('/');
 
@@ -198,7 +234,7 @@ const verifyResult = async (req, res) => {
       di: effectiveDI           // DI 없으면 CI로 대체
     };
 
-    // 6. DI(또는 CI 대체) 중복 가입 체크 (1인 1계정)
+    // 7. DI(또는 CI 대체) 중복 가입 체크 (1인 1계정)
     if (verificationData.di) {
       const existingDiUser = await User.findOne({
         where: { di: verificationData.di, isActive: true }
@@ -210,7 +246,7 @@ const verifyResult = async (req, res) => {
       }
     }
 
-    // 7. 사용자 정보 업데이트 or 임시 저장
+    // 8. 사용자 정보 업데이트 or 임시 저장
     if (req.user && req.user.phoneVerified) {
       // 이미 가입 완료된 유저(마이페이지 등에서 재인증): User 테이블 직접 업데이트
       await User.update({
@@ -243,7 +279,7 @@ const verifyResult = async (req, res) => {
       });
     }
 
-    // 8. 프론트에 인증 결과 반환
+    // 9. 프론트에 인증 결과 반환
     return success(res, {
       verified: true,
       name: verificationData.name,
