@@ -83,7 +83,8 @@ const requestVerification = async (req, res) => {
  */
 const verifyResult = async (req, res) => {
   try {
-    let { apiToken, certNum } = req.body;
+    // purpose: 'register'(기본) | 'find_id' | 'find_password' | 'update'
+    let { apiToken, certNum, purpose = 'register' } = req.body;
 
     if (!apiToken || !certNum) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
@@ -234,8 +235,8 @@ const verifyResult = async (req, res) => {
       di: effectiveDI           // DI 없으면 CI로 대체
     };
 
-    // 7. DI(또는 CI 대체) 중복 가입 체크 (1인 1계정)
-    if (verificationData.di) {
+    // 7. DI 중복 가입 체크 — 아이디 찾기 / 비밀번호 찾기는 기존 가입자가 사용하므로 스킵
+    if (verificationData.di && purpose !== 'find_id' && purpose !== 'find_password') {
       const existingDiUser = await User.findOne({
         where: { di: verificationData.di, isActive: true }
       });
