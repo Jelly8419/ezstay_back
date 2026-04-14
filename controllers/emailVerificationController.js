@@ -61,12 +61,12 @@ const sendVerificationCode = async (req, res) => {
       }
     }
 
-    // 재발송 제한 확인 (1분)
+    // 재발송 제한 확인 (30초)
     const recentCode = await EmailVerificationCode.findOne({
       where: {
         email,
         createdAt: {
-          [Op.gte]: new Date(Date.now() - 60 * 1000) // 최근 1분
+          [Op.gte]: new Date(Date.now() - 30 * 1000) // 최근 30초
         }
       },
       order: [['createdAt', 'DESC']]
@@ -75,7 +75,7 @@ const sendVerificationCode = async (req, res) => {
     if (recentCode) {
       return error(res, {
         code: 4290,
-        message: '인증코드는 1분에 한 번만 발송할 수 있습니다.'
+        message: '인증코드는 30초에 한 번만 발송할 수 있습니다.'
       }, 429);
     }
 
