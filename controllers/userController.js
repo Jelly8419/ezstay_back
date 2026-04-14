@@ -1,28 +1,21 @@
-const { User, UserBankAccount, LocalUser, UserSession, sequelize } = require('../models');
+const { User, UserBankAccount, LocalUser, UserSession, KmcVerification, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 const bcrypt = require('bcryptjs');
 const { validatePassword, validatePhoneNumber, validateNickname } = require('../utils/validator');
 
-// 게스트 본인인증정보 저장
+// 소셜 게스트 본인인증 + 약관 저장
 const saveGuestVerification = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const { name, phone_number, birth, gender, di, terms } = req.body;
+    let { name, phone_number, birth, gender, di, terms } = req.body;
     const userId = req.user.id;
 
-    // 이미 본인인증 완료된 사용자 체크
-    const currentUser = await User.findByPk(userId);
-    if (currentUser && currentUser.phoneVerified) {
+    // KMC 본인인증 필수
+    if (!di) {
       await transaction.rollback();
-      return error(res, ErrorCodes.ALREADY_VERIFIED, 400);
-    }
-
-    // 필수 필드 검증
-    if (!name || !phone_number) {
-      await transaction.rollback();
-      return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+      return error(res, { code: 4015, message: '본인인증이 필요합니다.' }, 400);
     }
 
     // 필수 약관 동의 검증
@@ -31,47 +24,61 @@ const saveGuestVerification = async (req, res) => {
       return error(res, { code: 4501, message: '필수 약관에 동의해야 합니다.' }, 400);
     }
 
-    // DI 중복 체크 (같은 사람이 다른 계정으로 가입 방지)
-    if (di) {
-      const existingDi = await User.findOne({
-        where: { di, isActive: true, id: { [Op.ne]: userId } }
-      });
-      if (existingDi) {
-        await transaction.rollback();
-        return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
-      }
+    // KMC 인증 결과 서버에서 조회 (프론트 조작 방지)
+    const kmcRecord = await KmcVerification.findOne({
+      where: { di, used: false },
+      order: [['created_at', 'DESC']]
+    });
+    if (!kmcRecord) {
+      await transaction.rollback();
+      return error(res, { code: 4015, message: '본인인증 정보를 찾을 수 없습니다. 다시 인증해주세요.' }, 400);
+    }
+    if (kmcRecord.expiresAt < new Date()) {
+      await transaction.rollback();
+      return error(res, { code: 4014, message: '본인인증이 만료되었습니다. 다시 인증해주세요.' }, 400);
     }
 
-    // Users 테이블 업데이트 (본인인증정보 + 약관정보)
+    phone_number = kmcRecord.phoneNumber;
+    name         = name || kmcRecord.name;
+    birth        = birth || kmcRecord.birth;
+    gender       = gender !== undefined ? gender : kmcRecord.gender;
+
+    // DI 중복 체크
+    const existingDi = await User.findOne({
+      where: { di, isActive: true, id: { [Op.ne]: userId } }
+    });
+    if (existingDi) {
+      await transaction.rollback();
+      return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
+    }
+
     const updatedUser = await User.update({
-      name: name,
-      nickname: name,  // 본인인증 시 nickname도 동기화
+      name,
+      nickname: name,
       phoneNumber: phone_number,
       phoneVerified: true,
       phoneVerifiedAt: new Date(),
       ...(birth !== undefined && birth !== null && birth !== '' && { birth }),
       ...(gender !== undefined && gender !== null && { gender }),
-      ...(di !== undefined && di !== null && di !== '' && { di }),
+      di,
       serviceTermsAgreed: terms.service_terms,
       privacyPolicyAgreed: terms.privacy_policy,
       marketingConsent: terms.marketing_consent || false,
       ageConfirmed: terms.age_confirmed,
       termsAgreedAt: new Date()
-    }, {
-      where: { id: userId },
-      transaction
-    });
+    }, { where: { id: userId }, transaction });
 
     if (updatedUser[0] === 0) {
       await transaction.rollback();
       return error(res, ErrorCodes.USER_NOT_FOUND, 404);
     }
 
+    await kmcRecord.update({ used: true }, { transaction });
     await transaction.commit();
 
     return success(res, {
       user: {
-        name: name,
+        name,
         nickname: name,
         phoneNumber: phone_number,
         phoneVerified: true,
@@ -93,34 +100,27 @@ const saveGuestVerification = async (req, res) => {
   }
 };
 
-// 호스트 본인인증 + 계좌정보 저장
+// 소셜 호스트 본인인증 + 계좌정보 저장
 const saveHostVerification = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const {
-      name,
-      phone_number,
-      birth,
-      gender,
-      di,
-      bank_code,
-      account_num,
-      account_holder_name,
+    let {
+      name, phone_number, birth, gender, di,
+      bank_code, account_num, account_holder_name,
       terms
     } = req.body;
 
     const userId = req.user.id;
 
-    // 이미 본인인증 완료된 사용자 체크
-    const currentUser = await User.findByPk(userId);
-    if (currentUser && currentUser.phoneVerified) {
+    // KMC 본인인증 필수
+    if (!di) {
       await transaction.rollback();
-      return error(res, ErrorCodes.ALREADY_VERIFIED, 400);
+      return error(res, { code: 4015, message: '본인인증이 필요합니다.' }, 400);
     }
 
-    // 모든 필드 필수 검증
-    if (!name || !phone_number || !bank_code || !account_num || !account_holder_name) {
+    // 계좌 필수 검증
+    if (!bank_code || !account_num || !account_holder_name) {
       await transaction.rollback();
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
@@ -131,50 +131,61 @@ const saveHostVerification = async (req, res) => {
       return error(res, { code: 4501, message: '필수 약관에 동의해야 합니다.' }, 400);
     }
 
-    // DI 중복 체크 (같은 사람이 다른 계정으로 가입 방지)
-    if (di) {
-      const existingDi = await User.findOne({
-        where: { di, isActive: true, id: { [Op.ne]: userId } }
-      });
-      if (existingDi) {
-        await transaction.rollback();
-        return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
-      }
+    // KMC 인증 결과 서버에서 조회 (프론트 조작 방지)
+    const kmcRecord = await KmcVerification.findOne({
+      where: { di, used: false },
+      order: [['created_at', 'DESC']]
+    });
+    if (!kmcRecord) {
+      await transaction.rollback();
+      return error(res, { code: 4015, message: '본인인증 정보를 찾을 수 없습니다. 다시 인증해주세요.' }, 400);
+    }
+    if (kmcRecord.expiresAt < new Date()) {
+      await transaction.rollback();
+      return error(res, { code: 4014, message: '본인인증이 만료되었습니다. 다시 인증해주세요.' }, 400);
     }
 
-    // Users 테이블 업데이트 (본인인증정보 + 약관정보)
+    phone_number = kmcRecord.phoneNumber;
+    name         = name || kmcRecord.name;
+    birth        = birth || kmcRecord.birth;
+    gender       = gender !== undefined ? gender : kmcRecord.gender;
+
+    // DI 중복 체크
+    const existingDi = await User.findOne({
+      where: { di, isActive: true, id: { [Op.ne]: userId } }
+    });
+    if (existingDi) {
+      await transaction.rollback();
+      return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
+    }
+
     const updatedUser = await User.update({
-      name: name,
-      nickname: name,  // 본인인증 시 nickname도 동기화
+      name,
+      nickname: name,
       phoneNumber: phone_number,
       phoneVerified: true,
       phoneVerifiedAt: new Date(),
+      userMode: 'host',
       ...(birth !== undefined && birth !== null && birth !== '' && { birth }),
       ...(gender !== undefined && gender !== null && { gender }),
-      ...(di !== undefined && di !== null && di !== '' && { di }),
+      di,
       serviceTermsAgreed: terms.service_terms,
       privacyPolicyAgreed: terms.privacy_policy,
       marketingConsent: terms.marketing_consent || false,
       ageConfirmed: terms.age_confirmed,
       termsAgreedAt: new Date()
-    }, {
-      where: { id: userId },
-      transaction
-    });
+    }, { where: { id: userId }, transaction });
 
     if (updatedUser[0] === 0) {
       await transaction.rollback();
       return error(res, ErrorCodes.USER_NOT_FOUND, 404);
     }
 
-    // 계좌정보 저장
+    await kmcRecord.update({ used: true }, { transaction });
+
+    // 계좌 저장 (upsert)
     const cleanAccountNum = account_num.replace(/-/g, '');
-
-    const existingAccount = await UserBankAccount.findOne({
-      where: { userId },
-      transaction
-    });
-
+    const existingAccount = await UserBankAccount.findOne({ where: { userId }, transaction });
     const accountData = {
       userId,
       bankName: bank_code,
@@ -184,7 +195,6 @@ const saveHostVerification = async (req, res) => {
       verifiedAt: new Date(),
       isPrimary: true
     };
-
     if (existingAccount) {
       await existingAccount.update(accountData, { transaction });
     } else {
@@ -195,7 +205,7 @@ const saveHostVerification = async (req, res) => {
 
     return success(res, {
       user: {
-        name: name,
+        name,
         nickname: name,
         phoneNumber: phone_number,
         phoneVerified: true,

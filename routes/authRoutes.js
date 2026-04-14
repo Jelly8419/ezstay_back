@@ -6,27 +6,31 @@ const { sendVerificationCode, verifyEmail, resendVerificationCode } = require('.
 const { authenticateToken } = require('../middleware/auth');
 const { authLimiter, loginLimiter, passwordResetLimiter } = require('../middleware/rateLimiter');
 
+const isTest = process.env.NODE_ENV === 'test';
+
 // === 이메일 인증 관련 라우트 (Rate Limiting 적용) ===
-router.post('/send-verification-code', authLimiter, sendVerificationCode);
-router.post('/verify-email', authLimiter, verifyEmail);
-router.post('/resend-verification-code', authLimiter, resendVerificationCode);
+router.post('/send-verification-code', ...(isTest ? [] : [authLimiter]), sendVerificationCode);
+router.post('/verify-email', ...(isTest ? [] : [authLimiter]), verifyEmail);
+router.post('/resend-verification-code', ...(isTest ? [] : [authLimiter]), resendVerificationCode);
 
 // === 일반 회원가입/로그인 (Rate Limiting 적용) ===
-router.post('/register', authLimiter, register);
-router.post('/login', loginLimiter, login);
+router.post('/register', ...(isTest ? [] : [authLimiter]), register);
+router.post('/login', ...(isTest ? [] : [loginLimiter]), login);
 
 // === 비밀번호 재설정 (비로그인, 이메일 인증 후) ===
-router.post('/reset-password', passwordResetLimiter, resetPassword);
+router.post('/reset-password', ...(isTest ? [] : [passwordResetLimiter]), resetPassword);
 router.post('/refresh', refreshToken);
 router.post('/logout', authenticateToken, logout);
 
 // 소셜 로그인
 router.post('/kakao', kakaoLogin);
 router.get('/kakao', async (req, res) => {
-  const { code } = req.query;
+  const { code, state } = req.query;
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
   console.log('🔍 [Kakao Callback] FRONTEND_URL:', process.env.FRONTEND_URL);
   console.log('🔍 [Kakao Callback] frontendUrl:', frontendUrl);
+
+  const stateParam = state ? `&state=${encodeURIComponent(state)}` : '';
 
   if (code) {
     try {
@@ -39,19 +43,19 @@ router.get('/kakao', async (req, res) => {
         if (data.success) {
           // 성공 시 JWT 토큰만 전달 (사용자 데이터는 토큰에 포함됨)
           const { accessToken, refreshToken } = data.data;
-          res.redirect(`${frontendUrl}/auth/callback?token=${accessToken}&refresh=${refreshToken}`);
+          res.redirect(`${frontendUrl}/auth/callback?token=${accessToken}&refresh=${refreshToken}${stateParam}`);
         } else {
           // 실패 시 에러 메시지와 함께 리디렉트
-          res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent(data.message)}`);
+          res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent(data.message)}${stateParam}`);
         }
       };
 
       kakaoLogin(req, res);
     } catch (error) {
-      res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent('로그인 중 오류가 발생했습니다.')}`);
+      res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent('로그인 중 오류가 발생했습니다.')}${stateParam}`);
     }
   } else {
-    res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent('카카오 인증 코드가 필요합니다.')}`);
+    res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent('카카오 인증 코드가 필요합니다.')}${stateParam}`);
   }
 });
 

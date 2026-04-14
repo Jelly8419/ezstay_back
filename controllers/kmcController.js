@@ -207,10 +207,9 @@ const verifyResult = async (req, res) => {
       }
     }
 
-    // 7. 사용자 정보 업데이트 (로그인 상태인 경우)
-    if (req.user) {
-      const userId = req.user.id;
-
+    // 7. 사용자 정보 업데이트 or 임시 저장
+    if (req.user && req.user.phoneVerified) {
+      // 이미 가입 완료된 유저(마이페이지 등에서 재인증): User 테이블 직접 업데이트
       await User.update({
         name: verificationData.name,
         nickname: verificationData.name,
@@ -222,10 +221,11 @@ const verifyResult = async (req, res) => {
         birth: verificationData.birth,
         gender: verificationData.gender
       }, {
-        where: { id: userId }
+        where: { id: req.user.id }
       });
     } else {
-      // 비로그인 상태: 인증 결과를 임시 저장 (register에서 꺼내 쓸 용도)
+      // 비로그인(이메일 가입) 또는 소셜 가입 진행 중(phoneVerified: false):
+      // KmcVerification 임시 저장 → 가입 완료 API에서 꺼내 씀
       await KmcVerification.upsert({
         certNum: verificationData.certNum,
         name: verificationData.name,

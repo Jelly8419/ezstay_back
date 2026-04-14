@@ -19,15 +19,25 @@ const getRefreshExpiresAt = () => {
 };
 
 /**
- * 회원가입 (이메일)
+ * 회원가입 (이메일) — 단일 완결 처리
  * @route POST /api/auth/register
- * @body {string} email - 이메일 주소
- * @body {string} password - 비밀번호 (8~16자, 영문+숫자)
- * @body {string} [user_mode] - 사용자 모드 (guest | host)
+ * @body {string} email
+ * @body {string} password
+ * @body {string} user_mode  'guest' | 'host'
+ * @body {string} [di]       KMC 본인인증 DI
+ * @body {string} [name]     이름 (di 없으면 직접 전달)
+ * @body {string} [phoneNumber]
+ * @body {string} [birth]
+ * @body {string} [gender]
+ * @body {object} [terms]    { service_terms, privacy_policy, age_confirmed, marketing_consent }
+ * @body {string} [bank_code]          host일 때 필수
+ * @body {string} [account_num]        host일 때 필수
+ * @body {string} [account_holder_name] host일 때 필수
  * @returns {201} 회원가입 성공 (사용자 정보 + JWT 토큰)
  */
 const register = async (req, res) => {
-  let { email, password, user_mode, name, phoneNumber, birth, gender, di, terms } = req.body;
+  let { email, password, user_mode, name, phone_number: phoneNumber, birth, gender, di, terms,
+        bank_code, account_num, account_holder_name } = req.body;
 
   const emailValidation = validateEmail(email);
   if (!emailValidation.valid) {
@@ -79,39 +89,47 @@ const register = async (req, res) => {
     return error(res, ErrorCodes.DUPLICATE_EMAIL, 400);
   }
 
-  // KMC 인증 결과 서버에서 직접 조회 (프론트 조작 방지, phoneNumber/di 덮어쓰기)
-  let kmcRecord = null;
-  if (di) {
-    kmcRecord = await KmcVerification.findOne({
-      where: { di, used: false },
-      order: [['created_at', 'DESC']]
-    });
+  // KMC 본인인증 필수
+  if (!di) {
+    return error(res, { code: 4015, message: '본인인증이 필요합니다.' }, 400);
+  }
 
-    if (kmcRecord) {
-      if (kmcRecord.expiresAt < new Date()) {
-        return error(res, { code: 4014, message: '본인인증이 만료되었습니다. 다시 인증해주세요.' }, 400);
-      }
-      // 서버 저장값으로 덮어쓰기 (프론트 전달값 무시)
-      phoneNumber = kmcRecord.phoneNumber;
-      name        = name || kmcRecord.name;
-      birth       = birth || kmcRecord.birth;
-      gender      = gender !== undefined ? gender : kmcRecord.gender;
-    }
+  // KMC 인증 결과 서버에서 직접 조회 (프론트 조작 방지, phoneNumber/di 덮어쓰기)
+  const kmcRecord = await KmcVerification.findOne({
+    where: { di, used: false },
+    order: [['created_at', 'DESC']]
+  });
+
+  if (!kmcRecord) {
+    return error(res, { code: 4015, message: '본인인증 정보를 찾을 수 없습니다. 다시 인증해주세요.' }, 400);
+  }
+  if (kmcRecord.expiresAt < new Date()) {
+    return error(res, { code: 4014, message: '본인인증이 만료되었습니다. 다시 인증해주세요.' }, 400);
+  }
+
+  // 서버 저장값으로 덮어쓰기 (프론트 전달값 무시)
+  phoneNumber = kmcRecord.phoneNumber;
+  name        = name || kmcRecord.name;
+  birth       = birth || kmcRecord.birth;
+  gender      = gender !== undefined ? gender : kmcRecord.gender;
+
+  // host 가입 시 계좌 정보 필수 검증
+  const isHost = user_mode === 'host';
+  if (isHost && (!bank_code || !account_num || !account_holder_name)) {
+    return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
   }
 
   // DI 중복 체크 (같은 사람이 다른 이메일로 가입 방지)
-  if (di) {
-    const existingDi = await User.findOne({ where: { di, isActive: true } });
-    if (existingDi) {
-      return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
-    }
+  const existingDi = await User.findOne({ where: { di, isActive: true } });
+  if (existingDi) {
+    return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
   }
 
   const result = await withTransaction(async (transaction) => {
     const newUser = await User.create({
       email,
       userType: 'local',
-      userMode: 'guest',
+      userMode: isHost ? 'host' : 'guest',
       ...(name && { name }),
       nickname: generateNickname(),
       ...(phoneNumber && { phoneNumber, phoneVerified: true, phoneVerifiedAt: new Date() }),
@@ -128,8 +146,20 @@ const register = async (req, res) => {
     }, { transaction });
 
     // KMC 인증 임시 레코드 사용 처리 (재사용 방지)
-    if (kmcRecord) {
-      await kmcRecord.update({ used: true }, { transaction });
+    await kmcRecord.update({ used: true }, { transaction });
+
+    // host 가입 시 계좌 저장
+    if (isHost) {
+      const cleanAccountNum = account_num.replace(/-/g, '');
+      await UserBankAccount.create({
+        userId: newUser.id,
+        bankName: bank_code,
+        accountNumber: cleanAccountNum,
+        accountHolder: account_holder_name,
+        isVerified: true,
+        verifiedAt: new Date(),
+        isPrimary: true
+      }, { transaction });
     }
 
     const hashedPassword = await hashPassword(password);
@@ -144,7 +174,7 @@ const register = async (req, res) => {
       userId: newUser.id,
       email: newUser.email,
       phoneVerified: newUser.phoneVerified || false,
-      hasBank: false
+      hasBank: isHost
     });
 
     await UserSession.create({
@@ -166,7 +196,7 @@ const register = async (req, res) => {
         userType: newUser.userType,
         mode: newUser.userMode,
         phoneVerified: newUser.phoneVerified || false,
-        hasBank: false
+        hasBank: isHost
       },
       accessToken,
       refreshToken
