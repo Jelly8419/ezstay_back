@@ -138,6 +138,7 @@ const verifyResult = async (req, res) => {
 
       return success(res, {
         verified: true,
+        certNum: cached.certNum,
         name: cached.name,
         phoneNumber: cached.phoneNumber,
         birth: cached.birth,
@@ -275,6 +276,7 @@ const verifyResult = async (req, res) => {
     // 9. 프론트에 인증 결과 반환
     return success(res, {
       verified: true,
+      certNum: verificationData.certNum,
       name: verificationData.name,
       phoneNumber: verificationData.phoneNo,
       birth: verificationData.birth,

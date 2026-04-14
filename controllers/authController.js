@@ -24,7 +24,7 @@ const getRefreshExpiresAt = () => {
  * @body {string} email
  * @body {string} password
  * @body {string} user_mode  'guest' | 'host'
- * @body {string} [ci]       KMC 본인인증 CI
+ * @body {string} [certNum]  KMC 본인인증 완료 후 받은 certNum
  * @body {string} [name]     이름 (di 없으면 직접 전달)
  * @body {string} [phoneNumber]
  * @body {string} [birth]
@@ -36,7 +36,7 @@ const getRefreshExpiresAt = () => {
  * @returns {201} 회원가입 성공 (사용자 정보 + JWT 토큰)
  */
 const register = async (req, res) => {
-  let { email, password, user_mode, name, phone_number: phoneNumber, birth, gender, ci, terms,
+  let { email, password, user_mode, name, phone_number: phoneNumber, birth, gender, certNum, terms,
         bank_code, account_num, account_holder_name } = req.body;
 
   const emailValidation = validateEmail(email);
@@ -90,13 +90,13 @@ const register = async (req, res) => {
   }
 
   // KMC 본인인증 필수
-  if (!ci) {
+  if (!certNum) {
     return error(res, { code: 4015, message: '본인인증이 필요합니다.' }, 400);
   }
 
-  // KMC 인증 결과 서버에서 직접 조회 (프론트 조작 방지, phoneNumber/ci 덮어쓰기)
+  // KMC 인증 결과 서버에서 직접 조회 (certNum은 숫자라 인코딩 문제 없음)
   const kmcRecord = await KmcVerification.findOne({
-    where: { ci, used: false },
+    where: { certNum, used: false },
     order: [['created_at', 'DESC']]
   });
 
@@ -107,7 +107,8 @@ const register = async (req, res) => {
     return error(res, { code: 4014, message: '본인인증이 만료되었습니다. 다시 인증해주세요.' }, 400);
   }
 
-  // 서버 저장값으로 덮어쓰기 (프론트 전달값 무시)
+  // 서버 저장값으로 덮어쓰기 (프론트 전달값 무시, ci는 서버에서 직접 참조)
+  const ci = kmcRecord.ci;
   phoneNumber = kmcRecord.phoneNumber;
   name        = name || kmcRecord.name;
   birth       = birth || kmcRecord.birth;
@@ -135,7 +136,7 @@ const register = async (req, res) => {
       ...(phoneNumber && { phoneNumber, phoneVerified: true, phoneVerifiedAt: new Date() }),
       ...(birth !== undefined && birth !== null && birth !== '' && { birth }),
       ...(gender !== undefined && gender !== null && { gender }),
-      ...(ci !== undefined && ci !== null && ci !== '' && { ci }),
+      ...(ci && { ci }),
       ...(terms && {
         serviceTermsAgreed: terms.service_terms || false,
         privacyPolicyAgreed: terms.privacy_policy || false,
