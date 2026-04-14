@@ -176,15 +176,11 @@ const verifyResult = async (req, res) => {
     const recCert = await kmcExec('dec', tmpDec2);
     const recArr = recCert.split('/');
 
-    console.log('[KMC] recArr 전체:', recArr);
-    console.log('[KMC] recArr 길이:', recArr.length);
-    recArr.forEach((v, i) => console.log(`[KMC] recArr[${i}]:`, v));
-
     const CI = await kmcExec('dec', recArr[2]);
     const DI = await kmcExec('dec', recArr[17]);
 
-    console.log('[KMC] CI 복호화 결과:', CI ? CI.substring(0, 20) + '...' : '(empty)');
-    console.log('[KMC] DI 복호화 결과:', DI || '(empty)');
+    // DI가 없는 인증수단(카드 등)은 CI로 대체
+    const effectiveDI = DI || CI;
 
     const verificationData = {
       certNum: recArr[0],       // 요청번호
@@ -199,10 +195,10 @@ const verifyResult = async (req, res) => {
       result: recArr[9],        // 결과값
       certMet: recArr[10],      // 인증방법
       plusInfo: recArr[16],     // 추가 데이터 (사용자 ID)
-      di: DI                    // 중복가입확인정보 (DI)
+      di: effectiveDI           // DI 없으면 CI로 대체
     };
 
-    // 6. DI 중복 가입 체크 (1인 1계정)
+    // 6. DI(또는 CI 대체) 중복 가입 체크 (1인 1계정)
     if (verificationData.di) {
       const existingDiUser = await User.findOne({
         where: { di: verificationData.di, isActive: true }
