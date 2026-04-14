@@ -43,7 +43,9 @@ router.get('/kakao', async (req, res) => {
         if (data.success) {
           // 성공 시 JWT 토큰만 전달 (사용자 데이터는 토큰에 포함됨)
           const { accessToken, refreshToken } = data.data;
-          res.redirect(`${frontendUrl}/auth/callback?token=${accessToken}&refresh=${refreshToken}${stateParam}`);
+          const redirectUrl = `${frontendUrl}/auth/callback?token=${accessToken}&refresh=${refreshToken}${stateParam}`;
+          console.log('🔍 [Kakao Callback] redirect URL state:', state, '| stateParam:', stateParam);
+          res.redirect(redirectUrl);
         } else {
           // 실패 시 에러 메시지와 함께 리디렉트
           res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent(data.message)}${stateParam}`);
