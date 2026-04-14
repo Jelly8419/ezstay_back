@@ -6,17 +6,19 @@ const { sendVerificationCode, verifyEmail, resendVerificationCode } = require('.
 const { authenticateToken } = require('../middleware/auth');
 const { authLimiter, loginLimiter, passwordResetLimiter } = require('../middleware/rateLimiter');
 
+const isTest = process.env.NODE_ENV === 'test';
+
 // === 이메일 인증 관련 라우트 (Rate Limiting 적용) ===
-router.post('/send-verification-code', authLimiter, sendVerificationCode);
-router.post('/verify-email', authLimiter, verifyEmail);
-router.post('/resend-verification-code', authLimiter, resendVerificationCode);
+router.post('/send-verification-code', ...(isTest ? [] : [authLimiter]), sendVerificationCode);
+router.post('/verify-email', ...(isTest ? [] : [authLimiter]), verifyEmail);
+router.post('/resend-verification-code', ...(isTest ? [] : [authLimiter]), resendVerificationCode);
 
 // === 일반 회원가입/로그인 (Rate Limiting 적용) ===
-router.post('/register', authLimiter, register);
-router.post('/login', loginLimiter, login);
+router.post('/register', ...(isTest ? [] : [authLimiter]), register);
+router.post('/login', ...(isTest ? [] : [loginLimiter]), login);
 
 // === 비밀번호 재설정 (비로그인, 이메일 인증 후) ===
-router.post('/reset-password', passwordResetLimiter, resetPassword);
+router.post('/reset-password', ...(isTest ? [] : [passwordResetLimiter]), resetPassword);
 router.post('/refresh', refreshToken);
 router.post('/logout', authenticateToken, logout);
 
