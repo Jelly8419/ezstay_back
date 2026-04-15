@@ -1,4 +1,4 @@
-const { Sequelize } = require('sequelize');
+const { sequelize } = require('./db');
 const UserModel = require('./User');
 const LocalUserModel = require('./LocalUser');
 const SocialUserModel = require('./SocialUser');
@@ -50,31 +50,7 @@ const ServiceTaskLogModel = require('./ServiceTaskLog');
 const ContractCancelRequestModel = require('./ContractCancelRequest');
 const KmcVerificationModel = require('./KmcVerification');
 
-const sequelize = new Sequelize(process.env.DB_NAME || 'ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 3306,
-  dialect: 'mysql',
-  timezone: '+09:00', // 한국 시간대 (Asia/Seoul)
-  dialectOptions: {
-    // MariaDB 인증 플러그인 문제 해결
-    authPlugins: {
-      mysql_native_password: () => () => Buffer.alloc(0)
-    },
-    timezone: '+09:00' // MySQL 연결 시 타임존 설정
-  },
-  pool: {
-    max: 10,
-    min: 0,
-    acquire: 30000,
-    idle: 10000
-  },
-
-  // 환경별 로깅 설정
-  // false: 로그 끄기 | console.log: 모든 쿼리 | 커스텀 함수: 필터링
-  logging: false  // 강제로 모든 쿼리 로그 비활성화 (개발 중 필요시 true로 변경)
-});
-
-// 핵심 유저 모델 초기화 (index.js의 timezone: '+09:00' sequelize 사용)
+// 핵심 유저 모델 초기화
 const User = UserModel(sequelize);
 const LocalUser = LocalUserModel(sequelize);
 const SocialUser = SocialUserModel(sequelize);

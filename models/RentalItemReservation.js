@@ -1,15 +1,5 @@
-const { DataTypes, Sequelize } = require('sequelize');
-
-const sequelize = new Sequelize(process.env.DB_NAME || 'ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 3306,
-  dialect: 'mysql',
-  timezone: '+09:00',
-  dialectOptions: {
-    timezone: '+09:00'
-  },
-  logging: false
-});
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('./db');
 
 /**
  * RentalItemReservation 모델 - 렌탈 아이템 예약 기록

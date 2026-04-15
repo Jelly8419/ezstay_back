@@ -1,20 +1,21 @@
 /**
  * KST 기준 날짜 유틸리티
  *
- * process.env.TZ = 'Asia/Seoul' 환경에서 new Date()는 KST 기준으로 동작하지만,
- * toISOString()은 항상 UTC(Z)를 반환하므로 자정~오전9시 사이에 날짜가 하루 밀림.
- * 이 파일의 함수를 사용하면 KST 기준 날짜 문자열을 안전하게 얻을 수 있음.
+ * DB에 UTC로 저장된 Date 값을 KST(UTC+9)로 변환하여 API 응답에 사용.
+ * process.env.TZ 환경 변수에 의존하지 않고 UTC 기준으로 명시적으로 계산.
  */
+
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000; // 9시간 = 32400000ms
 
 /**
  * KST 기준 오늘 날짜 문자열 반환 (YYYY-MM-DD)
  * @returns {string} e.g. "2026-04-02"
  */
 function todayKST() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
+  const kst = new Date(Date.now() + KST_OFFSET_MS);
+  const year = kst.getUTCFullYear();
+  const month = String(kst.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(kst.getUTCDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
@@ -24,9 +25,10 @@ function todayKST() {
  * @returns {string} e.g. "2026-04-02"
  */
 function toDateStrKST(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
+  const kst = new Date(new Date(date).getTime() + KST_OFFSET_MS);
+  const year = kst.getUTCFullYear();
+  const month = String(kst.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(kst.getUTCDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
@@ -39,7 +41,7 @@ function nowKSTString() {
 }
 
 /**
- * Date 객체를 KST 기준 datetime 문자열로 변환 (시간 포함)
+ * UTC Date 객체를 KST 기준 datetime 문자열로 변환 (시간 포함)
  * API 응답 시 checkInDate / checkOutDate 등 DataTypes.DATE 필드에 사용
  * @param {Date|string|null} date
  * @returns {string|null} e.g. "2024-04-15T14:00:00+09:00"
@@ -48,13 +50,14 @@ function toKSTString(date) {
   if (!date) return null;
   const d = new Date(date);
   if (isNaN(d.getTime())) return null;
-  const Y = d.getFullYear();
-  const M = String(d.getMonth() + 1).padStart(2, '0');
-  const D = String(d.getDate()).padStart(2, '0');
-  const h = String(d.getHours()).padStart(2, '0');
-  const m = String(d.getMinutes()).padStart(2, '0');
-  const s = String(d.getSeconds()).padStart(2, '0');
-  return `${Y}-${M}-${D}T${h}:${m}:${s}`;
+  const kst = new Date(d.getTime() + KST_OFFSET_MS);
+  const Y = kst.getUTCFullYear();
+  const M = String(kst.getUTCMonth() + 1).padStart(2, '0');
+  const D = String(kst.getUTCDate()).padStart(2, '0');
+  const h = String(kst.getUTCHours()).padStart(2, '0');
+  const m = String(kst.getUTCMinutes()).padStart(2, '0');
+  const s = String(kst.getUTCSeconds()).padStart(2, '0');
+  return `${Y}-${M}-${D}T${h}:${m}:${s}+09:00`;
 }
 
 module.exports = { todayKST, toDateStrKST, nowKSTString, toKSTString };

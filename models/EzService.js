@@ -1,12 +1,5 @@
 const { DataTypes } = require('sequelize');
-const { Sequelize } = require('sequelize');
-
-const sequelize = new Sequelize(process.env.DB_NAME || 'ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 3306,
-  dialect: 'mysql',
-  logging: false
-});
+const { sequelize } = require('./db');
 
 /**
  * EzService 모델 - 이지서비스 (호스트가 제공하는 무료 부가 서비스)
@@ -50,4 +43,4 @@ const EzService = sequelize.define('EzService', {
   comment: '이지서비스 (호스트 제공 무료 부가 서비스)'
 });
 
-module.exports = { EzService, sequelize };
+module.exports = { EzService };
