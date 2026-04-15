@@ -9,11 +9,11 @@ const saveGuestVerification = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    let { name, phone_number, birth, gender, di, terms } = req.body;
+    let { name, phone_number, birth, gender, certNum, terms } = req.body;
     const userId = req.user.id;
 
     // KMC 본인인증 필수
-    if (!di) {
+    if (!certNum) {
       await transaction.rollback();
       return error(res, { code: 4015, message: '본인인증이 필요합니다.' }, 400);
     }
@@ -24,9 +24,10 @@ const saveGuestVerification = async (req, res) => {
       return error(res, { code: 4501, message: '필수 약관에 동의해야 합니다.' }, 400);
     }
 
-    // KMC 인증 결과 서버에서 조회 (프론트 조작 방지)
+    // KMC 인증 결과 서버에서 조회 (certNum은 숫자라 인코딩 문제 없음)
+    const certNumStr = String(certNum);
     const kmcRecord = await KmcVerification.findOne({
-      where: { di, used: false },
+      where: { certNum: certNumStr, used: false },
       order: [['created_at', 'DESC']]
     });
     if (!kmcRecord) {
@@ -38,16 +39,17 @@ const saveGuestVerification = async (req, res) => {
       return error(res, { code: 4014, message: '본인인증이 만료되었습니다. 다시 인증해주세요.' }, 400);
     }
 
+    const ci = kmcRecord.ci;
     phone_number = kmcRecord.phoneNumber;
     name         = name || kmcRecord.name;
     birth        = birth || kmcRecord.birth;
     gender       = gender !== undefined ? gender : kmcRecord.gender;
 
-    // DI 중복 체크
-    const existingDi = await User.findOne({
-      where: { di, isActive: true, id: { [Op.ne]: userId } }
+    // CI 중복 체크
+    const existingCi = await User.findOne({
+      where: { ci, isActive: true, id: { [Op.ne]: userId } }
     });
-    if (existingDi) {
+    if (existingCi) {
       await transaction.rollback();
       return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
     }
@@ -60,7 +62,7 @@ const saveGuestVerification = async (req, res) => {
       phoneVerifiedAt: new Date(),
       ...(birth !== undefined && birth !== null && birth !== '' && { birth }),
       ...(gender !== undefined && gender !== null && { gender }),
-      di,
+      ci,
       serviceTermsAgreed: terms.service_terms,
       privacyPolicyAgreed: terms.privacy_policy,
       marketingConsent: terms.marketing_consent || false,
@@ -106,7 +108,7 @@ const saveHostVerification = async (req, res) => {
 
   try {
     let {
-      name, phone_number, birth, gender, di,
+      name, phone_number, birth, gender, certNum,
       bank_code, account_num, account_holder_name,
       terms
     } = req.body;
@@ -114,7 +116,7 @@ const saveHostVerification = async (req, res) => {
     const userId = req.user.id;
 
     // KMC 본인인증 필수
-    if (!di) {
+    if (!certNum) {
       await transaction.rollback();
       return error(res, { code: 4015, message: '본인인증이 필요합니다.' }, 400);
     }
@@ -131,9 +133,10 @@ const saveHostVerification = async (req, res) => {
       return error(res, { code: 4501, message: '필수 약관에 동의해야 합니다.' }, 400);
     }
 
-    // KMC 인증 결과 서버에서 조회 (프론트 조작 방지)
+    // KMC 인증 결과 서버에서 조회 (certNum은 숫자라 인코딩 문제 없음)
+    const certNumStr = String(certNum);
     const kmcRecord = await KmcVerification.findOne({
-      where: { di, used: false },
+      where: { certNum: certNumStr, used: false },
       order: [['created_at', 'DESC']]
     });
     if (!kmcRecord) {
@@ -145,16 +148,17 @@ const saveHostVerification = async (req, res) => {
       return error(res, { code: 4014, message: '본인인증이 만료되었습니다. 다시 인증해주세요.' }, 400);
     }
 
+    const ci = kmcRecord.ci;
     phone_number = kmcRecord.phoneNumber;
     name         = name || kmcRecord.name;
     birth        = birth || kmcRecord.birth;
     gender       = gender !== undefined ? gender : kmcRecord.gender;
 
-    // DI 중복 체크
-    const existingDi = await User.findOne({
-      where: { di, isActive: true, id: { [Op.ne]: userId } }
+    // CI 중복 체크
+    const existingCi = await User.findOne({
+      where: { ci, isActive: true, id: { [Op.ne]: userId } }
     });
-    if (existingDi) {
+    if (existingCi) {
       await transaction.rollback();
       return error(res, { code: 4410, message: '이미 가입된 본인인증 정보입니다.' }, 409);
     }
@@ -168,7 +172,7 @@ const saveHostVerification = async (req, res) => {
       userMode: 'host',
       ...(birth !== undefined && birth !== null && birth !== '' && { birth }),
       ...(gender !== undefined && gender !== null && { gender }),
-      di,
+      ci,
       serviceTermsAgreed: terms.service_terms,
       privacyPolicyAgreed: terms.privacy_policy,
       marketingConsent: terms.marketing_consent || false,
