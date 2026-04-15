@@ -749,6 +749,9 @@ const findId = async (req, res) => {
       }, 400);
     }
 
+    // KMC 인증 레코드 사용 처리 (재사용 방지)
+    await kmcRecord.update({ used: true });
+
     return success(res, { email: user.email }, '아이디 조회에 성공했습니다.');
 
   } catch (err) {

@@ -48,8 +48,8 @@ if (process.env.NODE_ENV !== 'production') {
       const random = Math.floor(100000 + Math.random() * 900000);
       const certNum = `${reqDate}${random}`;
 
-      // 가짜 CI (실제와 동일한 Base64 형식, 88자)
-      const fakeCi = Buffer.from(`DEV_CI_${phoneNumber}_${birth}_${Date.now()}`).toString('base64').padEnd(88, '=').slice(0, 88);
+      // 가짜 CI — phoneNumber+birth 고정값 기반 (동일 사람은 항상 같은 CI)
+      const fakeCi = Buffer.from(`DEV_CI_${phoneNumber}_${birth}`).toString('base64').padEnd(88, '=').slice(0, 88);
 
       await KmcVerification.upsert({
         certNum,
