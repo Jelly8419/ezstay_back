@@ -29,6 +29,51 @@ const kmcIpWhitelist = (req, res, next) => {
 // KMC 본인인증 요청 데이터 생성 (회원가입 전 비인증 상태에서 호출)
 router.post('/kmc/request', authLimiter, requestVerification);
 
+/**
+ * [개발 전용] KMC SDK 없이 가짜 인증 결과를 KmcVerification에 직접 저장
+ * POST /api/auth/kmc/dev-verify
+ * Body: { name, phoneNumber, birth, gender }
+ * Response: { certNum, ci, name, phoneNumber, birth, gender }
+ */
+if (process.env.NODE_ENV !== 'production') {
+  const { KmcVerification } = require('../models');
+  router.post('/kmc/dev-verify', async (req, res) => {
+    try {
+      const { name = '테스트유저', phoneNumber = '01012345678', birth = '19900101', gender = '0' } = req.body;
+
+      // requestVerification과 동일한 certNum 형식: 날짜14자리 + 랜덤6자리
+      const now = new Date();
+      const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+      const reqDate = kst.toISOString().replace(/[-T:\.Z]/g, '').slice(0, 14);
+      const random = Math.floor(100000 + Math.random() * 900000);
+      const certNum = `${reqDate}${random}`;
+
+      // 가짜 CI (실제와 동일한 Base64 형식, 88자)
+      const fakeCi = Buffer.from(`DEV_CI_${phoneNumber}_${birth}_${Date.now()}`).toString('base64').padEnd(88, '=').slice(0, 88);
+
+      await KmcVerification.upsert({
+        certNum,
+        name,
+        phoneNumber,
+        birth,
+        gender,
+        ci: fakeCi,
+        used: false,
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        ipAddress: req.ip || null
+      });
+
+      return res.json({
+        success: true,
+        data: { certNum, ci: fakeCi, name, phoneNumber, birth, gender },
+        message: '[DEV] 가짜 본인인증 완료. certNum을 회원가입에 사용하세요.'
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  });
+}
+
 // KMC 본인인증 결과 콜백 (KMC 서버가 직접 POST, CORS 별도 허용)
 router.post('/kmc/callback', kmcIpWhitelist, handleCallback);
 
