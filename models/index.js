@@ -1,15 +1,15 @@
 const { Sequelize } = require('sequelize');
-const { User } = require('./User');
-const { LocalUser } = require('./LocalUser');
-const { SocialUser } = require('./SocialUser');
-const { EmailVerificationCode } = require('./EmailVerificationCode');
+const UserModel = require('./User');
+const LocalUserModel = require('./LocalUser');
+const SocialUserModel = require('./SocialUser');
+const EmailVerificationCodeModel = require('./EmailVerificationCode');
 const AdminModel = require('./Admin');
 const AdminActionLogModel = require('./AdminActionLog');
 const { Room } = require('./Room');
 const { RoomPhoto } = require('./RoomPhoto');
 const { RoomAmenity } = require('./RoomAmenity');
 const { EzService } = require('./EzService');
-const { UserBankAccount } = require('./UserBankAccount');
+const UserBankAccountModel = require('./UserBankAccount');
 const RentalItem = require('./RentalItem');
 const Contract = require('./Contract');
 const ContractSequenceModel = require('./ContractSequence');
@@ -73,6 +73,13 @@ const sequelize = new Sequelize(process.env.DB_NAME || 'ezstay', process.env.DB_
   // false: 로그 끄기 | console.log: 모든 쿼리 | 커스텀 함수: 필터링
   logging: false  // 강제로 모든 쿼리 로그 비활성화 (개발 중 필요시 true로 변경)
 });
+
+// 핵심 유저 모델 초기화 (index.js의 timezone: '+09:00' sequelize 사용)
+const User = UserModel(sequelize);
+const LocalUser = LocalUserModel(sequelize);
+const SocialUser = SocialUserModel(sequelize);
+const EmailVerificationCode = EmailVerificationCodeModel(sequelize);
+const UserBankAccount = UserBankAccountModel(sequelize);
 
 // 세션 모델 초기화
 const UserSession = UserSessionModel(sequelize);
