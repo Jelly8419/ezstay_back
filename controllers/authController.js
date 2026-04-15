@@ -94,9 +94,12 @@ const register = async (req, res) => {
     return error(res, { code: 4015, message: '본인인증이 필요합니다.' }, 400);
   }
 
-  // KMC 인증 결과 서버에서 직접 조회 (certNum은 숫자라 인코딩 문제 없음)
+  // certNum은 20자리 숫자 — JS Number 정밀도 초과로 손실될 수 있으므로 문자열로 강제 변환
+  const certNumStr = String(certNum);
+
+  // KMC 인증 결과 서버에서 직접 조회
   const kmcRecord = await KmcVerification.findOne({
-    where: { certNum, used: false },
+    where: { certNum: certNumStr, used: false },
     order: [['created_at', 'DESC']]
   });
 
