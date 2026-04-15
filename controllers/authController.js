@@ -707,16 +707,28 @@ const resetPassword = async (req, res) => {
 /**
  * 아이디 찾기 (본인인증 기반)
  * @route POST /api/auth/find-id
- * @body {string} ci - KMC 본인인증 완료 후 받은 CI
+ * @body {string} certNum - KMC 본인인증 완료 후 받은 certNum
  * @returns 이메일 (로컬 계정만)
  */
 const findId = async (req, res) => {
   try {
-    const { ci } = req.body;
+    const { certNum } = req.body;
 
-    if (!ci) {
+    if (!certNum) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
+
+    // certNum으로 KmcVerification 조회 → ci 추출 → User 조회
+    const kmcRecord = await KmcVerification.findOne({
+      where: { certNum: String(certNum), used: false },
+      order: [['created_at', 'DESC']]
+    });
+
+    if (!kmcRecord || kmcRecord.expiresAt < new Date()) {
+      return error(res, { code: 4015, message: '본인인증 정보를 찾을 수 없습니다. 다시 인증해주세요.' }, 400);
+    }
+
+    const ci = kmcRecord.ci;
 
     // CI로 계정 조회
     const user = await User.findOne({
@@ -794,15 +806,15 @@ const checkEmailForPasswordReset = async (req, res) => {
  * 비밀번호 찾기 — 본인인증 후 새 비밀번호 설정 (2단계)
  * @route POST /api/auth/find-password/reset
  * @body {string} email
- * @body {string} ci       - KMC 본인인증 완료 후 받은 CI
+ * @body {string} certNum  - KMC 본인인증 완료 후 받은 certNum
  * @body {string} newPassword
  */
 const findPasswordReset = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { email, ci, newPassword } = req.body;
+    const { email, certNum, newPassword } = req.body;
 
-    if (!email || !ci || !newPassword) {
+    if (!email || !certNum || !newPassword) {
       await transaction.rollback();
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
@@ -818,6 +830,25 @@ const findPasswordReset = async (req, res) => {
       await transaction.rollback();
       return error(res, { code: 4004, message: passwordValidation.message }, 400);
     }
+
+    // certNum으로 KmcVerification 조회 → ci 추출
+    const certNumStr = String(certNum);
+    const kmcRecord = await KmcVerification.findOne({
+      where: { certNum: certNumStr, used: false },
+      order: [['created_at', 'DESC']],
+      transaction
+    });
+
+    if (!kmcRecord) {
+      await transaction.rollback();
+      return error(res, { code: 4015, message: '본인인증 정보를 찾을 수 없습니다. 다시 인증해주세요.' }, 400);
+    }
+    if (kmcRecord.expiresAt < new Date()) {
+      await transaction.rollback();
+      return error(res, { code: 4014, message: '본인인증이 만료되었습니다. 다시 인증해주세요.' }, 400);
+    }
+
+    const ci = kmcRecord.ci;
 
     // 이메일 + CI 동시 매칭으로 본인 확인 (로컬 계정만)
     const user = await User.findOne({
@@ -849,6 +880,9 @@ const findPasswordReset = async (req, res) => {
 
     const hashedPassword = await hashPassword(newPassword);
     await localUser.update({ password: hashedPassword }, { transaction });
+
+    // KMC 인증 레코드 사용 처리 (재사용 방지)
+    await kmcRecord.update({ used: true }, { transaction });
 
     await transaction.commit();
 
