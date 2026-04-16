@@ -252,6 +252,12 @@ const getUsers = async (req, res) => {
       const userData = user.toJSON();
       userData.hasBankAccount = (userData.bankAccounts && userData.bankAccounts.length > 0);
       delete userData.bankAccounts;
+      // DATE 컬럼 KST 변환
+      userData.lastLoginAt = toKSTString(userData.lastLoginAt);
+      userData.phoneVerifiedAt = toKSTString(userData.phoneVerifiedAt);
+      userData.termsAgreedAt = toKSTString(userData.termsAgreedAt);
+      userData.createdAt = toKSTString(userData.createdAt);
+      userData.updatedAt = toKSTString(userData.updatedAt);
       return userData;
     });
 

@@ -2,6 +2,7 @@ const { RentalItem } = require('../models');
 const { Op } = require('sequelize');
 const { ErrorCodes, success, error, created, updated, deleted } = require('../utils/responseHelper');
 const { RENTAL_BUFFER_DAYS } = require('../utils/rentalOrderHelper');
+const { toKSTString } = require('../utils/dateHelper');
 
 // ============================================
 // 게스트용 공개 API (인증 불필요)
@@ -163,11 +164,16 @@ const getAllRentalItems = async (req, res) => {
       ]
     });
 
-    const itemsWithMeta = items.map(item => ({
-      ...item.toJSON(),
-      salesTypeLabel: RentalItem.SALES_TYPE_LABELS[item.salesType] || item.salesType,
-      itemTypeLabel: RentalItem.ITEM_TYPE_LABELS[item.itemType] || item.itemType
-    }));
+    const itemsWithMeta = items.map(item => {
+      const itemData = item.toJSON();
+      return {
+        ...itemData,
+        salesTypeLabel: RentalItem.SALES_TYPE_LABELS[item.salesType] || item.salesType,
+        itemTypeLabel: RentalItem.ITEM_TYPE_LABELS[item.itemType] || item.itemType,
+        createdAt: toKSTString(itemData.createdAt),
+        updatedAt: toKSTString(itemData.updatedAt)
+      };
+    });
 
     return success(res, itemsWithMeta, '대여 물품 목록을 조회했습니다.');
   } catch (err) {
@@ -191,10 +197,13 @@ const getRentalItemById = async (req, res) => {
       }, 404);
     }
 
+    const itemData = item.toJSON();
     const itemWithMeta = {
-      ...item.toJSON(),
+      ...itemData,
       salesTypeLabel: RentalItem.SALES_TYPE_LABELS[item.salesType] || item.salesType,
-      itemTypeLabel: RentalItem.ITEM_TYPE_LABELS[item.itemType] || item.itemType
+      itemTypeLabel: RentalItem.ITEM_TYPE_LABELS[item.itemType] || item.itemType,
+      createdAt: toKSTString(itemData.createdAt),
+      updatedAt: toKSTString(itemData.updatedAt)
     };
 
     return success(res, itemWithMeta, '대여 물품 정보를 조회했습니다.');
