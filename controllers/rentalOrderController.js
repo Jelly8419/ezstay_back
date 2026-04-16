@@ -600,7 +600,7 @@ const cancelPaidRentalOrderByGuest = async (req, res) => {
 
     // 입주 중(IN_PROGRESS) → 취소 요청만 가능 (7일 제한)
     if (contract.status === 'IN_PROGRESS') {
-      const stayStartedAt = contract.checkedInAt ? new Date(contract.checkedInAt) : new Date(contract.checkInDate + 'T00:00:00');
+      const stayStartedAt = contract.checkedInAt ? new Date(contract.checkedInAt) : new Date(contract.checkInDate + 'T00:00:00+09:00');
       const cancelRequestDeadline = new Date(stayStartedAt.getTime() + RENTAL_CANCEL_REQUEST_DAYS * 24 * 60 * 60 * 1000);
 
       if (now > cancelRequestDeadline) {
@@ -1368,7 +1368,7 @@ const requestRentalItemsReturn = async (req, res) => {
     // 7일 기간 체크 (입주 중일 때만 적용)
     const now = new Date();
     if (contract.status === 'IN_PROGRESS') {
-      const stayStartedAt = contract.checkedInAt ? new Date(contract.checkedInAt) : new Date(contract.checkInDate + 'T00:00:00');
+      const stayStartedAt = contract.checkedInAt ? new Date(contract.checkedInAt) : new Date(contract.checkInDate + 'T00:00:00+09:00');
       const cancelRequestDeadline = new Date(stayStartedAt.getTime() + RENTAL_CANCEL_REQUEST_DAYS * 24 * 60 * 60 * 1000);
       if (now > cancelRequestDeadline) {
         await transaction.rollback();

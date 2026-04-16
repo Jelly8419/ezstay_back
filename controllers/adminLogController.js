@@ -38,10 +38,10 @@ exports.getActionLogs = async (req, res) => {
     if (startDate || endDate) {
       where.createdAt = {};
       if (startDate) {
-        where.createdAt[Op.gte] = new Date(startDate + 'T00:00:00');
+        where.createdAt[Op.gte] = new Date(startDate + 'T00:00:00+09:00');
       }
       if (endDate) {
-        where.createdAt[Op.lte] = new Date(endDate + 'T23:59:59');
+        where.createdAt[Op.lte] = new Date(endDate + 'T23:59:59+09:00');
       }
     }
 
@@ -121,10 +121,10 @@ exports.getActionLogStats = async (req, res) => {
     if (startDate || endDate) {
       where.createdAt = {};
       if (startDate) {
-        where.createdAt[Op.gte] = new Date(startDate + 'T00:00:00');
+        where.createdAt[Op.gte] = new Date(startDate + 'T00:00:00+09:00');
       }
       if (endDate) {
-        where.createdAt[Op.lte] = new Date(endDate + 'T23:59:59');
+        where.createdAt[Op.lte] = new Date(endDate + 'T23:59:59+09:00');
       }
     }
 

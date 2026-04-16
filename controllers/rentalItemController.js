@@ -407,9 +407,9 @@ const getAllRentalItemsCalendar = async (req, res) => {
     }
 
     // 월 범위 (KST 기준)
-    const monthStart = new Date(`${yearNum}-${String(monthNum).padStart(2, '0')}-01T00:00:00`);
+    const monthStart = new Date(`${yearNum}-${String(monthNum).padStart(2, '0')}-01T00:00:00+09:00`);
     const lastDay = new Date(yearNum, monthNum, 0).getDate();
-    const monthEnd = new Date(`${yearNum}-${String(monthNum).padStart(2, '0')}-${lastDay}T23:59:59`);
+    const monthEnd = new Date(`${yearNum}-${String(monthNum).padStart(2, '0')}-${lastDay}T23:59:59+09:00`);
     const itemIds = items.map(i => i.id);
 
     const { RentalItemReservation } = require('../models');
@@ -443,8 +443,8 @@ const getAllRentalItemsCalendar = async (req, res) => {
 
       for (let d = 1; d <= lastDay; d++) {
         const dateStr = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-        const dayStart = new Date(`${dateStr}T00:00:00`);
-        const dayEnd = new Date(`${dateStr}T23:59:59`);
+        const dayStart = new Date(`${dateStr}T00:00:00+09:00`);
+        const dayEnd = new Date(`${dateStr}T23:59:59+09:00`);
 
         const reservedQuantity = itemReservations.reduce((sum, r) => {
           const bufferedFrom = new Date(r.reservedFrom.getTime() - bufferMs);
@@ -520,9 +520,9 @@ const getRentalItemCalendar = async (req, res) => {
     }
 
     // 해당 월 범위 (KST 기준)
-    const monthStart = new Date(`${yearNum}-${String(monthNum).padStart(2, '0')}-01T00:00:00`);
+    const monthStart = new Date(`${yearNum}-${String(monthNum).padStart(2, '0')}-01T00:00:00+09:00`);
     const lastDay = new Date(yearNum, monthNum, 0).getDate();
-    const monthEnd = new Date(`${yearNum}-${String(monthNum).padStart(2, '0')}-${lastDay}T23:59:59`);
+    const monthEnd = new Date(`${yearNum}-${String(monthNum).padStart(2, '0')}-${lastDay}T23:59:59+09:00`);
 
     const { RentalItemReservation } = require('../models');
     const reservations = await RentalItemReservation.findAll({
@@ -546,8 +546,8 @@ const getRentalItemCalendar = async (req, res) => {
     const calendar = {};
     for (let d = 1; d <= lastDay; d++) {
       const dateStr = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      const dayStart = new Date(`${dateStr}T00:00:00`);
-      const dayEnd = new Date(`${dateStr}T23:59:59`);
+      const dayStart = new Date(`${dateStr}T00:00:00+09:00`);
+      const dayEnd = new Date(`${dateStr}T23:59:59+09:00`);
 
       const reservedQuantity = reservations.reduce((sum, r) => {
         const bufferedFrom = new Date(r.reservedFrom.getTime() - bufferMs);

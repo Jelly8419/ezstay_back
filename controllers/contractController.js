@@ -304,10 +304,10 @@ const createContractRequest = async (req, res) => {
     // 예: 입주일 2/16 → 2/10 23:59:59까지 가능, 2/11 00:00:00부터 불가
     if (rentalItems && Array.isArray(rentalItems) && rentalItems.length > 0) {
       const now = new Date();
-      const checkIn = new Date(checkInDate + 'T00:00:00');
+      const checkIn = new Date(checkInDate + 'T00:00:00+09:00');
       const rentalDeadline = new Date(checkIn);
-      rentalDeadline.setDate(rentalDeadline.getDate() - 6);
-      rentalDeadline.setHours(23, 59, 59, 999);
+      rentalDeadline.setUTCDate(rentalDeadline.getUTCDate() - 6);
+      rentalDeadline.setUTCHours(14, 59, 59, 999); // KST 23:59:59 = UTC 14:59:59
 
       if (now > rentalDeadline) {
         await transaction.rollback();

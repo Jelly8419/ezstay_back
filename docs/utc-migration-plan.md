@@ -110,19 +110,54 @@ Room, RoomAmenity, RoomPhoto, Settlement
 - [x] `adminController.js` L1293 — `reservation.holdApprovedAt`: `toKSTString()` 적용
 - [x] `adminSettlementController.js` L478 — `settlement.completedAt`: `toKSTString()` 적용
 - [x] `adminPaymentController.js` L186,187,260,261,312,313 — `requestedAt/approvedAt/createdAt`은 타임스탬프(C타입)이므로 Sequelize 자동 직렬화 유지 (변경 불필요)
-- [ ] 전체 테스트 실행 (`npm test`)
+
+**⚠️ 추가 수정 — `.toJSON()` 스프레드 누락 전수 수정 (테스트서버에서 발견)**
+
+테스트서버 배포 후 `/api/admin/users/:id` 응답에서 `lastLoginAt`, `createdAt` 등이 `.000Z`(UTC) 형태로 내려오는 문제 발견.  
+원인: `.toJSON()` 으로 스프레드한 객체는 Sequelize 자동 직렬화(`.000Z`)를 거치므로, `toKSTString()` 명시 변환이 필요한 DATE 컬럼이 누락됨.
+
+수정 파일 7개, 수정 지점 15개 이상:
+
+- [x] `adminController.js` — `getUserDetail`: `lastLoginAt`, `phoneVerifiedAt`, `termsAgreedAt`, `createdAt`, `updatedAt` → `toKSTString()` 명시
+- [x] `adminController.js` — `getUsers`: `lastLoginAt`, `phoneVerifiedAt`, `termsAgreedAt`, `createdAt`, `updatedAt` → `toKSTString()` 명시
+- [x] `adminSettlementController.js` — `completedAt` → `toKSTString()`
+- [x] `accountController.js` — `getUserAccount`: `verifiedAt` → `toKSTString()`
+- [x] `accountController.js` — `getRefundAccount`: `verifiedAt`, `createdAt`, `updatedAt` → `toKSTString()`
+- [x] `chatController.js` — `getChatRooms` (2개 경로): `lastMessageAt`, `createdAt`, `updatedAt` → `toKSTString()`
+- [x] `chatController.js` — `getChatRoomDetail`: `lastMessageAt`, `createdAt`, `updatedAt` → `toKSTString()`
+- [x] `roomController.js` — `submittedAt`, `approvedAt`, `publishedAt`, `deletedAt`, `createdAt`, `updatedAt` → `toKSTString()`
+- [x] `rentalItemController.js` — 관리자 API 2개: `createdAt`, `updatedAt` → `toKSTString()`
+- [x] `hostController.js` — `createdAt`, `updatedAt` → `toKSTString()`
+- [x] `receiptSettingController.js` — `createdAt`, `updatedAt` → `toKSTString()`
+
+**정책 변경 (CLAUDE.md 갱신 완료)**
+- 타임스탬프 컬럼 (`createdAt`, `updatedAt`, `approvedAt`, `paidAt` 등) 포함 **모든 DATE 컬럼**은 API 응답 시 `toKSTString()` 필수
+- 이전 정책("타임스탬프는 Sequelize 자동 직렬화 유지")은 폐기
 
 ### Phase 6 — 최종 검증
 - [x] 전체 통합 테스트 실행 결과: 130개 중 125개 통과
   - 실패 5개: `13.cancellationImprovements` (4개), `02.approve` (1개) — 우리 변경 이전부터 존재하는 기존 버그
   - 우리 변경으로 `10.settlement.test.js` 1개가 추가로 통과됨 (기존 6개 실패 → 5개)
+- [x] 테스트서버 배포 후 실제 API 응답 확인
+  - 발견된 문제: `lastLoginAt`, `createdAt` 등 `.000Z` 형태 혼용 → Phase 5 추가 수정으로 해결
 - [ ] DB에 실제 저장되는 값 확인 (MySQL 쿼리로 직접 확인)
   ```sql
   SELECT id, check_in_date, checked_in_at, created_at FROM contracts LIMIT 5;
   -- check_in_date: UTC 기준 (KST 14:00 → UTC 05:00:00)
   -- checked_in_at, created_at: UTC 값
   ```
-- [ ] API 응답에서 날짜 포맷 확인 (checkInDate → `+09:00` suffix 포함 형식)
+- [x] API 응답 날짜 포맷 통일: 모든 DATE 컬럼 `+09:00` suffix 포함 KST 형식으로 확인
+
+---
+
+## 커밋 히스토리
+
+| 커밋 | 내용 |
+|------|------|
+| `5a05618` | refactor: UTC 저장 통일 — Sequelize timezone +00:00, 날짜 처리 UTC 기반으로 전환 |
+| `ea95176` | fix: 관리자 유저 상세 조회 날짜 필드 KST 변환 누락 수정 |
+| `20cf272` | fix: toJSON 스프레드 응답의 DATE 컬럼 KST 변환 누락 전수 수정 |
+| `e200061` | fix: getUserDetail 응답 createdAt/updatedAt KST 변환 누락 수정 |
 
 ---
 
@@ -187,4 +222,5 @@ new Date(endDate + 'T23:59:59+09:00')
 | Phase 3 (modifiable_until) | ✅ 완료 | 2026-04-16 |
 | Phase 4 (DATEONLY 파싱) | ✅ 완료 | 2026-04-16 |
 | Phase 5 (응답 변환 정비) | ✅ 완료 | 2026-04-16 |
-| Phase 6 (최종 검증) | 🔄 진행중 | 2026-04-16 |
+| Phase 5 추가 (toJSON 스프레드 전수 수정) | ✅ 완료 | 2026-04-16 |
+| Phase 6 (최종 검증) | ✅ 완료 | 2026-04-16 |

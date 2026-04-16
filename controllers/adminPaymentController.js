@@ -60,14 +60,12 @@ exports.getPayments = async (req, res) => {
       if (startDate) {
         contractConditions.push('p.requested_at >= :startDate');
         rentalConditions.push('rp.requested_at >= :startDate');
-        replacements.startDate = new Date(startDate + 'T00:00:00');
+        replacements.startDate = new Date(startDate + 'T00:00:00+09:00');
       }
       if (endDate) {
-        const end = new Date(endDate + 'T00:00:00');
-        end.setHours(23, 59, 59, 999);
         contractConditions.push('p.requested_at <= :endDate');
         rentalConditions.push('rp.requested_at <= :endDate');
-        replacements.endDate = end;
+        replacements.endDate = new Date(endDate + 'T23:59:59+09:00');
       }
       if (search) {
         if (/^\d+$/.test(search)) {
@@ -200,12 +198,8 @@ exports.getPayments = async (req, res) => {
         if (method) where.method = method;
         if (startDate || endDate) {
           where.requestedAt = {};
-          if (startDate) where.requestedAt[Op.gte] = new Date(startDate + 'T00:00:00');
-          if (endDate) {
-            const end = new Date(endDate + 'T00:00:00');
-            end.setHours(23, 59, 59, 999);
-            where.requestedAt[Op.lte] = end;
-          }
+          if (startDate) where.requestedAt[Op.gte] = new Date(startDate + 'T00:00:00+09:00');
+          if (endDate) where.requestedAt[Op.lte] = new Date(endDate + 'T23:59:59+09:00');
         }
         if (search && searchFields) {
           if (/^\d+$/.test(search)) {
@@ -965,12 +959,8 @@ exports.getPaymentLogs = async (req, res) => {
     const buildDateFilter = (field) => {
       if (!startDate && !endDate) return {};
       const filter = {};
-      if (startDate) filter[Op.gte] = new Date(startDate + 'T00:00:00');
-      if (endDate) {
-        const end = new Date(endDate + 'T00:00:00');
-        end.setHours(23, 59, 59, 999);
-        filter[Op.lte] = end;
-      }
+      if (startDate) filter[Op.gte] = new Date(startDate + 'T00:00:00+09:00');
+      if (endDate) filter[Op.lte] = new Date(endDate + 'T23:59:59+09:00');
       return { [field]: filter };
     };
 
@@ -1267,12 +1257,8 @@ exports.getPaymentSummary = async (req, res) => {
     const buildDateRange = (field) => {
       if (!startDate && !endDate) return {};
       const filter = {};
-      if (startDate) filter[Op.gte] = new Date(startDate + 'T00:00:00');
-      if (endDate) {
-        const end = new Date(endDate + 'T00:00:00');
-        end.setHours(23, 59, 59, 999);
-        filter[Op.lte] = end;
-      }
+      if (startDate) filter[Op.gte] = new Date(startDate + 'T00:00:00+09:00');
+      if (endDate) filter[Op.lte] = new Date(endDate + 'T23:59:59+09:00');
       return { [field]: filter };
     };
 
