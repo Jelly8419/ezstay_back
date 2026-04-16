@@ -398,6 +398,8 @@ const getUserDetail = async (req, res) => {
       lastLoginAt: userData.lastLoginAt ? toKSTString(userData.lastLoginAt) : null,
       phoneVerifiedAt: userData.phoneVerifiedAt ? toKSTString(userData.phoneVerifiedAt) : null,
       termsAgreedAt: userData.termsAgreedAt ? toKSTString(userData.termsAgreedAt) : null,
+      createdAt: userData.createdAt ? toKSTString(userData.createdAt) : null,
+      updatedAt: userData.updatedAt ? toKSTString(userData.updatedAt) : null,
       accountTypeDetail,
       hasVerifiedBankAccount,
       hasRefundAccount,
