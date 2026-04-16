@@ -4276,6 +4276,7 @@ const getAlimtalkTemplates = async (req, res) => {
         eventName,
         tplCode: config.tplCode,
         eventLabel: config.eventLabel,
+        targetRole: config.targetRole || null,
         varMap: config.varMap,
         isActive: !!config.tplCode,
         isLinked: true,

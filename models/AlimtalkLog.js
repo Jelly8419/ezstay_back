@@ -47,6 +47,12 @@ const AlimtalkLog = sequelize.define('AlimtalkLog', {
     field: 'receiver_phone',
     comment: '수신자 전화번호'
   },
+  receiverRole: {
+    type: DataTypes.ENUM('host', 'guest'),
+    allowNull: true,
+    field: 'receiver_role',
+    comment: '수신자 역할 (host/guest, 공통 발송 시 NULL)'
+  },
 
   // 템플릿 정보
   tplCode: {

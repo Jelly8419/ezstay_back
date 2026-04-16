@@ -44,7 +44,7 @@ class AlimtalkService {
    * @returns {Promise<{sent: boolean, skipped: boolean, logId: number|null, error: string|null}>}
    */
   static async send(eventName, receiver, templateData = {}, options = {}) {
-    const { contractId = null, chatRoomId = null, skipDedup = false } = options;
+    const { contractId = null, chatRoomId = null, skipDedup = false, receiverRole = null } = options;
 
     try {
       // 1. 템플릿 활성 여부 확인
@@ -85,6 +85,7 @@ class AlimtalkService {
         chatRoomId,
         receiverId: receiver.id,
         receiverPhone: receiver.phoneNumber,
+        receiverRole,
         tplCode: template.tplCode,
         status: 'PENDING',
         requestPayload: { message, fallbackSMS }
@@ -268,19 +269,19 @@ class AlimtalkService {
       ...commonData,
       amount: this._formatNumber(paymentData.guestAmount || contract.finalTotalAmount),
       optionItems: paymentData.optionItems || '없음'
-    }, { contractId: contract.id });
+    }, { contractId: contract.id, receiverRole: 'guest' });
 
     // 호스트에게
     await this.send('payment_completed_host', host, {
       ...commonData,
       amount: this._formatNumber(paymentData.hostAmount || contract.totalUsageFee)
-    }, { contractId: contract.id });
+    }, { contractId: contract.id, receiverRole: 'host' });
 
     // 게스트 환급계좌 미등록 시 안내
     const { GuestRefundAccount } = this.getModels();
     const refundAccount = await GuestRefundAccount.findOne({ where: { userId: guest.id } });
     if (!refundAccount) {
-      await this.send('bank_account_required', guest, {}, { contractId: contract.id });
+      await this.send('bank_account_required', guest, {}, { contractId: contract.id, receiverRole: 'guest' });
     }
   }
 
@@ -301,26 +302,26 @@ class AlimtalkService {
         ...commonData,
         penaltyAmount: this._formatNumber(refundData.guestPenalty || 0),
         refundAmount: this._formatNumber(refundData.refundAmount || 0)
-      }, { contractId: contract.id });
+      }, { contractId: contract.id, receiverRole: 'guest' });
 
       // 게스트 취소 → 호스트에게
       await this.send('contract_canceled_guest_to_host', host, {
         ...commonData,
         penaltyAmount: this._formatNumber(refundData.hostPenalty || 0),
         settlementAmount: this._formatNumber(refundData.settlementAmount || 0)
-      }, { contractId: contract.id });
+      }, { contractId: contract.id, receiverRole: 'host' });
     } else {
       // 호스트 취소 → 게스트에게
       await this.send('contract_canceled_host_to_guest', guest, {
         ...commonData,
         penaltyAmount: this._formatNumber(refundData.guestCompensationAmount || 0)
-      }, { contractId: contract.id });
+      }, { contractId: contract.id, receiverRole: 'guest' });
 
       // 호스트 취소 → 호스트에게
       await this.send('contract_canceled_host_to_host', host, {
         ...commonData,
         penaltyAmount: this._formatNumber(refundData.hostBurdenAmount || 0)
-      }, { contractId: contract.id });
+      }, { contractId: contract.id, receiverRole: 'host' });
     }
   }
 
@@ -330,7 +331,7 @@ class AlimtalkService {
   static async sendCheckoutEve(contract, guest, room) {
     await this.send('checkout_eve_guest', guest, {
       checkOutTime: room?.checkOutTime || '11:00'
-    }, { contractId: contract.id });
+    }, { contractId: contract.id, receiverRole: 'guest' });
   }
 
   /**
@@ -342,23 +343,23 @@ class AlimtalkService {
       hostAmount: this._formatNumber(agreementData.hostAmount || 0)
     };
 
-    await this.send('deposit_settlement_agreed', guest, data, { contractId: contract.id });
-    await this.send('deposit_settlement_agreed', host, data, { contractId: contract.id });
+    await this.send('deposit_settlement_agreed', guest, data, { contractId: contract.id, receiverRole: 'guest' });
+    await this.send('deposit_settlement_agreed', host, data, { contractId: contract.id, receiverRole: 'host' });
   }
 
   /**
    * 4-12. 보증금 합의 기한 만료 알림톡 (게스트 + 호스트)
    */
   static async sendDepositAgreementExpired(contract, guest, host) {
-    await this.send('deposit_agreement_expired', guest, {}, { contractId: contract.id });
-    await this.send('deposit_agreement_expired', host, {}, { contractId: contract.id });
+    await this.send('deposit_agreement_expired', guest, {}, { contractId: contract.id, receiverRole: 'guest' });
+    await this.send('deposit_agreement_expired', host, {}, { contractId: contract.id, receiverRole: 'host' });
   }
 
   /**
    * 4-13. 호스트 퇴실 확인 완료 + 보증금 반환 (게스트에게)
    */
   static async sendDepositReturnedNormal(contract, guest) {
-    await this.send('deposit_returned_normal', guest, {}, { contractId: contract.id });
+    await this.send('deposit_returned_normal', guest, {}, { contractId: contract.id, receiverRole: 'guest' });
   }
 
   /**
@@ -366,14 +367,14 @@ class AlimtalkService {
    */
   static async sendCheckoutConfirmExpired(contract, guest, host, room) {
     // 게스트에게 (4-13과 동일 메시지)
-    await this.send('checkout_confirm_expired_guest', guest, {}, { contractId: contract.id });
+    await this.send('checkout_confirm_expired_guest', guest, {}, { contractId: contract.id, receiverRole: 'guest' });
 
     // 호스트에게
     await this.send('checkout_confirm_expired_host', host, {
       roomName: room?.roomName || '',
       startDate: this._formatDate(contract.checkInDate),
       endDate: this._formatDate(contract.checkOutDate)
-    }, { contractId: contract.id });
+    }, { contractId: contract.id, receiverRole: 'host' });
   }
 
   // =====================================================
@@ -386,7 +387,7 @@ class AlimtalkService {
       roomName: room?.roomName || '',
       startDate: this._formatDate(contract.checkInDate),
       endDate: this._formatDate(contract.checkOutDate)
-    }, { contractId: contract.id });
+    }, { contractId: contract.id, receiverRole: 'guest' });
   }
 
   /** 계약 거절 알림톡 (게스트에게) */
@@ -395,7 +396,7 @@ class AlimtalkService {
       roomName: room?.roomName || '',
       startDate: this._formatDate(contract.checkInDate),
       endDate: this._formatDate(contract.checkOutDate)
-    }, { contractId: contract.id });
+    }, { contractId: contract.id, receiverRole: 'guest' });
   }
 
   /** 4-4. 입주 당일 안내 알림톡 */
@@ -403,35 +404,35 @@ class AlimtalkService {
     const address = room?.address || '';
     await this.send('checkin_today_guest', guest, {
       roomName: room?.roomName || '', address
-    }, { contractId: contract.id });
+    }, { contractId: contract.id, receiverRole: 'guest' });
     await this.send('checkin_today_host', host, {
       roomName: room?.roomName || '', address
-    }, { contractId: contract.id });
+    }, { contractId: contract.id, receiverRole: 'host' });
   }
 
   /** 4-7. 퇴실 당일 알림톡 */
   static async sendCheckoutToday(contract, guest) {
-    await this.send('checkout_today_guest', guest, {}, { contractId: contract.id });
+    await this.send('checkout_today_guest', guest, {}, { contractId: contract.id, receiverRole: 'guest' });
   }
 
   /** 4-17. 퇴실 당일 침구류 반납 안내 (침구류 대여 게스트에게만) */
   static async sendCheckoutBeddingReturn(contract, guest) {
-    await this.send('checkout_bedding_return_guest', guest, {}, { contractId: contract.id });
+    await this.send('checkout_bedding_return_guest', guest, {}, { contractId: contract.id, receiverRole: 'guest' });
   }
 
   /** 4-8. 호스트 퇴실 확인 요청 */
   static async sendCheckoutHostRequest(contract, host, confirmDeadline) {
     await this.send('checkout_host_request', host, {
       confirmDeadline: confirmDeadline || '48시간'
-    }, { contractId: contract.id });
+    }, { contractId: contract.id, receiverRole: 'host' });
   }
 
   /** 4-9. 보증금 보류 안내 */
   static async sendDepositHold(contract, guest, host, agreementDeadline) {
     await this.send('deposit_hold_host', host, {
       agreementDeadline: agreementDeadline || ''
-    }, { contractId: contract.id });
-    await this.send('deposit_hold_guest', guest, {}, { contractId: contract.id });
+    }, { contractId: contract.id, receiverRole: 'host' });
+    await this.send('deposit_hold_guest', guest, {}, { contractId: contract.id, receiverRole: 'guest' });
   }
 
   /** 4-10. 보증금 합의 요청 */
@@ -439,7 +440,7 @@ class AlimtalkService {
     await this.send('deposit_settlement_submitted', guest, {
       deductAmount: this._formatNumber(deductAmount || 0),
       reason: reason || ''
-    }, { contractId: contract.id });
+    }, { contractId: contract.id, receiverRole: 'guest' });
   }
 
   /**
@@ -472,14 +473,16 @@ class AlimtalkService {
     }
 
     // 3. 수신자가 호스트인지 게스트인지에 따라 템플릿 선택
-    const eventName = senderId === chatRoom.guestId
+    const isGuestSender = senderId === chatRoom.guestId;
+    const eventName = isGuestSender
       ? 'chat_message_host'   // 게스트가 보냄 → 호스트에게 알림
       : 'chat_message_guest'; // 호스트가 보냄 → 게스트에게 알림
+    const receiverRole = isGuestSender ? 'host' : 'guest';
 
     // 4. 알림톡 발송
     const result = await this.send(eventName, receiver, {
       roomName: roomName || ''
-    }, { chatRoomId: chatRoom.id, skipDedup: true });
+    }, { chatRoomId: chatRoom.id, skipDedup: true, receiverRole });
 
     // 5. 발송 성공 시 Redis에 알림 시간 기록 (TTL 10분)
     if (result.sent || !result.skipped) {
@@ -505,7 +508,7 @@ class AlimtalkService {
 
   /** 4-14. 계좌 등록 요청 */
   static async sendBankAccountRequired(receiver) {
-    await this.send('bank_account_required', receiver, {});
+    await this.send('bank_account_required', receiver, {}, { receiverRole: 'guest' });
   }
 
   /** 계약 승인 요청 알림톡 (호스트에게) */
@@ -514,7 +517,7 @@ class AlimtalkService {
       roomName: room?.roomName || '',
       startDate: this._formatDate(contract.checkInDate),
       endDate: this._formatDate(contract.checkOutDate)
-    }, { contractId: contract.id });
+    }, { contractId: contract.id, receiverRole: 'host' });
   }
 
   /** 옵션 추가 결제 완료 알림톡 (게스트에게) */
@@ -525,7 +528,7 @@ class AlimtalkService {
       endDate: this._formatDate(contract.checkOutDate),
       optionItems: optionData.optionItems || '',
       amount: this._formatNumber(optionData.amount || 0)
-    }, { contractId: contract.id, ...options });
+    }, { contractId: contract.id, receiverRole: 'guest', ...options });
   }
 
   /** 옵션 결제 취소 완료 알림톡 (게스트에게) */
@@ -536,7 +539,7 @@ class AlimtalkService {
       endDate: this._formatDate(contract.checkOutDate),
       optionItems: optionData.optionItems || '',
       amount: this._formatNumber(optionData.amount || 0)
-    }, { contractId: contract.id });
+    }, { contractId: contract.id, receiverRole: 'guest' });
   }
 
   // =====================================================
