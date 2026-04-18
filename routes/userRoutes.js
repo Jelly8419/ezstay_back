@@ -15,6 +15,7 @@ const {
   upsertReceiptSetting,
   deleteReceiptSetting
 } = require('../controllers/receiptSettingController');
+const { registerRegionAlert } = require('../controllers/regionAlertController');
 
 // 게스트 본인인증정보 저장
 router.post('/guest/verification', authenticateToken, saveGuestVerification);
@@ -36,6 +37,9 @@ router.patch('/nickname', authenticateToken, changeNickname);
 
 // 회원 탈퇴
 router.delete('/account', authenticateToken, deleteAccount);
+
+// 지역 알림 신청 (임차인)
+router.post('/region-alert', authenticateToken, registerRegionAlert);
 
 // ========================================
 // 영수증 설정 API (게스트)

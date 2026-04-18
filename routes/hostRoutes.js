@@ -38,6 +38,7 @@ const {
   exportSettlements,
   getDepositDeductionDetail
 } = require('../controllers/settlementController');
+const { getBenefitStatus } = require('../controllers/hostBenefitController');
 const { authenticateToken } = require('../middleware/auth');
 const { uploadRoomPhotos } = require('../middleware/upload');
 const { uploadLimiter, duplicateLimiter } = require('../middleware/rateLimiter');
@@ -48,6 +49,9 @@ router.use(authenticateToken);
 
 // 0. 호스트 계좌정보 조회
 router.get('/account', getHostAccount);
+
+// 혜택 상태 조회 (선착순 100명 이벤트)
+router.get('/benefit-status', getBenefitStatus);
 
 // 1. 내 방 목록 조회 (getRoom보다 먼저 와야 함)
 router.get('/rooms', getMyRooms);

@@ -49,6 +49,9 @@ const ServiceTaskModel = require('./ServiceTask');
 const ServiceTaskLogModel = require('./ServiceTaskLog');
 const ContractCancelRequestModel = require('./ContractCancelRequest');
 const KmcVerificationModel = require('./KmcVerification');
+const RegionAlert = require('./RegionAlert');
+const HostBenefit = require('./HostBenefit');
+const ContractBenefit = require('./ContractBenefit');
 
 // 핵심 유저 모델 초기화
 const User = UserModel(sequelize);
@@ -1057,6 +1060,54 @@ ServiceTaskLog.belongsTo(ServiceTask, {
   as: 'serviceTask'
 });
 
+// =====================================================
+// RegionAlert 관계 설정 (임차인 알림 신청)
+// =====================================================
+User.hasOne(RegionAlert, {
+  foreignKey: 'userId',
+  as: 'regionAlert',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+RegionAlert.belongsTo(User, {
+  foreignKey: 'userId',
+  as: 'user',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// =====================================================
+// HostBenefit 관계 설정 (호스트 혜택 선착순 100명)
+// =====================================================
+User.hasOne(HostBenefit, {
+  foreignKey: 'hostId',
+  as: 'hostBenefit',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+HostBenefit.belongsTo(User, {
+  foreignKey: 'hostId',
+  as: 'host',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// =====================================================
+// ContractBenefit 관계 설정 (계약별 혜택 이력)
+// =====================================================
+Contract.hasMany(ContractBenefit, {
+  foreignKey: 'contractId',
+  as: 'benefits',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+ContractBenefit.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -1111,5 +1162,8 @@ module.exports = {
   ServiceTask,
   ServiceTaskLog,
   ContractCancelRequest,
-  KmcVerification
+  KmcVerification,
+  RegionAlert,
+  HostBenefit,
+  ContractBenefit
 };
