@@ -6,6 +6,7 @@ const { safeRedisOperation } = require('../config/redis');
 const crypto = require('crypto');
 const roomService = require('../services/roomService');
 const appConfig = require('../config/app.config');
+const { toKSTString } = require('../utils/dateHelper');
 
 const createRoom = async (req, res) => {
   try {
@@ -141,6 +142,14 @@ const getRoomById = async (req, res) => {
     if (roomData.host) {
       roomData.host.profileImageUrl = toAbsoluteUrl(roomData.host.profileImageUrl);
     }
+
+    // DATE 컬럼 KST 변환
+    roomData.submittedAt = toKSTString(roomData.submittedAt);
+    roomData.approvedAt = toKSTString(roomData.approvedAt);
+    roomData.publishedAt = toKSTString(roomData.publishedAt);
+    roomData.deletedAt = toKSTString(roomData.deletedAt);
+    roomData.createdAt = toKSTString(roomData.createdAt);
+    roomData.updatedAt = toKSTString(roomData.updatedAt);
 
     // 게스트 API이므로 민감 정보 제거 및 JSON 파싱
     if (roomData.amenity) {

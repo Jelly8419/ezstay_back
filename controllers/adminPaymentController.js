@@ -5,6 +5,13 @@ const { success, error, ErrorCodes } = require('../utils/responseHelper');
 const { toKSTString } = require('../utils/dateHelper');
 const { partialRefundRentalOrder, logRentalAction } = require('../utils/rentalOrderHelper');
 
+function extractPgOrderNo(paymentResponse) {
+  const resp = typeof paymentResponse === 'string'
+    ? JSON.parse(paymentResponse)
+    : (paymentResponse || {});
+  return resp.recv_orderno || resp.orderno || null;
+}
+
 /**
  * 결제 목록 조회 (계약 결제 + 렌탈 결제 통합)
  * GET /api/admin/payments
@@ -53,14 +60,12 @@ exports.getPayments = async (req, res) => {
       if (startDate) {
         contractConditions.push('p.requested_at >= :startDate');
         rentalConditions.push('rp.requested_at >= :startDate');
-        replacements.startDate = new Date(startDate + 'T00:00:00');
+        replacements.startDate = new Date(startDate + 'T00:00:00+09:00');
       }
       if (endDate) {
-        const end = new Date(endDate + 'T00:00:00');
-        end.setHours(23, 59, 59, 999);
         contractConditions.push('p.requested_at <= :endDate');
         rentalConditions.push('rp.requested_at <= :endDate');
-        replacements.endDate = end;
+        replacements.endDate = new Date(endDate + 'T23:59:59+09:00');
       }
       if (search) {
         if (/^\d+$/.test(search)) {
@@ -193,12 +198,8 @@ exports.getPayments = async (req, res) => {
         if (method) where.method = method;
         if (startDate || endDate) {
           where.requestedAt = {};
-          if (startDate) where.requestedAt[Op.gte] = new Date(startDate + 'T00:00:00');
-          if (endDate) {
-            const end = new Date(endDate + 'T00:00:00');
-            end.setHours(23, 59, 59, 999);
-            where.requestedAt[Op.lte] = end;
-          }
+          if (startDate) where.requestedAt[Op.gte] = new Date(startDate + 'T00:00:00+09:00');
+          if (endDate) where.requestedAt[Op.lte] = new Date(endDate + 'T23:59:59+09:00');
         }
         if (search && searchFields) {
           if (/^\d+$/.test(search)) {
@@ -439,6 +440,7 @@ exports.getPaymentDetail = async (req, res) => {
           paidAmount: parseFloat(rentalOrder.paidAmount),
           refundedAmount: parseFloat(rentalOrder.refundedAmount),
           paymentMethod: rentalOrder.paymentMethod,
+          pgOrderNo: extractPgOrderNo(rentalOrder.payment?.paymentResponse),
           deliveryStatus: rentalOrder.deliveryStatus,
           items: (rentalOrder.items || []).map(item => ({
             id: item.id,
@@ -526,6 +528,7 @@ exports.getPaymentDetail = async (req, res) => {
         paymentType: p.paymentType || 'CONTRACT',
         pgStatus: p.status,
         paymentKey: p.paymentKey,
+        pgOrderNo: extractPgOrderNo(p.paymentResponse),
         method: p.method,
         easyPayProvider: p.easyPayProvider || null
       });
@@ -956,12 +959,8 @@ exports.getPaymentLogs = async (req, res) => {
     const buildDateFilter = (field) => {
       if (!startDate && !endDate) return {};
       const filter = {};
-      if (startDate) filter[Op.gte] = new Date(startDate + 'T00:00:00');
-      if (endDate) {
-        const end = new Date(endDate + 'T00:00:00');
-        end.setHours(23, 59, 59, 999);
-        filter[Op.lte] = end;
-      }
+      if (startDate) filter[Op.gte] = new Date(startDate + 'T00:00:00+09:00');
+      if (endDate) filter[Op.lte] = new Date(endDate + 'T23:59:59+09:00');
       return { [field]: filter };
     };
 
@@ -994,6 +993,7 @@ exports.getPaymentLogs = async (req, res) => {
         productType: isHostBurden ? '호스트부담금' : '계약',
         amount: p.totalAmount,
         orderId: p.contract?.orderId || null,
+        pgOrderNo: extractPgOrderNo(p.paymentResponse),
         userName: isHostBurden
           ? (p.contract?.host?.name || null)
           : (p.contract?.guest?.name || null),
@@ -1015,7 +1015,7 @@ exports.getPaymentLogs = async (req, res) => {
         include: [
           { model: User, as: 'guest', attributes: ['id', 'name'] },
           { model: Room, as: 'room', attributes: ['id', 'roomName'] },
-          { model: Payment, as: 'payment', attributes: ['totalAmount', 'balanceAmount', 'method', 'easyPayProvider'], required: false }
+          { model: Payment, as: 'payment', attributes: ['totalAmount', 'balanceAmount', 'method', 'easyPayProvider', 'paymentResponse'], required: false }
         ]
       }]
     });
@@ -1043,6 +1043,7 @@ exports.getPaymentLogs = async (req, res) => {
         productType: refundProductType,
         amount: -(r.finalRefundAmount || 0),
         orderId: r.contract?.orderId || null,
+        pgOrderNo: extractPgOrderNo(payment?.paymentResponse),
         userName: r.contract?.guest?.name || null,
         userType: '게스트',
         roomName: r.contract?.room?.roomName || null
@@ -1067,7 +1068,7 @@ exports.getPaymentLogs = async (req, res) => {
           include: [
             { model: User, as: 'guest', attributes: ['id', 'name'] },
             { model: Room, as: 'room', attributes: ['id', 'roomName'] },
-            { model: Payment, as: 'payment', attributes: ['method', 'easyPayProvider'], required: false }
+            { model: Payment, as: 'payment', attributes: ['method', 'easyPayProvider', 'paymentResponse'], required: false }
           ]
         },
         {
@@ -1078,7 +1079,7 @@ exports.getPaymentLogs = async (req, res) => {
           include: [{
             model: RentalPayment,
             as: 'payment',
-            attributes: ['method', 'easyPayProvider'],
+            attributes: ['method', 'easyPayProvider', 'paymentResponse'],
             required: false
           }]
         }
@@ -1124,6 +1125,7 @@ exports.getPaymentLogs = async (req, res) => {
         amount: isPayment ? Math.abs(log.amountChange || 0) : -(Math.abs(log.amountChange || 0)),
         orderId: log.contract?.orderId || null,
         rentalOrderId: log.order?.orderId || null,
+        pgOrderNo: extractPgOrderNo(paymentInfo?.paymentResponse),
         userName: log.contract?.guest?.name || null,
         userType: '게스트',
         roomName: log.contract?.room?.roomName || null
@@ -1143,7 +1145,7 @@ exports.getPaymentLogs = async (req, res) => {
         include: [
           { model: User, as: 'guest', attributes: ['id', 'name'] },
           { model: Room, as: 'room', attributes: ['id', 'roomName'] },
-          { model: Payment, as: 'payment', attributes: ['method', 'easyPayProvider'], required: false }
+          { model: Payment, as: 'payment', attributes: ['method', 'easyPayProvider', 'paymentResponse'], required: false }
         ]
       }],
       order: [['completedAt', safeSortOrder]]
@@ -1157,6 +1159,7 @@ exports.getPaymentLogs = async (req, res) => {
       productType: '관리자환불',
       amount: -(ar.finalRefundAmount || 0),
       orderId: ar.contract?.orderId || null,
+      pgOrderNo: extractPgOrderNo(ar.contract?.payment?.paymentResponse),
       userName: ar.contract?.guest?.name || null,
       userType: '게스트',
       roomName: ar.contract?.room?.roomName || null
@@ -1254,12 +1257,8 @@ exports.getPaymentSummary = async (req, res) => {
     const buildDateRange = (field) => {
       if (!startDate && !endDate) return {};
       const filter = {};
-      if (startDate) filter[Op.gte] = new Date(startDate + 'T00:00:00');
-      if (endDate) {
-        const end = new Date(endDate + 'T00:00:00');
-        end.setHours(23, 59, 59, 999);
-        filter[Op.lte] = end;
-      }
+      if (startDate) filter[Op.gte] = new Date(startDate + 'T00:00:00+09:00');
+      if (endDate) filter[Op.lte] = new Date(endDate + 'T23:59:59+09:00');
       return { [field]: filter };
     };
 
@@ -1278,7 +1277,7 @@ exports.getPaymentSummary = async (req, res) => {
       {
         model: Payment,
         as: 'payment',
-        attributes: ['id', 'method', 'easyPayProvider', 'status', 'totalAmount', 'balanceAmount'],
+        attributes: ['id', 'method', 'easyPayProvider', 'status', 'totalAmount', 'balanceAmount', 'paymentResponse'],
         where: { paymentType: 'CONTRACT' },
         required: false
       },
@@ -1342,6 +1341,7 @@ exports.getPaymentSummary = async (req, res) => {
         userName: contract.guest?.name || null,
         paymentMethod: contract.payment?.method || contract.paymentMethod || null,
         easyPayProvider: contract.payment?.easyPayProvider || null,
+        pgOrderNo: extractPgOrderNo(contract.payment?.paymentResponse),
         paidAmount,
         refundedAmount,
         currentBalance: paidAmount - refundedAmount,
@@ -1372,7 +1372,7 @@ exports.getPaymentSummary = async (req, res) => {
       {
         model: RentalPayment,
         as: 'payment',
-        attributes: ['id', 'method', 'easyPayProvider', 'status', 'totalAmount', 'balanceAmount'],
+        attributes: ['id', 'method', 'easyPayProvider', 'status', 'totalAmount', 'balanceAmount', 'paymentResponse'],
         required: false
       }
     ];
@@ -1414,6 +1414,7 @@ exports.getPaymentSummary = async (req, res) => {
         userName: ro.contract?.guest?.name || null,
         paymentMethod: ro.payment?.method || ro.paymentMethod || null,
         easyPayProvider: ro.payment?.easyPayProvider || null,
+        pgOrderNo: extractPgOrderNo(ro.payment?.paymentResponse),
         paidAmount,
         refundedAmount,
         currentBalance: paidAmount - refundedAmount,

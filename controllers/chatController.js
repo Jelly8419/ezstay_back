@@ -231,16 +231,25 @@ const getMyChatRooms = async (req, res) => {
         try {
           const metadata = await getChatRoomMetadata(chatRoom.firebaseChatRoomId);
           const isReadOnly = terminatedStatuses.includes(chatRoom.contract?.status);
+          const chatRoomData = chatRoom.toJSON();
           return {
-            ...chatRoom.toJSON(),
+            ...chatRoomData,
+            lastMessageAt: metadata?.lastMessageAt || toKSTString(chatRoomData.lastMessageAt),
+            createdAt: toKSTString(chatRoomData.createdAt),
+            updatedAt: toKSTString(chatRoomData.updatedAt),
             lastMessage: metadata?.lastMessageText || null,
-            lastMessageAt: metadata?.lastMessageAt || null,
             unreadCount: metadata?.unreadCount?.[String(userId)] || 0,
             isReadOnly
           };
         } catch (err) {
           console.error('Firestore 메타데이터 조회 실패:', err);
-          return chatRoom.toJSON();
+          const chatRoomData = chatRoom.toJSON();
+          return {
+            ...chatRoomData,
+            lastMessageAt: toKSTString(chatRoomData.lastMessageAt),
+            createdAt: toKSTString(chatRoomData.createdAt),
+            updatedAt: toKSTString(chatRoomData.updatedAt)
+          };
         }
       })
     );
@@ -320,8 +329,14 @@ const getChatRoomDetail = async (req, res) => {
     ];
     const isReadOnly = terminatedStatuses.includes(contractStatus);
 
+    const chatRoomDetail = chatRoom.toJSON();
     return success(res, {
-      chatRoom: chatRoom.toJSON(),
+      chatRoom: {
+        ...chatRoomDetail,
+        lastMessageAt: toKSTString(chatRoomDetail.lastMessageAt),
+        createdAt: toKSTString(chatRoomDetail.createdAt),
+        updatedAt: toKSTString(chatRoomDetail.updatedAt)
+      },
       metadata,
       isReadOnly,
       readOnlyReason: isReadOnly ? '계약이 종료되어 채팅이 읽기 전용입니다.' : null
@@ -503,7 +518,15 @@ const getChatRoomByContractId = async (req, res) => {
       return error(res, ErrorCodes.FORBIDDEN, 403);
     }
 
-    return success(res, { chatRoom }, '채팅방 조회 성공');
+    const chatRoomByContract = chatRoom.toJSON();
+    return success(res, {
+      chatRoom: {
+        ...chatRoomByContract,
+        lastMessageAt: toKSTString(chatRoomByContract.lastMessageAt),
+        createdAt: toKSTString(chatRoomByContract.createdAt),
+        updatedAt: toKSTString(chatRoomByContract.updatedAt)
+      }
+    }, '채팅방 조회 성공');
   } catch (err) {
     console.error('계약별 채팅방 조회 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);

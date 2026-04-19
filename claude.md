@@ -39,9 +39,13 @@ expectedDate: settlement.expectedDate
 // → "2026-04-10"
 ```
 
-**타임스탬프 컬럼 (createdAt / approvedAt / paidAt 등)**
+**타임스탬프 컬럼 (createdAt / updatedAt / approvedAt / paidAt 등)**
 ```js
-// ✅ Sequelize 자동 직렬화 그대로 사용 (UTC Z 형태로 프론트 전달)
+// ✅ 반드시 toKSTString() 사용 — UTC 통일 이후 모든 DATE 컬럼 동일 규칙
+createdAt: toKSTString(contract.createdAt)
+// → "2026-04-10T14:00:00+09:00"
+
+// ❌ 금지 — .000Z 형태로 UTC 그대로 전달됨
 createdAt: contract.createdAt
 // → "2026-04-10T05:00:00.000Z"
 ```
@@ -49,16 +53,16 @@ createdAt: contract.createdAt
 ### 날짜 유틸 함수 위치: `utils/dateHelper.js`
 | 함수 | 용도 | 반환 예시 |
 |------|------|----------|
-| `toKSTString(date)` | DATE 컬럼 API 응답 변환 | `"2026-04-10T14:00:00"` |
+| `toKSTString(date)` | DATE 컬럼 API 응답 변환 | `"2026-04-10T14:00:00+09:00"` |
 | `toDateStrKST(date)` | Date 객체 → 날짜 문자열 | `"2026-04-10"` |
 | `todayKST()` | 오늘 날짜 문자열 | `"2026-04-10"` |
 | `nowKSTString()` | 로그용 타임스탬프 | `"2026-04-10T14:00:00+09:00"` |
 
 ### 날짜 필터 쿼리 규칙
 ```js
-// ✅ 'YYYY-MM-DD' 문자열은 반드시 'T00:00:00' 붙여서 로컬 파싱
-new Date(startDate + 'T00:00:00')   // KST 자정으로 파싱
-new Date(endDate + 'T23:59:59')     // KST 끝으로 파싱
+// ✅ 'YYYY-MM-DD' 문자열은 반드시 '+09:00' 붙여서 KST 명시
+new Date(startDate + 'T00:00:00+09:00')   // KST 자정으로 파싱 → UTC로 정규화
+new Date(endDate + 'T23:59:59+09:00')     // KST 끝으로 파싱 → UTC로 정규화
 
 // ❌ 금지 — 'YYYY-MM-DD' 단독 파싱은 UTC 자정으로 해석됨 (9시간 오차)
 new Date(startDate)

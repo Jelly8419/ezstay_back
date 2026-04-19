@@ -1,15 +1,5 @@
-const { DataTypes, Sequelize } = require('sequelize');
-
-const sequelize = new Sequelize(process.env.DB_NAME || 'ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 3306,
-  dialect: 'mysql',
-  timezone: '+09:00',
-  dialectOptions: {
-    timezone: '+09:00'
-  },
-  logging: false
-});
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('./db');
 
 /**
  * AlimtalkLog 모델 - 카카오 알림톡 발송 이력
@@ -56,6 +46,12 @@ const AlimtalkLog = sequelize.define('AlimtalkLog', {
     allowNull: false,
     field: 'receiver_phone',
     comment: '수신자 전화번호'
+  },
+  receiverRole: {
+    type: DataTypes.ENUM('host', 'guest'),
+    allowNull: true,
+    field: 'receiver_role',
+    comment: '수신자 역할 (host/guest, 공통 발송 시 NULL)'
   },
 
   // 템플릿 정보

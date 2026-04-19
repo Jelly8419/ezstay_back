@@ -1,12 +1,5 @@
 const { DataTypes } = require('sequelize');
-const { Sequelize } = require('sequelize');
-
-const sequelize = new Sequelize(process.env.DB_NAME || 'ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 3306,
-  dialect: 'mysql',
-  logging: false
-});
+const { sequelize } = require('./db');
 
 const ReceiptSetting = sequelize.define('ReceiptSetting', {
   id: {
@@ -53,4 +46,4 @@ const ReceiptSetting = sequelize.define('ReceiptSetting', {
   comment: '사용자 영수증 발급 정보 설정 테이블'
 });
 
-module.exports = { ReceiptSetting, sequelize };
+module.exports = { ReceiptSetting };

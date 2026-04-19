@@ -1,6 +1,6 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
 const { toDateStrKST, toKSTString } = require('../utils/dateHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ContractCancelRequest, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, ServiceTask, ServiceTaskLog, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ContractCancelRequest, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, ServiceTask, ServiceTaskLog, HostBenefit, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -252,6 +252,12 @@ const getUsers = async (req, res) => {
       const userData = user.toJSON();
       userData.hasBankAccount = (userData.bankAccounts && userData.bankAccounts.length > 0);
       delete userData.bankAccounts;
+      // DATE 컬럼 KST 변환
+      userData.lastLoginAt = toKSTString(userData.lastLoginAt);
+      userData.phoneVerifiedAt = toKSTString(userData.phoneVerifiedAt);
+      userData.termsAgreedAt = toKSTString(userData.termsAgreedAt);
+      userData.createdAt = toKSTString(userData.createdAt);
+      userData.updatedAt = toKSTString(userData.updatedAt);
       return userData;
     });
 
@@ -389,6 +395,11 @@ const getUserDetail = async (req, res) => {
 
     return success(res, {
       ...userData,
+      lastLoginAt: userData.lastLoginAt ? toKSTString(userData.lastLoginAt) : null,
+      phoneVerifiedAt: userData.phoneVerifiedAt ? toKSTString(userData.phoneVerifiedAt) : null,
+      termsAgreedAt: userData.termsAgreedAt ? toKSTString(userData.termsAgreedAt) : null,
+      createdAt: userData.createdAt ? toKSTString(userData.createdAt) : null,
+      updatedAt: userData.updatedAt ? toKSTString(userData.updatedAt) : null,
       accountTypeDetail,
       hasVerifiedBankAccount,
       hasRefundAccount,
@@ -595,6 +606,21 @@ const approveProperty = async (req, res) => {
         userAgent,
         changedAt: new Date()
       }, { transaction });
+
+      // 선착순 100명 혜택 자동 등록 (승인 확정 시점)
+      const benefitCount = await HostBenefit.count({ transaction });
+      if (benefitCount < 100) {
+        const alreadyRegistered = await HostBenefit.findOne({
+          where: { hostId: room.hostId },
+          transaction
+        });
+        if (!alreadyRegistered) {
+          await HostBenefit.create(
+            { hostId: room.hostId, registeredAt: new Date() },
+            { transaction }
+          );
+        }
+      }
 
       await transaction.commit();
     } catch (txErr) {
@@ -871,10 +897,10 @@ const getCancelRequests = async (req, res) => {
       cancelRequestWhere.requesterRole = requesterRole;
     }
     if (startDate) {
-      cancelRequestWhere.requestedAt = { ...cancelRequestWhere.requestedAt, [Op.gte]: new Date(startDate + 'T00:00:00') };
+      cancelRequestWhere.requestedAt = { ...cancelRequestWhere.requestedAt, [Op.gte]: new Date(startDate + 'T00:00:00+09:00') };
     }
     if (endDate) {
-      cancelRequestWhere.requestedAt = { ...cancelRequestWhere.requestedAt, [Op.lte]: new Date(endDate + 'T23:59:59') };
+      cancelRequestWhere.requestedAt = { ...cancelRequestWhere.requestedAt, [Op.lte]: new Date(endDate + 'T23:59:59+09:00') };
     }
 
     // 게스트 검색 조건
@@ -1124,7 +1150,7 @@ const getReservationDetail = async (req, res) => {
       if (reservation.room) details[0] = `방 계약, ${reservation.room.roomName}`;
 
       timeline.push({
-        occurredAt: p.approvedAt || p.createdAt,
+        occurredAt: toKSTString(p.approvedAt || p.createdAt),
         type: '결제완료',
         amount: p.totalAmount,
         description: details.join(', '),
@@ -1132,7 +1158,8 @@ const getReservationDetail = async (req, res) => {
         actorName: reservation.guest?.name || null,
         pgStatus: p.status,
         paymentKey: p.paymentKey,
-        method: p.method
+        method: p.method,
+        orderId: p.orderId || null
       });
     }
 
@@ -1150,13 +1177,14 @@ const getReservationDetail = async (req, res) => {
         }
 
         timeline.push({
-          occurredAt: r.completedAt || r.updatedAt,
+          occurredAt: toKSTString(r.completedAt || r.updatedAt),
           type: '부분취소',
           amount: -(r.finalRefundAmount || 0),
           description,
           actor: metadata.changedBy || 'system',
           actorName: null,
-          refundId: r.id
+          refundId: r.id,
+          orderId: reservation.orderId || null
         });
       }
     });
@@ -1217,13 +1245,13 @@ const getReservationDetail = async (req, res) => {
       const actorMap = { GUEST: 'guest', HOST: 'host', ADMIN: 'admin', SYSTEM: 'system' };
 
       timeline.push({
-        occurredAt: log.createdAt,
+        occurredAt: toKSTString(log.createdAt),
         type,
         amount: log.amountChange || 0,
         description,
         actor: actorMap[log.actor] || log.actor,
         actorName: null,
-        rentalOrderId: log.order?.orderId || null
+        orderId: log.order?.orderId || null
       });
     });
 
@@ -1290,7 +1318,7 @@ const getReservationDetail = async (req, res) => {
           step: 'HOLD_APPROVED',
           label: '보증금 보류 승인',
           actor: 'admin',
-          occurredAt: reservation.holdApprovedAt,
+          occurredAt: toKSTString(reservation.holdApprovedAt),
           agreementDeadline: toKSTString(new Date(new Date(reservation.holdApprovedAt).getTime() + 10 * 24 * 60 * 60 * 1000))
         });
       }
@@ -1324,7 +1352,7 @@ const getReservationDetail = async (req, res) => {
           step: 'AUTO_RETURNED',
           label: '합의 기한 초과 — 보증금 전액 자동 반환',
           actor: 'system',
-          occurredAt: da.updatedAt
+          occurredAt: toKSTString(da.updatedAt)
         });
       }
 
@@ -1349,8 +1377,104 @@ const getReservationDetail = async (req, res) => {
       };
     }
 
+    const r = reservation.toJSON();
+
+    const reservationData = {
+      ...r,
+      // Contract DATE 컬럼
+      checkInDate: toKSTString(reservation.checkInDate),
+      checkOutDate: toKSTString(reservation.checkOutDate),
+      approvedAt: toKSTString(reservation.approvedAt),
+      rejectedAt: toKSTString(reservation.rejectedAt),
+      paidAt: toKSTString(reservation.paidAt),
+      checkedInAt: toKSTString(reservation.checkedInAt),
+      checkedOutAt: toKSTString(reservation.checkedOutAt),
+      cancelledAt: toKSTString(reservation.cancelledAt),
+      checkoutRequestedAt: toKSTString(reservation.checkoutRequestedAt),
+      hostCheckedOutAt: toKSTString(reservation.hostCheckedOutAt),
+      depositReturnedAt: toKSTString(reservation.depositReturnedAt),
+      holdRequestedAt: toKSTString(reservation.holdRequestedAt),
+      holdApprovedAt: toKSTString(reservation.holdApprovedAt),
+      createdAt: toKSTString(reservation.createdAt),
+      updatedAt: toKSTString(reservation.updatedAt),
+      // guest DATE 컬럼
+      guest: reservation.guest ? {
+        ...r.guest,
+        phoneVerifiedAt: toKSTString(reservation.guest.phoneVerifiedAt),
+        lastLoginAt: toKSTString(reservation.guest.lastLoginAt),
+        termsAgreedAt: toKSTString(reservation.guest.termsAgreedAt),
+        createdAt: toKSTString(reservation.guest.createdAt),
+        updatedAt: toKSTString(reservation.guest.updatedAt),
+      } : null,
+      // host DATE 컬럼
+      host: reservation.host ? {
+        ...r.host,
+        phoneVerifiedAt: toKSTString(reservation.host.phoneVerifiedAt),
+        lastLoginAt: toKSTString(reservation.host.lastLoginAt),
+        termsAgreedAt: toKSTString(reservation.host.termsAgreedAt),
+        createdAt: toKSTString(reservation.host.createdAt),
+        updatedAt: toKSTString(reservation.host.updatedAt),
+      } : null,
+      // room DATE 컬럼
+      room: reservation.room ? {
+        ...r.room,
+        submittedAt: toKSTString(reservation.room.submittedAt),
+        approvedAt: toKSTString(reservation.room.approvedAt),
+        publishedAt: toKSTString(reservation.room.publishedAt),
+        deletedAt: toKSTString(reservation.room.deletedAt),
+        createdAt: toKSTString(reservation.room.createdAt),
+        updatedAt: toKSTString(reservation.room.updatedAt),
+      } : null,
+      // payment DATE 컬럼
+      payment: reservation.payment ? {
+        ...r.payment,
+        requestedAt: toKSTString(reservation.payment.requestedAt),
+        approvedAt: toKSTString(reservation.payment.approvedAt),
+        createdAt: toKSTString(reservation.payment.createdAt),
+        updatedAt: toKSTString(reservation.payment.updatedAt),
+      } : null,
+      // refunds DATE 컬럼
+      refunds: (reservation.refunds || []).map((refund, i) => ({
+        ...r.refunds[i],
+        cancellationDate: toKSTString(refund.cancellationDate),
+        checkInDate: toKSTString(refund.checkInDate),
+        requestedAt: toKSTString(refund.requestedAt),
+        approvedAt: toKSTString(refund.approvedAt),
+        rejectedAt: toKSTString(refund.rejectedAt),
+        completedAt: toKSTString(refund.completedAt),
+        createdAt: toKSTString(refund.createdAt),
+        updatedAt: toKSTString(refund.updatedAt),
+      })),
+      // rentalOrders DATE 컬럼
+      rentalOrders: (reservation.rentalOrders || []).map((ro, i) => ({
+        ...r.rentalOrders[i],
+        paidAt: toKSTString(ro.paidAt),
+        modifiableUntil: toKSTString(ro.modifiableUntil),
+        deliveredAt: toKSTString(ro.deliveredAt),
+        createdAt: toKSTString(ro.createdAt),
+        updatedAt: toKSTString(ro.updatedAt),
+        items: (ro.items || []).map((item, j) => ({
+          ...r.rentalOrders[i].items[j],
+          cancelledAt: toKSTString(item.cancelledAt),
+          createdAt: toKSTString(item.createdAt),
+          updatedAt: toKSTString(item.updatedAt),
+        })),
+      })),
+      // depositAgreements DATE 컬럼
+      depositAgreements: (reservation.depositAgreements || []).map((da, i) => ({
+        ...r.depositAgreements[i],
+        requestedAt: toKSTString(da.requestedAt),
+        rejectedAt: toKSTString(da.rejectedAt),
+        adminApprovedAt: toKSTString(da.adminApprovedAt),
+        submittedAt: toKSTString(da.submittedAt),
+        acceptedAt: toKSTString(da.acceptedAt),
+        createdAt: toKSTString(da.createdAt),
+        updatedAt: toKSTString(da.updatedAt),
+      })),
+    };
+
     return success(res, {
-      reservation,
+      reservation: reservationData,
       paymentSummary: {
         totalPaidAmount: contractPaidAmount + rentalPaidTotal,
         totalRefundedAmount: contractRefundTotal + rentalRefundTotal,
@@ -2361,10 +2485,10 @@ const getRentalOrders = async (req, res) => {
     if (startDate || endDate) {
       where.createdAt = {};
       if (startDate) {
-        where.createdAt[Op.gte] = new Date(startDate + 'T00:00:00');
+        where.createdAt[Op.gte] = new Date(startDate + 'T00:00:00+09:00');
       }
       if (endDate) {
-        where.createdAt[Op.lte] = new Date(endDate + 'T23:59:59');
+        where.createdAt[Op.lte] = new Date(endDate + 'T23:59:59+09:00');
       }
     }
 
@@ -3454,12 +3578,8 @@ const getDepositHolds = async (req, res) => {
 
     if (startDate || endDate) {
       contractWhere.holdRequestedAt = {};
-      if (startDate) contractWhere.holdRequestedAt[Op.gte] = new Date(startDate + 'T00:00:00');
-      if (endDate) {
-        const end = new Date(endDate + 'T00:00:00');
-        end.setHours(23, 59, 59, 999);
-        contractWhere.holdRequestedAt[Op.lte] = end;
-      }
+      if (startDate) contractWhere.holdRequestedAt[Op.gte] = new Date(startDate + 'T00:00:00+09:00');
+      if (endDate) contractWhere.holdRequestedAt[Op.lte] = new Date(endDate + 'T23:59:59+09:00');
     }
 
     const hostInclude = { model: User, as: 'host', attributes: ['id', 'name', 'email', 'phoneNumber'] };
@@ -4171,6 +4291,7 @@ const getAlimtalkTemplates = async (req, res) => {
         eventName,
         tplCode: config.tplCode,
         eventLabel: config.eventLabel,
+        targetRole: config.targetRole || null,
         varMap: config.varMap,
         isActive: !!config.tplCode,
         isLinked: true,
@@ -4268,11 +4389,10 @@ const getAlimtalkLogs = async (req, res) => {
     if (req.query.startDate || req.query.endDate) {
       where.createdAt = {};
       if (req.query.startDate) {
-        where.createdAt[Op.gte] = new Date(req.query.startDate + 'T00:00:00');
+        where.createdAt[Op.gte] = new Date(req.query.startDate + 'T00:00:00+09:00');
       }
       if (req.query.endDate) {
-        const endDate = new Date(req.query.endDate + 'T23:59:59');
-        where.createdAt[Op.lte] = endDate;
+        where.createdAt[Op.lte] = new Date(req.query.endDate + 'T23:59:59+09:00');
       }
     }
 
@@ -4312,10 +4432,10 @@ const getAlimtalkStats = async (req, res) => {
   try {
     const { AlimtalkLog } = require('../models');
 
-    const endDate = req.query.endDate ? new Date(req.query.endDate + 'T23:59:59') : new Date();
-    if (!req.query.endDate) endDate.setHours(23, 59, 59, 999);
+    const endDate = req.query.endDate ? new Date(req.query.endDate + 'T23:59:59+09:00') : new Date();
+    if (!req.query.endDate) endDate.setUTCHours(14, 59, 59, 999); // KST 23:59:59 = UTC 14:59:59
     const startDate = req.query.startDate
-      ? new Date(req.query.startDate + 'T00:00:00')
+      ? new Date(req.query.startDate + 'T00:00:00+09:00')
       : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
 
     const dateFilter = {

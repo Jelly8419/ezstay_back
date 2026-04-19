@@ -1,15 +1,5 @@
-const { DataTypes, Sequelize } = require('sequelize');
-
-const sequelize = new Sequelize(process.env.DB_NAME || 'ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 3306,
-  dialect: 'mysql',
-  timezone: '+09:00',
-  dialectOptions: {
-    timezone: '+09:00'
-  },
-  logging: false
-});
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('./db');
 
 /**
  * DepositAgreement 모델 - 보증금 보류 신청 및 합의 이력

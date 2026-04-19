@@ -1,15 +1,5 @@
-const { DataTypes, Sequelize } = require('sequelize');
-
-const sequelize = new Sequelize(process.env.DB_NAME || 'ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 3306,
-  dialect: 'mysql',
-  timezone: '+09:00',
-  dialectOptions: {
-    timezone: '+09:00'
-  },
-  logging: false
-});
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('./db');
 
 /**
  * RentalOrder 모델 - 렌탈 아이템 주문
@@ -209,8 +199,9 @@ RentalOrder.MODIFIABLE_DAYS_BEFORE = 5;
  */
 RentalOrder.calculateModifiableUntil = function(checkInDate) {
   const modifiableUntil = new Date(checkInDate);
-  modifiableUntil.setDate(modifiableUntil.getDate() - RentalOrder.MODIFIABLE_DAYS_BEFORE);
-  modifiableUntil.setHours(23, 59, 59, 999);
+  modifiableUntil.setUTCDate(modifiableUntil.getUTCDate() - RentalOrder.MODIFIABLE_DAYS_BEFORE);
+  // KST 23:59:59 = UTC 14:59:59
+  modifiableUntil.setUTCHours(14, 59, 59, 999);
   return modifiableUntil;
 };
 

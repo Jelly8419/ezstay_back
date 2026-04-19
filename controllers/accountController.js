@@ -2,6 +2,7 @@ const axios = require('axios');
 const { UserBankAccount, GuestRefundAccount } = require('../models');
 const { ErrorCodes, success, error, created, deleted } = require('../utils/responseHelper');
 const { BANK_NAME_TO_CODE: BANK_CODES } = require('../utils/bankCodes');
+const { toKSTString } = require('../utils/dateHelper');
 
 // 아임포트 액세스 토큰 캐시
 let accessTokenCache = {
@@ -158,11 +159,13 @@ const getUserAccount = async (req, res) => {
       return error(res, { code: 3005, message: '등록된 계좌가 없습니다.' }, 404);
     }
 
+    const accountData = account.toJSON();
     return success(res, {
       account: {
-        ...account.toJSON(),
+        ...accountData,
         // 계좌번호 마스킹 (보안)
-        accountNumber: account.accountNumber.replace(/(\d{4})\d{4,}(\d{4})/, '$1****$2')
+        accountNumber: account.accountNumber.replace(/(\d{4})\d{4,}(\d{4})/, '$1****$2'),
+        verifiedAt: toKSTString(accountData.verifiedAt)
       }
     });
 
@@ -323,11 +326,15 @@ const getRefundAccount = async (req, res) => {
       return success(res, { account: null }, '등록된 환급 계좌가 없습니다.');
     }
 
+    const refundAccountData = account.toJSON();
     return success(res, {
       account: {
-        ...account.toJSON(),
+        ...refundAccountData,
         // 계좌번호 마스킹 (보안)
-        accountNumber: account.accountNumber.replace(/(\d{3})\d+(\d{4})/, '$1****$2')
+        accountNumber: account.accountNumber.replace(/(\d{3})\d+(\d{4})/, '$1****$2'),
+        verifiedAt: toKSTString(refundAccountData.verifiedAt),
+        createdAt: toKSTString(refundAccountData.createdAt),
+        updatedAt: toKSTString(refundAccountData.updatedAt)
       }
     });
 

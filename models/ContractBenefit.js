@@ -1,30 +1,34 @@
 const { DataTypes } = require('sequelize');
 const { sequelize } = require('./db');
 
-const RoomPhoto = sequelize.define('RoomPhoto', {
+const ContractBenefit = sequelize.define('ContractBenefit', {
   id: {
     type: DataTypes.INTEGER,
     primaryKey: true,
     autoIncrement: true
   },
-  roomId: {
+  contractId: {
     type: DataTypes.INTEGER,
     allowNull: false
-    // references 옵션 제거 - models/index.js에서 belongsTo로 관계 설정
+    // references 금지 - models/index.js에서 관계 설정
   },
-  url: {
-    type: DataTypes.STRING(500),
+  benefitType: {
+    type: DataTypes.ENUM('HOST_FEE_WAIVER', 'GUEST_DISCOUNT'),
     allowNull: false
   },
-  order: {
+  discountAmount: {
     type: DataTypes.INTEGER,
     allowNull: false,
     defaultValue: 0
+  },
+  appliedAt: {
+    type: DataTypes.DATE,
+    allowNull: false
   }
 }, {
-  tableName: 'room_photos',
+  tableName: 'contract_benefits',
   timestamps: true,
   underscored: true
 });
 
-module.exports = { RoomPhoto };
+module.exports = ContractBenefit;

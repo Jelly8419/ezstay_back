@@ -1,12 +1,5 @@
 const { DataTypes } = require('sequelize');
-const { Sequelize } = require('sequelize');
-
-const sequelize = new Sequelize(process.env.DB_NAME || 'ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 3306,
-  dialect: 'mysql',
-  logging: false  // 쿼리 로그 비활성화
-});
+const { sequelize } = require('./db');
 
 const Room = sequelize.define('Room', {
   id: {
@@ -295,4 +288,4 @@ const Room = sequelize.define('Room', {
   ]
 });
 
-module.exports = { Room, sequelize };
+module.exports = { Room };

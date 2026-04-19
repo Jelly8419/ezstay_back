@@ -17,7 +17,8 @@ const templates = {
   // 4-1. 채팅 메시지 알림
   // =====================================================
   chat_message_host: {
-    tplCode: 'UF_8708',
+    tplCode: 'UH_0422',
+    targetRole: 'host',
     eventLabel: '채팅 확인 알림_호스트',
     varMap: { roomName: '방이름' },
     fallbackContent:
@@ -29,7 +30,8 @@ const templates = {
   },
 
   chat_message_guest: {
-    tplCode: 'UF_8887',
+    tplCode: 'UH_0410',
+    targetRole: 'guest',
     eventLabel: '채팅 확인 알림_게스트',
     varMap: { roomName: '방이름' },
     fallbackContent:
@@ -44,7 +46,8 @@ const templates = {
   // 4-2. 계약 승인
   // =====================================================
   contract_approved_guest: {
-    tplCode: 'UF_8886',
+    tplCode: 'UH_0411',
+    targetRole: 'guest',
     eventLabel: '계약 요청 승인_게스트',
     varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일' },
     fallbackContent:
@@ -60,7 +63,8 @@ const templates = {
 
   // 계약 승인 요청 → 호스트 (신규)
   contract_request_host: {
-    tplCode: 'UF_8883',
+    tplCode: 'UH_0431',
+    targetRole: 'host',
     eventLabel: '계약 승인 요청_호스트',
     varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일' },
     fallbackContent:
@@ -75,14 +79,15 @@ const templates = {
 
   // 계약 요청 거절 → 게스트
   contract_rejected_guest: {
-    tplCode: 'UF_9454',
+    tplCode: 'UH_0409',
+    targetRole: 'guest',
     eventLabel: '계약 요청 거절_게스트',
     varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일' },
     fallbackContent:
       `[계약 거절 안내]\n\n` +
       `방 이름: #{방이름}\n` +
       `계약 기간: #{입주일} ~ #{퇴실일}\n\n` +
-      `아쉽게도 회원님이 요청하신 계약을 호스트가 승인하지 않았어요. 다른 방을 찾아주세요.`,
+      `아쉽게도 회원님이 요청하신 계약을 임대인님이 승인하지 않았어요. 다른 방을 찾아주세요.`,
     buildFallbackSMS: (data) =>
       `[EZstay] ${data.roomName} 계약 요청이 거절되었습니다. 다른 방을 찾아주세요.`
   },
@@ -91,7 +96,8 @@ const templates = {
   // 4-3. 결제 완료
   // =====================================================
   payment_completed_guest: {
-    tplCode: 'UG_7670',
+    tplCode: 'UH_0404',
+    targetRole: 'guest',
     eventLabel: '게스트 계약 결제 완료_게스트',
     varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일', amount: '결제총액', optionItems: '옵션상품목록' },
     fallbackContent:
@@ -107,7 +113,8 @@ const templates = {
   },
 
   payment_completed_host: {
-    tplCode: 'UF_8372',
+    tplCode: 'UH_0426',
+    targetRole: 'host',
     eventLabel: '게스트 계약 결제 완료_호스트',
     varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일', amount: '계약금액' },
     fallbackContent:
@@ -123,7 +130,8 @@ const templates = {
 
   // 환급 계좌 미등록 게스트 안내
   bank_account_required: {
-    tplCode: 'UF_8730',
+    tplCode: 'UH_0414',
+    targetRole: 'guest',
     eventLabel: '게스트 계좌 등록 요청_게스트',
     varMap: {},
     fallbackContent:
@@ -136,14 +144,15 @@ const templates = {
 
   // 옵션 추가 결제
   option_payment_guest: {
-    tplCode: 'UF_8732',
+    tplCode: 'UH_0413',
+    targetRole: 'guest',
     eventLabel: '게스트 옵션 추가 결제_게스트',
-    varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일', optionItems: '상품명, 상품개수', amount: '추가결제금액' },
+    varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일', optionItems: '옵션상품목록', amount: '추가결제금액' },
     fallbackContent:
       `[옵션 추가 결제 안내]\n\n` +
       `방 이름: #{방이름}\n` +
       `입주 기간: #{입주일} ~ #{퇴실일}\n` +
-      `추가 옵션 상품: #{상품명, 상품개수}\n` +
+      `추가 옵션 상품: #{옵션상품목록}\n` +
       `금액: #{추가결제금액}원\n\n` +
       `추가 옵션 상품 결제가 완료되었습니다.`,
     buildFallbackSMS: (data) =>
@@ -154,7 +163,8 @@ const templates = {
   // 4-4. 입주 당일 안내
   // =====================================================
   checkin_today_guest: {
-    tplCode: 'UG_6968',
+    tplCode: 'UH_0405',
+    targetRole: 'guest',
     eventLabel: '입주 당일 안내_게스트',
     varMap: { roomName: '방이름', address: '상세주소' },
     fallbackContent:
@@ -168,7 +178,8 @@ const templates = {
   },
 
   checkin_today_host: {
-    tplCode: 'UF_8713',
+    tplCode: 'UH_0421',
+    targetRole: 'host',
     eventLabel: '입주 당일 안내_호스트',
     varMap: { roomName: '방이름', address: '상세주소' },
     fallbackContent:
@@ -187,7 +198,8 @@ const templates = {
 
   // 게스트 취소 → 게스트
   contract_canceled_guest_to_guest: {
-    tplCode: 'UF_8374',
+    tplCode: 'UH_0425',
+    targetRole: 'guest',
     eventLabel: '게스트 계약 취소 안내_게스트',
     varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일', penaltyAmount: '게스트부담금', refundAmount: '환불예정금액' },
     fallbackContent:
@@ -205,7 +217,8 @@ const templates = {
 
   // 게스트 취소 → 호스트
   contract_canceled_guest_to_host: {
-    tplCode: 'UF_8375',
+    tplCode: 'UH_0424',
+    targetRole: 'host',
     eventLabel: '게스트 계약 취소 안내_호스트',
     varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일', penaltyAmount: '위약금', settlementAmount: '정산예정금액' },
     fallbackContent:
@@ -222,7 +235,8 @@ const templates = {
 
   // 호스트 취소 → 게스트
   contract_canceled_host_to_guest: {
-    tplCode: 'UF_8716',
+    tplCode: 'UH_0420',
+    targetRole: 'guest',
     eventLabel: '호스트 계약 취소 안내_게스트',
     varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일', penaltyAmount: '위약금' },
     fallbackContent:
@@ -238,7 +252,8 @@ const templates = {
 
   // 호스트 취소 → 호스트
   contract_canceled_host_to_host: {
-    tplCode: 'UF_8718',
+    tplCode: 'UH_0419',
+    targetRole: 'host',
     eventLabel: '호스트 계약 취소 안내_호스트',
     varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일', penaltyAmount: '호스트부담금' },
     fallbackContent:
@@ -256,7 +271,8 @@ const templates = {
   // 4-6. 퇴실 전일 안내
   // =====================================================
   checkout_eve_guest: {
-    tplCode: 'UG_4150',
+    tplCode: 'UH_0408',
+    targetRole: 'guest',
     eventLabel: '퇴실 전일 안내_게스트',
     varMap: { checkOutTime: '퇴실시간' },
     fallbackContent:
@@ -276,7 +292,8 @@ const templates = {
   // 4-7. 퇴실 당일 알림
   // =====================================================
   checkout_today_guest: {
-    tplCode: 'UG_4151',
+    tplCode: 'UH_0407',
+    targetRole: 'guest',
     eventLabel: '게스트 퇴실 당일 안내_게스트',
     varMap: {},
     fallbackContent:
@@ -293,7 +310,8 @@ const templates = {
   // 4-8. 호스트 퇴실 확인 요청
   // =====================================================
   checkout_host_request: {
-    tplCode: 'UF_8726',
+    tplCode: 'UH_0418',
+    targetRole: 'host',
     eventLabel: '호스트 퇴실 확인 요청_호스트',
     varMap: { confirmDeadline: '퇴실확인마감시한' },
     fallbackContent:
@@ -309,7 +327,8 @@ const templates = {
   // 4-9. 보증금 보류 안내
   // =====================================================
   deposit_hold_host: {
-    tplCode: 'UF_8727',
+    tplCode: 'UH_0417',
+    targetRole: 'host',
     eventLabel: '보증금 보류 안내_호스트',
     varMap: { agreementDeadline: '합의마감기한' },
     fallbackContent:
@@ -322,7 +341,8 @@ const templates = {
   },
 
   deposit_hold_guest: {
-    tplCode: 'UF_8728',
+    tplCode: 'UH_0416',
+    targetRole: 'guest',
     eventLabel: '보증금 보류 안내_게스트',
     varMap: {},
     fallbackContent:
@@ -337,7 +357,8 @@ const templates = {
   // 4-10. 보증금 정산 합의 요청
   // =====================================================
   deposit_settlement_submitted: {
-    tplCode: 'UF_8729',
+    tplCode: 'UH_0415',
+    targetRole: 'guest',
     eventLabel: '보증금 정산 합의 요청_게스트',
     varMap: { deductAmount: '차감할금액', reason: '호스트사유' },
     fallbackContent:
@@ -355,7 +376,8 @@ const templates = {
   // 4-11. 보증금 정산 합의 동의 완료
   // =====================================================
   deposit_settlement_agreed: {
-    tplCode: 'UF_8368',
+    tplCode: 'UH_0429',
+    targetRole: 'both',
     eventLabel: '보증금 정산 합의 동의 완료_공통',
     varMap: { guestAmount: '게스트지급액', hostAmount: '호스트지급액' },
     fallbackContent:
@@ -372,7 +394,8 @@ const templates = {
   // 4-12. 보증금 정산 합의 기한 만료
   // =====================================================
   deposit_agreement_expired: {
-    tplCode: 'UF_8369',
+    tplCode: 'UH_0428',
+    targetRole: 'both',
     eventLabel: '보증금 정산 합의 기한 만료_공통',
     varMap: {},
     fallbackContent:
@@ -387,7 +410,8 @@ const templates = {
   // 4-13. 호스트 퇴실 확인 완료 및 보증금 반환
   // =====================================================
   deposit_returned_normal: {
-    tplCode: 'UF_8370',
+    tplCode: 'UH_0427',
+    targetRole: 'guest',
     eventLabel: '호스트 퇴실 확인 완료_게스트',
     varMap: {},
     fallbackContent:
@@ -401,10 +425,11 @@ const templates = {
   // 4-15. 퇴실 확인 기한 만료
   // =====================================================
   checkout_confirm_expired_guest: {
-    tplCode: 'UF_8370',
+    tplCode: 'UH_0427',
+    targetRole: 'guest',
     eventLabel: '퇴실 확인 기한 만료_게스트',
     varMap: {},
-    // 게스트에게는 4-13(UF_8370)과 동일한 메시지 사용
+    // 게스트에게는 4-13(UH_0427)과 동일한 메시지 사용
     fallbackContent:
       `[보증금 반환 안내]\n\n` +
       `호스트님이 퇴실 확인을 완료하여 보증금 반환이 진행됩니다. (영업일 기준 3일 이내 지급 예정)`,
@@ -413,7 +438,8 @@ const templates = {
   },
 
   checkout_confirm_expired_host: {
-    tplCode: 'UF_8376',
+    tplCode: 'UH_0423',
+    targetRole: 'host',
     eventLabel: '퇴실 확인 기한 만료_호스트',
     varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일' },
     fallbackContent:
@@ -429,7 +455,8 @@ const templates = {
   // 4-17. 게스트 퇴실 당일 침구류 반납 안내
   // =====================================================
   checkout_bedding_return_guest: {
-    tplCode: 'UG_6689',
+    tplCode: 'UH_0406',
+    targetRole: 'guest',
     eventLabel: '게스트 퇴실 당일 침구류 반납 안내_게스트',
     varMap: {},
     fallbackContent:
@@ -446,7 +473,8 @@ const templates = {
   // 신규. 옵션 상품 결제 취소
   // =====================================================
   option_payment_canceled_guest: {
-    tplCode: 'UG_7674',
+    tplCode: 'UH_0403',
+    targetRole: 'guest',
     eventLabel: '게스트 옵션 결제 취소_게스트',
     varMap: { roomName: '방이름', startDate: '입주일', endDate: '퇴실일', optionItems: '옵션상품목록', amount: '취소금액' },
     fallbackContent:

@@ -1,15 +1,15 @@
-const { Sequelize } = require('sequelize');
-const { User } = require('./User');
-const { LocalUser } = require('./LocalUser');
-const { SocialUser } = require('./SocialUser');
-const { EmailVerificationCode } = require('./EmailVerificationCode');
+const { sequelize } = require('./db');
+const UserModel = require('./User');
+const LocalUserModel = require('./LocalUser');
+const SocialUserModel = require('./SocialUser');
+const EmailVerificationCodeModel = require('./EmailVerificationCode');
 const AdminModel = require('./Admin');
 const AdminActionLogModel = require('./AdminActionLog');
 const { Room } = require('./Room');
 const { RoomPhoto } = require('./RoomPhoto');
 const { RoomAmenity } = require('./RoomAmenity');
 const { EzService } = require('./EzService');
-const { UserBankAccount } = require('./UserBankAccount');
+const UserBankAccountModel = require('./UserBankAccount');
 const RentalItem = require('./RentalItem');
 const Contract = require('./Contract');
 const ContractSequenceModel = require('./ContractSequence');
@@ -49,30 +49,16 @@ const ServiceTaskModel = require('./ServiceTask');
 const ServiceTaskLogModel = require('./ServiceTaskLog');
 const ContractCancelRequestModel = require('./ContractCancelRequest');
 const KmcVerificationModel = require('./KmcVerification');
+const RegionAlert = require('./RegionAlert');
+const HostBenefit = require('./HostBenefit');
+const ContractBenefit = require('./ContractBenefit');
 
-const sequelize = new Sequelize(process.env.DB_NAME || 'ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 3306,
-  dialect: 'mysql',
-  timezone: '+09:00', // 한국 시간대 (Asia/Seoul)
-  dialectOptions: {
-    // MariaDB 인증 플러그인 문제 해결
-    authPlugins: {
-      mysql_native_password: () => () => Buffer.alloc(0)
-    },
-    timezone: '+09:00' // MySQL 연결 시 타임존 설정
-  },
-  pool: {
-    max: 10,
-    min: 0,
-    acquire: 30000,
-    idle: 10000
-  },
-
-  // 환경별 로깅 설정
-  // false: 로그 끄기 | console.log: 모든 쿼리 | 커스텀 함수: 필터링
-  logging: false  // 강제로 모든 쿼리 로그 비활성화 (개발 중 필요시 true로 변경)
-});
+// 핵심 유저 모델 초기화
+const User = UserModel(sequelize);
+const LocalUser = LocalUserModel(sequelize);
+const SocialUser = SocialUserModel(sequelize);
+const EmailVerificationCode = EmailVerificationCodeModel(sequelize);
+const UserBankAccount = UserBankAccountModel(sequelize);
 
 // 세션 모델 초기화
 const UserSession = UserSessionModel(sequelize);
@@ -1074,6 +1060,54 @@ ServiceTaskLog.belongsTo(ServiceTask, {
   as: 'serviceTask'
 });
 
+// =====================================================
+// RegionAlert 관계 설정 (임차인 알림 신청)
+// =====================================================
+User.hasOne(RegionAlert, {
+  foreignKey: 'userId',
+  as: 'regionAlert',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+RegionAlert.belongsTo(User, {
+  foreignKey: 'userId',
+  as: 'user',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// =====================================================
+// HostBenefit 관계 설정 (호스트 혜택 선착순 100명)
+// =====================================================
+User.hasOne(HostBenefit, {
+  foreignKey: 'hostId',
+  as: 'hostBenefit',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+HostBenefit.belongsTo(User, {
+  foreignKey: 'hostId',
+  as: 'host',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// =====================================================
+// ContractBenefit 관계 설정 (계약별 혜택 이력)
+// =====================================================
+Contract.hasMany(ContractBenefit, {
+  foreignKey: 'contractId',
+  as: 'benefits',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+ContractBenefit.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -1128,5 +1162,8 @@ module.exports = {
   ServiceTask,
   ServiceTaskLog,
   ContractCancelRequest,
-  KmcVerification
+  KmcVerification,
+  RegionAlert,
+  HostBenefit,
+  ContractBenefit
 };

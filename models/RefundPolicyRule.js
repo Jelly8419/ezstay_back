@@ -1,11 +1,5 @@
-const { DataTypes, Sequelize } = require('sequelize');
-
-const sequelize = new Sequelize(process.env.DB_NAME || 'ezstay', process.env.DB_USER || 'root', process.env.DB_PASSWORD || '', {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 3306,
-  dialect: 'mysql',
-  logging: false
-});
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('./db');
 
 /**
  * RefundPolicyRule 모델 - 환불 정책 기간별 규칙

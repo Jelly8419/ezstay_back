@@ -1,4 +1,4 @@
-const { sequelize, Contract, Room, User, RoomPhoto, RoomAmenity, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, ContractCancelRequest, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement, AdminRefund, RentalOrderRefundRequest } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, RoomAmenity, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, ContractCancelRequest, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement, AdminRefund, RentalOrderRefundRequest, HostBenefit, RegionAlert, ContractBenefit } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const paytagClient = require('../utils/paytagClient');
@@ -304,10 +304,10 @@ const createContractRequest = async (req, res) => {
     // 예: 입주일 2/16 → 2/10 23:59:59까지 가능, 2/11 00:00:00부터 불가
     if (rentalItems && Array.isArray(rentalItems) && rentalItems.length > 0) {
       const now = new Date();
-      const checkIn = new Date(checkInDate + 'T00:00:00');
+      const checkIn = new Date(checkInDate + 'T00:00:00+09:00');
       const rentalDeadline = new Date(checkIn);
-      rentalDeadline.setDate(rentalDeadline.getDate() - 6);
-      rentalDeadline.setHours(23, 59, 59, 999);
+      rentalDeadline.setUTCDate(rentalDeadline.getUTCDate() - 6);
+      rentalDeadline.setUTCHours(14, 59, 59, 999); // KST 23:59:59 = UTC 14:59:59
 
       if (now > rentalDeadline) {
         await transaction.rollback();
@@ -391,6 +391,33 @@ const createContractRequest = async (req, res) => {
     // 호스트 플랫폼 수수료 (3.3%) - 정산 시 차감
     // 기준: 임대료 + 관리비 + 청소비(EZ서비스 미사용시) - 할인 (게스트와 동일 기준)
     serverCalculated.hostPlatformFee = Math.floor(feeBase * 0.033);
+
+    // ── 혜택 적용 ──────────────────────────────────────────
+    const benefitLogs = [];
+    const now = new Date();
+
+    // 호스트 혜택: HostBenefit 등록 + 첫 계약인 경우 1만원 할인
+    const hostBenefit = await HostBenefit.findOne({ where: { hostId: room.hostId } });
+    if (hostBenefit) {
+      const prevContractCount = await Contract.count({ where: { hostId: room.hostId } });
+      if (prevContractCount === 0) {
+        const discount = 10000;
+        serverCalculated.hostPlatformFee = Math.max(0, serverCalculated.hostPlatformFee - discount);
+        benefitLogs.push({ type: 'HOST_FEE_WAIVER', discountAmount: discount });
+      }
+    }
+
+    // 게스트 혜택: 알림톡 발송(notifiedAt) 후 1개월 이내
+    const guestAlert = await RegionAlert.findOne({ where: { userId: req.user.id } });
+    if (guestAlert && guestAlert.notifiedAt) {
+      const oneMonthMs = 30 * 24 * 60 * 60 * 1000;
+      if (now - new Date(guestAlert.notifiedAt) <= oneMonthMs) {
+        const discount = 10000;
+        serverCalculated.platformFee = Math.max(0, serverCalculated.platformFee - discount);
+        benefitLogs.push({ type: 'GUEST_DISCOUNT', discountAmount: discount });
+      }
+    }
+    // ───────────────────────────────────────────────────────
 
     // 실이용 금액 (할인 적용 + 수수료 포함)
     serverCalculated.totalUsageFee = afterDiscount + serverCalculated.platformFee;
@@ -501,6 +528,19 @@ const createContractRequest = async (req, res) => {
       },
       { transaction }
     );
+
+    // 11-0. 혜택 이력 저장
+    if (benefitLogs.length > 0) {
+      await ContractBenefit.bulkCreate(
+        benefitLogs.map(b => ({
+          contractId: contract.id,
+          benefitType: b.type,
+          discountAmount: b.discountAmount,
+          appliedAt: now
+        })),
+        { transaction }
+      );
+    }
 
     // 11. 렌탈 아이템 재고 점유 (결제 전 선점)
     // RENTAL → RentalItemReservation INSERT, SALE → totalStock 차감

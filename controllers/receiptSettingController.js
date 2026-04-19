@@ -1,6 +1,7 @@
 const { ReceiptSetting } = require('../models');
 const { ErrorCodes, success, updated, deleted, error } = require('../utils/responseHelper');
 const { checkBusinessStatus } = require('../utils/ntsClient');
+const { toKSTString } = require('../utils/dateHelper');
 
 /**
  * 영수증 설정 조회
@@ -105,6 +106,8 @@ const upsertReceiptSetting = async (req, res) => {
 
     const responseData = setting.toJSON();
     delete responseData.userId;
+    responseData.createdAt = toKSTString(responseData.createdAt);
+    responseData.updatedAt = toKSTString(responseData.updatedAt);
     if (businessWarning) responseData.warning = businessWarning;
 
     return updated(res, responseData, '영수증 정보가 저장되었습니다.');

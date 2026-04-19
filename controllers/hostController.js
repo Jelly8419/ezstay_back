@@ -1239,6 +1239,8 @@ const upsertReceipt = async (req, res) => {
     // 응답에서 userId 제외
     const responseData = setting.toJSON();
     delete responseData.userId;
+    responseData.createdAt = toKSTString(responseData.createdAt);
+    responseData.updatedAt = toKSTString(responseData.updatedAt);
 
     return updated(res, responseData, '영수증 정보가 저장되었습니다.');
   } catch (err) {
