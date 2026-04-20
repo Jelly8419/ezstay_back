@@ -10,6 +10,7 @@ const faqController = require('../controllers/faqController');
 const inquiryController = require('../controllers/inquiryController');
 const adminReceiptController = require('../controllers/adminReceiptController');
 const adminPayoutController = require('../controllers/adminPayoutController');
+const adminPromotionController = require('../controllers/adminPromotionController');
 const { authenticateAdmin, requireAdminRole } = require('../middleware/auth');
 const actionLogger = require('../middleware/actionLogger');
 const { adminAuthLimiter, adminApiLimiter } = require('../middleware/rateLimiter');
@@ -577,5 +578,23 @@ router.patch(
   requireAdminRole(['super_admin', 'admin']),
   adminController.updateServiceTaskStatus
 );
+
+/**
+ * 프로모션 이벤트 관리
+ */
+router.get('/promotions', adminPromotionController.listPromotions);
+router.get('/promotions/:id', adminPromotionController.getPromotionDetail);
+router.post(
+  '/promotions',
+  requireAdminRole(['super_admin', 'admin']),
+  adminPromotionController.createPromotion
+);
+router.patch(
+  '/promotions/:id',
+  requireAdminRole(['super_admin', 'admin']),
+  adminPromotionController.updatePromotion
+);
+router.get('/promotions/:id/participants', adminPromotionController.listParticipants);
+router.get('/promotions/:id/benefits', adminPromotionController.listBenefits);
 
 module.exports = router;

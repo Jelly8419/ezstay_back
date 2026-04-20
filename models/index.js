@@ -49,9 +49,9 @@ const ServiceTaskModel = require('./ServiceTask');
 const ServiceTaskLogModel = require('./ServiceTaskLog');
 const ContractCancelRequestModel = require('./ContractCancelRequest');
 const KmcVerificationModel = require('./KmcVerification');
-const RegionAlert = require('./RegionAlert');
-const HostBenefit = require('./HostBenefit');
 const ContractBenefit = require('./ContractBenefit');
+const PromotionEvent = require('./PromotionEvent');
+const PromotionParticipant = require('./PromotionParticipant');
 
 // 핵심 유저 모델 초기화
 const User = UserModel(sequelize);
@@ -1061,33 +1061,43 @@ ServiceTaskLog.belongsTo(ServiceTask, {
 });
 
 // =====================================================
-// RegionAlert 관계 설정 (임차인 알림 신청)
+// PromotionEvent / PromotionParticipant 관계 설정
 // =====================================================
-User.hasOne(RegionAlert, {
-  foreignKey: 'userId',
-  as: 'regionAlert',
+PromotionEvent.hasMany(PromotionParticipant, {
+  foreignKey: 'promotionEventId',
+  as: 'participants',
   onDelete: 'NO ACTION',
   onUpdate: 'CASCADE'
 });
-RegionAlert.belongsTo(User, {
+PromotionParticipant.belongsTo(PromotionEvent, {
+  foreignKey: 'promotionEventId',
+  as: 'event',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+User.hasMany(PromotionParticipant, {
+  foreignKey: 'userId',
+  as: 'promotionParticipations',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+PromotionParticipant.belongsTo(User, {
   foreignKey: 'userId',
   as: 'user',
   onDelete: 'NO ACTION',
   onUpdate: 'CASCADE'
 });
 
-// =====================================================
-// HostBenefit 관계 설정 (호스트 혜택 선착순 100명)
-// =====================================================
-User.hasOne(HostBenefit, {
-  foreignKey: 'hostId',
-  as: 'hostBenefit',
+Contract.hasOne(PromotionParticipant, {
+  foreignKey: 'consumedContractId',
+  as: 'consumedBy',
   onDelete: 'NO ACTION',
   onUpdate: 'CASCADE'
 });
-HostBenefit.belongsTo(User, {
-  foreignKey: 'hostId',
-  as: 'host',
+PromotionParticipant.belongsTo(Contract, {
+  foreignKey: 'consumedContractId',
+  as: 'consumedContract',
   onDelete: 'NO ACTION',
   onUpdate: 'CASCADE'
 });
@@ -1104,6 +1114,19 @@ Contract.hasMany(ContractBenefit, {
 ContractBenefit.belongsTo(Contract, {
   foreignKey: 'contractId',
   as: 'contract',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+PromotionEvent.hasMany(ContractBenefit, {
+  foreignKey: 'promotionEventId',
+  as: 'benefits',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+ContractBenefit.belongsTo(PromotionEvent, {
+  foreignKey: 'promotionEventId',
+  as: 'event',
   onDelete: 'NO ACTION',
   onUpdate: 'CASCADE'
 });
@@ -1163,7 +1186,7 @@ module.exports = {
   ServiceTaskLog,
   ContractCancelRequest,
   KmcVerification,
-  RegionAlert,
-  HostBenefit,
-  ContractBenefit
+  ContractBenefit,
+  PromotionEvent,
+  PromotionParticipant
 };

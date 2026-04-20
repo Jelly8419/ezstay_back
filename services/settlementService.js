@@ -177,6 +177,51 @@ const SETTLEMENT_STATUS_LABELS = {
   completed: '정산 완료'
 };
 
+/**
+ * 호스트 프로모션 혜택 적용 (Settlement 생성 시점)
+ * - promotionService.consumeBenefits 로 슬롯 원자적 점유
+ * - 적용된 할인 금액만큼 platformFee / grossSettlement / finalAmount 재계산
+ *
+ * @param {Object} params
+ * @param {number} params.hostId
+ * @param {number} params.contractId
+ * @param {Object} params.settlementAmounts - calculateSettlementAmount() 결과
+ * @param {Object} [params.transaction]
+ * @returns {Promise<{applied: boolean, discountAmount: number, adjustedAmounts: Object}>}
+ */
+const applyHostBenefit = async ({ hostId, contractId, settlementAmounts, transaction }) => {
+  const promotionService = require('./promotionService');
+
+  const consumed = await promotionService.consumeBenefits({
+    userId: hostId,
+    targetRole: 'HOST',
+    applyTrigger: 'SETTLEMENT',
+    contractId,
+    transaction
+  });
+
+  const totalDiscount = consumed.reduce((sum, c) => sum + c.discountAmount, 0);
+  if (totalDiscount === 0) {
+    return { applied: false, discountAmount: 0, adjustedAmounts: settlementAmounts };
+  }
+
+  const newPlatformFee = Math.max(0, settlementAmounts.platformFee - totalDiscount);
+  const actualDiscount = settlementAmounts.platformFee - newPlatformFee;
+  const newGrossSettlement = settlementAmounts.subtotal - newPlatformFee;
+  const newFinalAmount = newGrossSettlement - settlementAmounts.refund.totalRefundAmount;
+
+  return {
+    applied: true,
+    discountAmount: actualDiscount,
+    adjustedAmounts: {
+      ...settlementAmounts,
+      platformFee: newPlatformFee,
+      grossSettlement: newGrossSettlement,
+      finalAmount: newFinalAmount
+    }
+  };
+};
+
 module.exports = {
   addBusinessDays,
   calculateSettlementDate,
@@ -187,5 +232,6 @@ module.exports = {
   calculateRentalDays,
   maskPhoneNumber,
   maskAccountNumber,
+  applyHostBenefit,
   SETTLEMENT_STATUS_LABELS
 };
