@@ -1,4 +1,4 @@
-const { sequelize, Contract, Room, User, RoomPhoto, RoomAmenity, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, ContractCancelRequest, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement, AdminRefund, RentalOrderRefundRequest, HostBenefit, RegionAlert, ContractBenefit } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, RoomAmenity, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, ContractCancelRequest, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement, AdminRefund, RentalOrderRefundRequest, ContractBenefit, PromotionEvent, PromotionParticipant } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const paytagClient = require('../utils/paytagClient');
@@ -26,7 +26,8 @@ const {
 } = require('../utils/rentalOrderHelper');
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES, NotificationMessages } = require('../utils/notificationMessages');
-const { calculateSettlementDate, calculatePayoutAvailableDate, calculateSettlementAmount } = require('../services/settlementService');
+const { calculateSettlementDate, calculatePayoutAvailableDate, calculateSettlementAmount, applyHostBenefit } = require('../services/settlementService');
+const promotionService = require('../services/promotionService');
 const { toKSTString, nowKSTString } = require('../utils/dateHelper');
 
 /**
@@ -392,30 +393,18 @@ const createContractRequest = async (req, res) => {
     // 기준: 임대료 + 관리비 + 청소비(EZ서비스 미사용시) - 할인 (게스트와 동일 기준)
     serverCalculated.hostPlatformFee = Math.floor(feeBase * 0.033);
 
-    // ── 혜택 적용 ──────────────────────────────────────────
-    const benefitLogs = [];
+    // ── 게스트 혜택 프리뷰 (적용 가능 금액 산정) ───────────
+    // 호스트 혜택(HOST_FEE_WAIVER)은 정산 시점에 적용됨 (settlement 생성 시)
+    // 실제 슬롯 소진은 Contract 생성 후 promotionService.consumeBenefits 로 처리
     const now = new Date();
-
-    // 호스트 혜택: HostBenefit 등록 + 첫 계약인 경우 1만원 할인
-    const hostBenefit = await HostBenefit.findOne({ where: { hostId: room.hostId } });
-    if (hostBenefit) {
-      const prevContractCount = await Contract.count({ where: { hostId: room.hostId } });
-      if (prevContractCount === 0) {
-        const discount = 10000;
-        serverCalculated.hostPlatformFee = Math.max(0, serverCalculated.hostPlatformFee - discount);
-        benefitLogs.push({ type: 'HOST_FEE_WAIVER', discountAmount: discount });
-      }
-    }
-
-    // 게스트 혜택: 알림톡 발송(notifiedAt) 후 1개월 이내
-    const guestAlert = await RegionAlert.findOne({ where: { userId: req.user.id } });
-    if (guestAlert && guestAlert.notifiedAt) {
-      const oneMonthMs = 30 * 24 * 60 * 60 * 1000;
-      if (now - new Date(guestAlert.notifiedAt) <= oneMonthMs) {
-        const discount = 10000;
-        serverCalculated.platformFee = Math.max(0, serverCalculated.platformFee - discount);
-        benefitLogs.push({ type: 'GUEST_DISCOUNT', discountAmount: discount });
-      }
+    const eligibleGuestBenefits = await promotionService.getUserEligibility({
+      userId: req.user.id,
+      targetRole: 'GUEST',
+      applyTrigger: 'CONTRACT'
+    });
+    const previewGuestDiscount = eligibleGuestBenefits.reduce((sum, b) => sum + b.discountAmount, 0);
+    if (previewGuestDiscount > 0) {
+      serverCalculated.platformFee = Math.max(0, serverCalculated.platformFee - previewGuestDiscount);
     }
     // ───────────────────────────────────────────────────────
 
@@ -529,16 +518,22 @@ const createContractRequest = async (req, res) => {
       { transaction }
     );
 
-    // 11-0. 혜택 이력 저장
-    if (benefitLogs.length > 0) {
-      await ContractBenefit.bulkCreate(
-        benefitLogs.map(b => ({
-          contractId: contract.id,
-          benefitType: b.type,
-          discountAmount: b.discountAmount,
-          appliedAt: now
-        })),
-        { transaction }
+    // 11-0. 혜택 슬롯 소진 (race-free 조건부 UPDATE) + ContractBenefit INSERT
+    const consumedBenefits = await promotionService.consumeBenefits({
+      userId: req.user.id,
+      targetRole: 'GUEST',
+      applyTrigger: 'CONTRACT',
+      contractId: contract.id,
+      transaction
+    });
+    const actualGuestDiscount = consumedBenefits.reduce((sum, c) => sum + c.discountAmount, 0);
+    if (actualGuestDiscount !== previewGuestDiscount) {
+      await transaction.rollback();
+      return error(
+        res,
+        { code: 4308, message: '혜택 적용 상태가 변경되었습니다. 다시 시도해주세요' },
+        409,
+        { preview: previewGuestDiscount, actual: actualGuestDiscount }
       );
     }
 
@@ -1635,6 +1630,13 @@ const rejectContract = async (req, res) => {
       { transaction }
     );
 
+    // 혜택 무효화 + 슬롯 복구
+    await promotionService.voidContractBenefits({
+      contractId: contract.id,
+      reason: 'REJECTED',
+      transaction
+    });
+
     // 상태 변경 로그 기록
     await ContractStatusLog.createLog({
       contractId: contract.id,
@@ -1755,6 +1757,13 @@ const cancelContractByGuest = async (req, res) => {
       },
       { transaction }
     );
+
+    // 혜택 무효화 + 슬롯 복구
+    await promotionService.voidContractBenefits({
+      contractId: contract.id,
+      reason: 'CANCELLED_BY_GUEST',
+      transaction
+    });
 
     // 상태 변경 로그 기록
     await ContractStatusLog.createLog({
@@ -2227,6 +2236,14 @@ const requestRefund = async (req, res) => {
             { where: { contractId: contract.id, status: 'PENDING' }, transaction }
           );
 
+          // 호스트 혜택 무효화 + 슬롯 복구 (게스트 혜택은 환불 완료된 상태이므로 유지)
+          await promotionService.voidContractBenefits({
+            contractId: contract.id,
+            reason: 'SETTLEMENT_ON_HOLD',
+            benefitTypes: ['HOST_FEE_WAIVER'],
+            transaction
+          });
+
           // 위약금이 있으면 호스트에게 GUEST_PENALTY Payout 생성
           if (refundData.penaltyAmount > 0) {
             const penaltyPayoutAvailableDate = calculatePayoutAvailableDate(payment.approvedAt);
@@ -2669,7 +2686,14 @@ const confirmPayment = async (req, res) => {
     const payoutAvailableDate = pgAvailableDate > checkInNextDay ? pgAvailableDate : checkInNextDay;
     const settlementExpectedDate = calculateSettlementDate(contract.checkInDate);
     const hasEzCleaningService = contract.snapshot?.ezService?.cleaningService || false;
-    const settlementAmounts = calculateSettlementAmount(contract, [], { hasEzCleaningService });
+    const rawAmounts = calculateSettlementAmount(contract, [], { hasEzCleaningService });
+
+    const { adjustedAmounts: settlementAmounts } = await applyHostBenefit({
+      hostId: contract.hostId,
+      contractId: contract.id,
+      settlementAmounts: rawAmounts,
+      transaction
+    });
 
     const settlement = await Settlement.create({
       contractId: contract.id,
@@ -3596,6 +3620,13 @@ const cancelContractByHost = async (req, res) => {
       cancellationReason,
       cancelledAt: cancellationDate
     }, { transaction });
+
+    // [5.5] 혜택 무효화 + 슬롯 복구
+    await promotionService.voidContractBenefits({
+      contractId: contract.id,
+      reason: 'CANCELLED_BY_HOST',
+      transaction
+    });
 
     // [6] 계약 상태 변경 로그
     await ContractStatusLog.create({

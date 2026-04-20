@@ -1,6 +1,6 @@
 const { success, error, updated, ErrorCodes } = require('../utils/responseHelper');
 const { toDateStrKST, toKSTString } = require('../utils/dateHelper');
-const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ContractCancelRequest, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, ServiceTask, ServiceTaskLog, HostBenefit, sequelize } = require('../models');
+const { User, Room, Contract, RoomPhoto, RoomAmenity, EzService, UserBankAccount, Inquiry, RoomMemo, Admin, RoomPasswordHistory, RoomStatusHistory, Payment, Refund, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItem, RentalPayment, RentalPaymentFailureLog, ContractStatusLog, ContractCancelRequest, ChatRoom, DepositAgreement, PaymentFailureLog, Settlement, Payout, ServiceTask, ServiceTaskLog, sequelize } = require('../models');
 const NotificationService = require('../services/notificationService');
 const { Op } = require('sequelize');
 const { invalidateRoomCache } = require('../utils/cacheInvalidation');
@@ -607,20 +607,13 @@ const approveProperty = async (req, res) => {
         changedAt: new Date()
       }, { transaction });
 
-      // 선착순 100명 혜택 자동 등록 (승인 확정 시점)
-      const benefitCount = await HostBenefit.count({ transaction });
-      if (benefitCount < 100) {
-        const alreadyRegistered = await HostBenefit.findOne({
-          where: { hostId: room.hostId },
-          transaction
-        });
-        if (!alreadyRegistered) {
-          await HostBenefit.create(
-            { hostId: room.hostId, registeredAt: new Date() },
-            { transaction }
-          );
-        }
-      }
+      // 프로모션 자격 자동 등록 (승인 확정 시점) — 선착순은 이벤트 정의에 따름
+      const promotionService = require('../services/promotionService');
+      await promotionService.registerParticipant({
+        eventCode: 'LAUNCH_HOST_2026',
+        userId: room.hostId,
+        transaction
+      });
 
       await transaction.commit();
     } catch (txErr) {
@@ -3148,6 +3141,14 @@ const adminForceCancel = async (req, res) => {
       cancellationType,
       cancelledByAdminId: adminId
     }, { transaction });
+
+    // 혜택 무효화 + 슬롯 복구
+    const promotionService = require('../services/promotionService');
+    await promotionService.voidContractBenefits({
+      contractId: contract.id,
+      reason: newStatus,
+      transaction
+    });
 
     // 상태 변경 로그
     await ContractStatusLog.createLog({

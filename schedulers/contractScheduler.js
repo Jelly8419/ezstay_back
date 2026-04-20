@@ -6,7 +6,8 @@ const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/syste
 const { toDateStrKST, nowKSTString } = require('../utils/dateHelper');
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES } = require('../utils/notificationMessages');
-const { calculateSettlementDate, calculateSettlementAmount, calculatePayoutAvailableDate } = require('../services/settlementService');
+const { calculateSettlementDate, calculateSettlementAmount, calculatePayoutAvailableDate, applyHostBenefit } = require('../services/settlementService');
+const promotionService = require('../services/promotionService');
 const { cancelRentalItemReservations } = require('../utils/contractHelper');
 const paytagClient = require('../utils/paytagClient');
 
@@ -74,6 +75,13 @@ async function updateApprovalExpired() {
           transaction
         }
       );
+
+      // 혜택 무효화 + 슬롯 복구
+      await promotionService.voidContractBenefits({
+        contractId: contract.id,
+        reason: 'APPROVAL_EXPIRED',
+        transaction
+      });
 
       // 렌탈 아이템 재고 점유 해제 (RENTAL: Reservation CANCELLED, SALE: totalStock 복구)
       await cancelRentalItemReservations(contract.id, transaction);
@@ -188,6 +196,15 @@ async function updatePaymentExpired() {
           transaction
         }
       );
+
+      // 혜택 무효화 + 슬롯 복구
+      for (const id of expiredIds) {
+        await promotionService.voidContractBenefits({
+          contractId: id,
+          reason: 'PAYMENT_EXPIRED',
+          transaction
+        });
+      }
     }
 
     // 각 계약별 로그 기록 및 렌탈 재고 점유 해제
@@ -342,7 +359,14 @@ async function updateInProgress() {
 
           const expectedDate = calculateSettlementDate(fullContract.checkInDate);
           const hasEzCleaningService = fullContract.snapshot?.ezService?.cleaningService || false;
-          const settlementCalc = calculateSettlementAmount(fullContract, [], { hasEzCleaningService });
+          const rawSettlementCalc = calculateSettlementAmount(fullContract, [], { hasEzCleaningService });
+
+          const { adjustedAmounts: settlementCalc } = await applyHostBenefit({
+            hostId: fullContract.hostId,
+            contractId: fullContract.id,
+            settlementAmounts: rawSettlementCalc,
+            transaction
+          });
 
           const paymentApprovedAt = fullContract.payment?.approvedAt;
           const payoutAvailableDate = paymentApprovedAt
