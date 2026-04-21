@@ -67,11 +67,17 @@ function getBaseParams() {
  * 프론트 SDK에서 받은 recv_payparam을 전달하여 최종 승인
  *
  * @param {Object} params
- * @param {string} params.recvPayparam - SDK 콜백에서 받은 암호화 데이터
+ * @param {string} params.recvPayparam - SDK 콜백에서 받은 암호화 데이터 (URL-encoded form data)
  * @param {string} params.payType - 결제 수단 (CARD, KAKAO, NAVER 등)
+ * @param {string} [params.expectedOrderId] - 서버가 발급한 orderId (검증용)
+ * @param {number} [params.expectedAmount] - 서버가 계산한 결제 금액 (검증용)
  * @returns {Object} PayTag 결제 응답
  */
-async function confirmPayment({ recvPayparam, payType }) {
+async function confirmPayment({ recvPayparam, payType, expectedOrderId, expectedAmount }) {
+  // [보안] recv_payparam 내 shopcode/orderid/금액 변조 검증
+  // 프론트가 SDK 호출 시 shopcode나 금액을 변조할 수 있으므로 PG 전송 전 서버가 재검증
+  assertRecvPayparamIntegrity(recvPayparam, { payType, expectedOrderId, expectedAmount });
+
   // payType에 따라 엔드포인트 분기
   const isVbankOrLink = ['VBANK', 'TAGLINK'].includes(payType);
   const endpoint = isVbankOrLink ? '/order/reqorder' : '/pay/cardkeyin';
@@ -95,6 +101,59 @@ async function confirmPayment({ recvPayparam, payType }) {
   }
 
   return data;
+}
+
+/**
+ * recv_payparam 무결성 검증
+ * 프론트 SDK에서 shopcode / orderid / 금액을 변조하여 다른 가맹점으로 결제되는 것 방지
+ *
+ * @throws {Error} 검증 실패 시 paytagErrorCode='TAMPERED' 에러 발생
+ */
+function assertRecvPayparamIntegrity(recvPayparam, { payType, expectedOrderId, expectedAmount }) {
+  if (typeof recvPayparam !== 'string' || recvPayparam.length === 0) {
+    const err = new Error('recvPayparam이 유효하지 않습니다.');
+    err.paytagErrorCode = 'INVALID_PAYPARAM';
+    err.paytagErrorMessage = 'recvPayparam이 비어있거나 형식이 올바르지 않습니다.';
+    throw err;
+  }
+
+  const parsed = new URLSearchParams(recvPayparam);
+
+  // shopcode 검증 (필수) — 우리 가맹점 코드와 일치해야 함
+  const paramShopcode = parsed.get('shopcode');
+  if (!paramShopcode || paramShopcode !== PAYTAG_SHOPCODE) {
+    const err = new Error('shopcode가 일치하지 않습니다.');
+    err.paytagErrorCode = 'SHOPCODE_MISMATCH';
+    err.paytagErrorMessage = `shopcode 불일치 (expected=${PAYTAG_SHOPCODE}, received=${paramShopcode || 'null'})`;
+    throw err;
+  }
+
+  // orderid 검증 (서버 발급 값과 일치해야 함)
+  if (expectedOrderId) {
+    const paramOrderId = parsed.get('orderid') || parsed.get('orderId');
+    if (paramOrderId && paramOrderId !== expectedOrderId) {
+      const err = new Error('orderId가 일치하지 않습니다.');
+      err.paytagErrorCode = 'ORDERID_MISMATCH';
+      err.paytagErrorMessage = `orderId 불일치 (expected=${expectedOrderId}, received=${paramOrderId})`;
+      throw err;
+    }
+  }
+
+  // 금액 검증 (tranamt가 서버 기대 금액과 일치해야 함)
+  // 테스트 금액 모드(PAYMENT_TEST_AMOUNT)인 경우, PG 요청값은 테스트 금액이어야 함
+  if (expectedAmount != null) {
+    const testAmount = getTestAmount(payType);
+    const expectedPgAmount = testAmount != null ? testAmount : parseInt(expectedAmount, 10);
+    const paramAmountRaw = parsed.get('tranamt') || parsed.get('amount');
+    const paramAmount = paramAmountRaw != null ? parseInt(paramAmountRaw, 10) : null;
+
+    if (paramAmount == null || Number.isNaN(paramAmount) || paramAmount !== expectedPgAmount) {
+      const err = new Error('결제 금액이 일치하지 않습니다.');
+      err.paytagErrorCode = 'AMOUNT_MISMATCH';
+      err.paytagErrorMessage = `금액 불일치 (expected=${expectedPgAmount}, received=${paramAmountRaw || 'null'})`;
+      throw err;
+    }
+  }
 }
 
 /**

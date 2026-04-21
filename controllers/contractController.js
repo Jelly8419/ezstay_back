@@ -2583,7 +2583,9 @@ const confirmPayment = async (req, res) => {
   try {
     paytagResponse = await paytagClient.confirmPayment({
       recvPayparam,
-      payType: payType || 'CARD'
+      payType: payType || 'CARD',
+      expectedOrderId: orderId,
+      expectedAmount: realAmount
     });
   } catch (paytagError) {
     await PaymentFailureLog.create({
@@ -3480,7 +3482,9 @@ const cancelContractByHost = async (req, res) => {
       try {
         paytagResponse = await paytagClient.confirmPayment({
           recvPayparam,
-          payType: payType || 'CARD'
+          payType: payType || 'CARD',
+          expectedOrderId: orderId,
+          expectedAmount: hostBurdenAmount
         });
       } catch (paytagErr) {
         await transaction.rollback();
@@ -4735,7 +4739,9 @@ const confirmHostBurdenPayment = async (req, res) => {
     try {
       paytagResponse = await paytagClient.confirmPayment({
         recvPayparam,
-        payType: payType || 'CARD'
+        payType: payType || 'CARD',
+        expectedOrderId: orderId,
+        expectedAmount: refund.hostBurdenAmount
       });
     } catch (paytagError) {
       await transaction.rollback();
