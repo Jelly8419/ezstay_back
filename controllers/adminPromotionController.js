@@ -50,6 +50,7 @@ const listPromotions = async (req, res) => {
       description: e.description,
       targetRole: e.targetRole,
       benefitType: e.benefitType,
+      benefitMode: e.benefitMode,
       discountAmount: e.discountAmount,
       participantLimit: e.participantLimit,
       applyTrigger: e.applyTrigger,
@@ -88,6 +89,7 @@ const getPromotionDetail = async (req, res) => {
       description: event.description,
       targetRole: event.targetRole,
       benefitType: event.benefitType,
+      benefitMode: event.benefitMode,
       discountAmount: event.discountAmount,
       participantLimit: event.participantLimit,
       applyTrigger: event.applyTrigger,
@@ -110,12 +112,20 @@ const getPromotionDetail = async (req, res) => {
 const createPromotion = async (req, res) => {
   try {
     const {
-      code, name, description, targetRole, benefitType, discountAmount,
+      code, name, description, targetRole, benefitType, benefitMode, discountAmount,
       participantLimit, applyTrigger, applyOnce, startAt, endAt, isActive
     } = req.body;
 
     if (!code || !name || !targetRole || !benefitType || discountAmount == null || !applyTrigger) {
       return error(res, { code: 4400, message: '필수 파라미터 누락' }, 400);
+    }
+
+    // targetRole × benefitType 조합 검증
+    if (
+      (targetRole === 'HOST' && benefitType !== 'HOST_FEE_WAIVER') ||
+      (targetRole === 'GUEST' && benefitType !== 'GUEST_DISCOUNT')
+    ) {
+      return error(res, { code: 4400, message: 'targetRole 과 benefitType 조합이 올바르지 않습니다' }, 400);
     }
 
     const exists = await PromotionEvent.findOne({ where: { code } });
@@ -127,6 +137,7 @@ const createPromotion = async (req, res) => {
       description: description || null,
       targetRole,
       benefitType,
+      benefitMode: benefitMode || 'FIXED_AMOUNT',
       discountAmount,
       participantLimit: participantLimit != null ? participantLimit : null,
       applyTrigger,
@@ -151,8 +162,9 @@ const updatePromotion = async (req, res) => {
     const event = await PromotionEvent.findByPk(req.params.id);
     if (!event) return error(res, { code: 4404, message: '이벤트를 찾을 수 없습니다' }, 404);
 
+    // 관리자 "오픈 버튼" = startAt 을 현재 시각으로 PATCH
     const allowed = [
-      'name', 'description', 'discountAmount', 'participantLimit',
+      'name', 'description', 'benefitMode', 'discountAmount', 'participantLimit',
       'applyOnce', 'startAt', 'endAt', 'isActive'
     ];
     const patch = {};

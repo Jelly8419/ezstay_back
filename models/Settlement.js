@@ -70,7 +70,21 @@ const Settlement = sequelize.define('Settlement', {
     allowNull: false,
     defaultValue: 0,
     field: 'host_platform_fee',
-    comment: '호스트 플랫폼 수수료 (3.3%)'
+    comment: '호스트 플랫폼 수수료 (3.3% VAT 포함 총액)'
+  },
+  hostPlatformFeeSupply: {
+    type: DataTypes.BIGINT,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'host_platform_fee_supply',
+    comment: '호스트 수수료 공급가액 (round(hostPlatformFee × 10/11))'
+  },
+  hostPlatformFeeVat: {
+    type: DataTypes.BIGINT,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'host_platform_fee_vat',
+    comment: '호스트 수수료 부가세 (hostPlatformFee - hostPlatformFeeSupply)'
   },
   refundDeduction: {
     type: DataTypes.INTEGER,

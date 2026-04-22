@@ -17,6 +17,12 @@ const { SystemMessageTypes, getSystemMessageTemplate } = require('../utils/syste
 const appConfig = require('../config/app.config');
 const { toAbsoluteUrl } = require('../utils/urlHelper');
 const { calculateRefund } = require('../utils/refundCalculator');
+const {
+  calculateFeeBase,
+  calculateGuestFee,
+  calculateHostFee,
+  splitVatFromTotal,
+} = require('../utils/feeCalculator');
 const { generateOrderId } = require('../utils/orderIdGenerator');
 const { sendContractConfirmedMessages } = require('../schedulers/autoMessageScheduler');
 const {
@@ -375,23 +381,29 @@ const createContractRequest = async (req, res) => {
     // 할인 적용 후 금액 (0 이하 방어)
     const afterDiscount = Math.max(0, subtotalServer - discountAmountServer);
 
-    // 플랫폼 수수료 계산
+    // 플랫폼 수수료 계산 (단일 유틸 feeCalculator 사용, VAT 분리 저장)
     // - 기준: 임대료 + 관리비 + 청소비(EZ서비스 사용시 제외) - 총할인
-    // - EZ청소서비스 사용 시 청소비는 수수료 계산에서 제외
+    // - 게스트 9.9% / 호스트 3.3% 모두 VAT 포함 총액
+    // - supply(공급가액) : vat(부가세) = 10 : 1 로 분리하여 스냅샷 저장
     const hasFreeCleaningService = room.ezService?.cleaningService || false;
-    const feeBase = Math.max(0,
-      serverCalculated.rentalFee +
-      serverCalculated.maintenanceFee +
-      (hasFreeCleaningService ? 0 : serverCalculated.cleaningFee) -
-      discountAmountServer
-    );
+    const feeBase = calculateFeeBase({
+      rentalFee: serverCalculated.rentalFee,
+      maintenanceFee: serverCalculated.maintenanceFee,
+      cleaningFee: serverCalculated.cleaningFee,
+      discountAmount: discountAmountServer,
+      hasEzCleaningService: hasFreeCleaningService,
+    });
 
-    // 게스트 플랫폼 수수료 (9.9%) - 게스트가 추가 결제
-    serverCalculated.platformFee = Math.floor(feeBase * 0.099);
+    const guestFee = calculateGuestFee(feeBase);   // { total, supply, vat }
+    const hostFee = calculateHostFee(feeBase);
 
-    // 호스트 플랫폼 수수료 (3.3%) - 정산 시 차감
-    // 기준: 임대료 + 관리비 + 청소비(EZ서비스 미사용시) - 할인 (게스트와 동일 기준)
-    serverCalculated.hostPlatformFee = Math.floor(feeBase * 0.033);
+    serverCalculated.platformFee = guestFee.total;
+    serverCalculated.platformFeeSupply = guestFee.supply;
+    serverCalculated.platformFeeVat = guestFee.vat;
+
+    serverCalculated.hostPlatformFee = hostFee.total;
+    serverCalculated.hostPlatformFeeSupply = hostFee.supply;
+    serverCalculated.hostPlatformFeeVat = hostFee.vat;
 
     // ── 게스트 혜택 프리뷰 (적용 가능 금액 산정) ───────────
     // 호스트 혜택(HOST_FEE_WAIVER)은 정산 시점에 적용됨 (settlement 생성 시)
@@ -405,6 +417,10 @@ const createContractRequest = async (req, res) => {
     const previewGuestDiscount = eligibleGuestBenefits.reduce((sum, b) => sum + b.discountAmount, 0);
     if (previewGuestDiscount > 0) {
       serverCalculated.platformFee = Math.max(0, serverCalculated.platformFee - previewGuestDiscount);
+      // VAT 분리 재계산 (할인 적용된 platformFee 기준)
+      const split = splitVatFromTotal(serverCalculated.platformFee);
+      serverCalculated.platformFeeSupply = split.supply;
+      serverCalculated.platformFeeVat = split.vat;
     }
     // ───────────────────────────────────────────────────────
 
@@ -483,8 +499,12 @@ const createContractRequest = async (req, res) => {
         maintenanceFee: serverCalculated.maintenanceFee,
         cleaningFee: serverCalculated.cleaningFee,
         rentalItemsFee: serverCalculated.rentalItemsFee,
-        platformFee: serverCalculated.platformFee,  // 게스트 수수료 (9.9%)
-        hostPlatformFee: serverCalculated.hostPlatformFee,  // 호스트 수수료 (3.3%)
+        platformFee: serverCalculated.platformFee,  // 게스트 수수료 (9.9% VAT 포함)
+        platformFeeSupply: serverCalculated.platformFeeSupply,  // 공급가액
+        platformFeeVat: serverCalculated.platformFeeVat,        // 부가세
+        hostPlatformFee: serverCalculated.hostPlatformFee,  // 호스트 수수료 (3.3% VAT 포함)
+        hostPlatformFeeSupply: serverCalculated.hostPlatformFeeSupply,  // 공급가액
+        hostPlatformFeeVat: serverCalculated.hostPlatformFeeVat,        // 부가세
         discountAmount: discountAmountServer,
         discountType: discountTypeServer,
         deposit: serverCalculated.deposit,
@@ -2091,9 +2111,11 @@ const requestRefund = async (req, res) => {
       cancellationFaultType: refundData.cancellationFaultType,
       hasEzCleaningService: refundData.hasEzCleaningService,
 
-      // 원본 금액
+      // 원본 금액 (VAT 포함 총액)
       originalDeposit: refundData.originalDeposit,
       originalPlatformFee: refundData.originalPlatformFee,
+      originalPlatformFeeSupply: refundData.originalPlatformFeeSupply,
+      originalPlatformFeeVat: refundData.originalPlatformFeeVat,
       originalRentalFee: contract.rentalFee,
       originalCleaningFee: contract.cleaningFee,
       originalMaintenanceFee: contract.maintenanceFee,
@@ -2583,7 +2605,9 @@ const confirmPayment = async (req, res) => {
   try {
     paytagResponse = await paytagClient.confirmPayment({
       recvPayparam,
-      payType: payType || 'CARD'
+      payType: payType || 'CARD',
+      expectedOrderId: orderId,
+      expectedAmount: realAmount
     });
   } catch (paytagError) {
     await PaymentFailureLog.create({
@@ -2703,6 +2727,8 @@ const confirmPayment = async (req, res) => {
       maintenanceFee: settlementAmounts.maintenanceFee,
       cleaningFee: settlementAmounts.cleaningFee,
       hostPlatformFee: settlementAmounts.platformFee,
+      hostPlatformFeeSupply: settlementAmounts.platformFeeSupply,
+      hostPlatformFeeVat: settlementAmounts.platformFeeVat,
       refundDeduction: 0,
       grossAmount: settlementAmounts.grossAmount,
       netAmount: settlementAmounts.grossSettlement,
@@ -3480,7 +3506,9 @@ const cancelContractByHost = async (req, res) => {
       try {
         paytagResponse = await paytagClient.confirmPayment({
           recvPayparam,
-          payType: payType || 'CARD'
+          payType: payType || 'CARD',
+          expectedOrderId: orderId,
+          expectedAmount: hostBurdenAmount
         });
       } catch (paytagErr) {
         await transaction.rollback();
@@ -3588,6 +3616,8 @@ const cancelContractByHost = async (req, res) => {
       hasEzCleaningService: refundData.hasEzCleaningService,
       originalDeposit: refundData.originalDeposit,
       originalPlatformFee: refundData.originalPlatformFee,
+      originalPlatformFeeSupply: refundData.originalPlatformFeeSupply,
+      originalPlatformFeeVat: refundData.originalPlatformFeeVat,
       originalRentalFee: contract.rentalFee,
       originalCleaningFee: contract.cleaningFee,
       originalMaintenanceFee: contract.maintenanceFee,
@@ -4735,7 +4765,9 @@ const confirmHostBurdenPayment = async (req, res) => {
     try {
       paytagResponse = await paytagClient.confirmPayment({
         recvPayparam,
-        payType: payType || 'CARD'
+        payType: payType || 'CARD',
+        expectedOrderId: orderId,
+        expectedAmount: refund.hostBurdenAmount
       });
     } catch (paytagError) {
       await transaction.rollback();

@@ -74,6 +74,7 @@ const getActivePromotions = async (req, res) => {
           description: e.description,
           targetRole: e.targetRole,
           benefitType: e.benefitType,
+          benefitMode: e.benefitMode,
           discountAmount: e.discountAmount,
           startAt: toKSTString(e.startAt),
           endAt: toKSTString(e.endAt)

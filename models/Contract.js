@@ -117,7 +117,27 @@ const Contract = sequelize.define('Contract', {
     allowNull: false,
     defaultValue: 0,
     field: 'platform_fee',
-    comment: '게스트 플랫폼 수수료 (9.9%, 게스트가 추가 결제)',
+    comment: '게스트 플랫폼 수수료 (9.9% VAT 포함 총액, 게스트가 추가 결제)',
+    validate: {
+      min: 0
+    }
+  },
+  platformFeeSupply: {
+    type: DataTypes.BIGINT,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'platform_fee_supply',
+    comment: '게스트 수수료 공급가액 (round(platformFee × 10/11))',
+    validate: {
+      min: 0
+    }
+  },
+  platformFeeVat: {
+    type: DataTypes.BIGINT,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'platform_fee_vat',
+    comment: '게스트 수수료 부가세 (platformFee - platformFeeSupply)',
     validate: {
       min: 0
     }
@@ -127,7 +147,27 @@ const Contract = sequelize.define('Contract', {
     allowNull: false,
     defaultValue: 0,
     field: 'host_platform_fee',
-    comment: '호스트 플랫폼 수수료 (3.3%, 정산 시 차감)',
+    comment: '호스트 플랫폼 수수료 (3.3% VAT 포함 총액, 정산 시 차감)',
+    validate: {
+      min: 0
+    }
+  },
+  hostPlatformFeeSupply: {
+    type: DataTypes.BIGINT,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'host_platform_fee_supply',
+    comment: '호스트 수수료 공급가액 (round(hostPlatformFee × 10/11))',
+    validate: {
+      min: 0
+    }
+  },
+  hostPlatformFeeVat: {
+    type: DataTypes.BIGINT,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'host_platform_fee_vat',
+    comment: '호스트 수수료 부가세 (hostPlatformFee - hostPlatformFeeSupply)',
     validate: {
       min: 0
     }

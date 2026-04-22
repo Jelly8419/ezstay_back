@@ -372,7 +372,9 @@ const confirmRentalPayment = async (req, res) => {
   try {
     paytagResponse = await paytagClient.confirmPayment({
       recvPayparam,
-      payType: payType || 'CARD'
+      payType: payType || 'CARD',
+      expectedOrderId: orderId,
+      expectedAmount: realRentalAmount
     });
   } catch (paytagError) {
     await RentalPaymentFailureLog.create({
