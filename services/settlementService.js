@@ -213,14 +213,19 @@ const SETTLEMENT_STATUS_LABELS = {
  * - promotionService.consumeBenefits 로 슬롯 원자적 점유
  * - 적용된 할인 금액만큼 platformFee / grossSettlement / finalAmount 재계산
  *
+ * 호스트 런칭 이벤트(LAUNCH_HOST_2026) 정책:
+ *   - 유효기간: 오픈(startAt) + 90일, Payment.approvedAt 기준 판정
+ *   - 혜택: platformFee 전액 면제 (FEE_WAIVER_FULL)
+ *
  * @param {Object} params
  * @param {number} params.hostId
  * @param {number} params.contractId
  * @param {Object} params.settlementAmounts - calculateSettlementAmount() 결과
+ * @param {Date}   [params.referenceAt]     - 유효기간 판정 기준 시각 (Payment.approvedAt 전달 권장)
  * @param {Object} [params.transaction]
  * @returns {Promise<{applied: boolean, discountAmount: number, adjustedAmounts: Object}>}
  */
-const applyHostBenefit = async ({ hostId, contractId, settlementAmounts, transaction }) => {
+const applyHostBenefit = async ({ hostId, contractId, settlementAmounts, referenceAt, transaction }) => {
   const promotionService = require('./promotionService');
 
   const consumed = await promotionService.consumeBenefits({
@@ -228,6 +233,8 @@ const applyHostBenefit = async ({ hostId, contractId, settlementAmounts, transac
     targetRole: 'HOST',
     applyTrigger: 'SETTLEMENT',
     contractId,
+    referenceAt,
+    feeCap: settlementAmounts.platformFee, // FEE_WAIVER_FULL 의 할인 상한 = 현재 수수료
     transaction
   });
 

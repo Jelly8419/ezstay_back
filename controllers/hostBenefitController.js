@@ -1,5 +1,6 @@
 const { PromotionEvent, PromotionParticipant } = require('../models');
 const { success, ErrorCodes, error } = require('../utils/responseHelper');
+const { isEventActiveAt } = require('../services/promotionService');
 
 const HOST_EVENT_CODE = 'LAUNCH_HOST_2026';
 
@@ -20,7 +21,7 @@ const getBenefitStatus = async (req, res) => {
     }
 
     const totalCount = await PromotionParticipant.count({ where: { promotionEventId: event.id } });
-    const eventActive = event.isActive
+    const eventActive = isEventActiveAt(event)
       && (event.participantLimit == null || totalCount < event.participantLimit);
 
     const myParticipant = await PromotionParticipant.findOne({

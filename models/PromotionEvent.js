@@ -33,7 +33,13 @@ const PromotionEvent = sequelize.define('PromotionEvent', {
   discountAmount: {
     type: DataTypes.INTEGER,
     allowNull: false,
-    comment: '할인 금액 (원)'
+    comment: '할인 금액 (원). benefitMode=FEE_WAIVER_FULL 이면 무시됨'
+  },
+  benefitMode: {
+    type: DataTypes.ENUM('FIXED_AMOUNT', 'FEE_WAIVER_FULL'),
+    allowNull: false,
+    defaultValue: 'FIXED_AMOUNT',
+    comment: 'FIXED_AMOUNT=discountAmount 차감, FEE_WAIVER_FULL=platformFee 전액 면제'
   },
   participantLimit: {
     type: DataTypes.INTEGER,

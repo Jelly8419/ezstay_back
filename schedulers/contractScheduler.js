@@ -361,14 +361,16 @@ async function updateInProgress() {
           const hasEzCleaningService = fullContract.snapshot?.ezService?.cleaningService || false;
           const rawSettlementCalc = calculateSettlementAmount(fullContract, [], { hasEzCleaningService });
 
+          const paymentApprovedAt = fullContract.payment?.approvedAt;
+
+          // 호스트 런칭 혜택: 오픈(startAt)+90일 유효기간을 결제 승인 시각 기준으로 재검증
           const { adjustedAmounts: settlementCalc } = await applyHostBenefit({
             hostId: fullContract.hostId,
             contractId: fullContract.id,
             settlementAmounts: rawSettlementCalc,
+            referenceAt: paymentApprovedAt, // null 이면 promotionService 에서 현재 시각 fallback
             transaction
           });
-
-          const paymentApprovedAt = fullContract.payment?.approvedAt;
           const payoutAvailableDate = paymentApprovedAt
             ? toDateStrKST(calculatePayoutAvailableDate(paymentApprovedAt))
             : toDateStrKST(expectedDate); // 결제 정보 없으면 정산 예정일로 fallback

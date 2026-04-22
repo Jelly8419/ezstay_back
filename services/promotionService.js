@@ -11,18 +11,41 @@ const { Op } = require('sequelize');
 const { PromotionEvent, PromotionParticipant, ContractBenefit } = require('../models');
 
 /**
+ * 이벤트의 특정 시점 기준 활성 여부 검사
+ * - isActive = true
+ * - referenceAt 가 [startAt, endAt] 구간 내
+ *
+ * 호스트 런칭 이벤트는 이 함수를 Payment.approvedAt 으로 호출하여
+ * "결제 시점에 이벤트가 열려 있었는가" 를 기준으로 혜택 지급 여부 결정.
+ *
+ * @param {Object} event - PromotionEvent 인스턴스 또는 plain object
+ * @param {Date}   referenceAt - 판정 기준 시각 (기본: 현재)
+ */
+const isEventActiveAt = (event, referenceAt = new Date()) => {
+  if (!event || !event.isActive) return false;
+  if (event.startAt && new Date(event.startAt) > referenceAt) return false;
+  if (event.endAt && new Date(event.endAt) <= referenceAt) return false;
+  return true;
+};
+
+/**
  * 활성 이벤트 조회 (target_role + apply_trigger 기준)
  * - is_active = true
- * - start_at <= now (or NULL)
- * - end_at > now (or NULL)
+ * - start_at <= referenceAt (or NULL)
+ * - end_at > referenceAt (or NULL)
+ *
+ * referenceAt 을 지정하면 해당 시점 기준으로 조회.
+ * 호스트 정산 혜택은 Payment.approvedAt 을 넘겨야 "결제 시점 기준"으로
+ * 이벤트가 열려 있었는지 판정할 수 있음 (입주가 end_at 이후여도 결제가
+ * 이전이면 혜택 적용).
  */
-const getActiveEvents = async ({ targetRole, applyTrigger, transaction } = {}) => {
-  const now = new Date();
+const getActiveEvents = async ({ targetRole, applyTrigger, referenceAt, transaction } = {}) => {
+  const ref = referenceAt || new Date();
   const where = {
     isActive: true,
     [Op.and]: [
-      { [Op.or]: [{ startAt: null }, { startAt: { [Op.lte]: now } }] },
-      { [Op.or]: [{ endAt: null }, { endAt: { [Op.gt]: now } }] }
+      { [Op.or]: [{ startAt: null }, { startAt: { [Op.lte]: ref } }] },
+      { [Op.or]: [{ endAt: null }, { endAt: { [Op.gt]: ref } }] }
     ]
   };
   if (targetRole) where.targetRole = targetRole;
@@ -77,20 +100,46 @@ const registerParticipant = async ({ eventCode, userId, transaction }) => {
  *
  * 조건부 UPDATE로 원자적으로 슬롯 점유 → race condition 방지
  *
+ * @param {Object} params
+ * @param {number} params.userId
+ * @param {string} params.targetRole      'HOST' | 'GUEST'
+ * @param {string} params.applyTrigger    'CONTRACT' | 'SETTLEMENT'
+ * @param {number} params.contractId
+ * @param {Date}   [params.referenceAt]   유효기간 판정 기준 시각 (기본: 현재).
+ *                                        호스트 정산 혜택은 Payment.approvedAt 을 넘겨야 함.
+ * @param {number} [params.feeCap]        FEE_WAIVER_FULL 혜택의 할인 상한 (platformFee 값).
+ *                                        미지정 시 0 처리되므로 호스트 정산 경로에서는 반드시 전달.
+ * @param {Object} [params.transaction]
  * @returns {Promise<Array<{event: Object, participant: Object, discountAmount: number}>>}
- *   소진 성공한 이벤트 목록 (여러 이벤트 중첩 가능)
  */
-const consumeBenefits = async ({ userId, targetRole, applyTrigger, contractId, transaction }) => {
-  const events = await getActiveEvents({ targetRole, applyTrigger, transaction });
+const consumeBenefits = async ({
+  userId, targetRole, applyTrigger, contractId,
+  referenceAt, feeCap, transaction
+}) => {
+  // 1) referenceAt 기준으로 활성 이벤트 조회
+  //    호스트 정산 혜택은 Payment.approvedAt 을 넘겨서 "결제 시점 기준" 판정.
+  //    입주/정산 시점이 end_at 이후여도 결제가 이전이었으면 혜택 적용됨.
+  const events = await getActiveEvents({ targetRole, applyTrigger, referenceAt, transaction });
   const consumed = [];
 
   for (const event of events) {
+
     const participant = await PromotionParticipant.findOne({
       where: { promotionEventId: event.id, userId },
       transaction
     });
     if (!participant) continue;
     if (event.applyOnce && participant.consumedContractId != null) continue;
+
+    // 3) 혜택 금액 산출
+    //    - FEE_WAIVER_FULL: feeCap (현재 수수료) 만큼 면제, event.discountAmount 무시
+    //    - FIXED_AMOUNT   : event.discountAmount 고정
+    const discountAmount = event.benefitMode === 'FEE_WAIVER_FULL'
+      ? Math.max(0, feeCap || 0)
+      : event.discountAmount;
+
+    // FEE_WAIVER_FULL 인데 수수료가 0원이면 소진 의미 없음 → 스킵
+    if (event.benefitMode === 'FEE_WAIVER_FULL' && discountAmount === 0) continue;
 
     const [affectedRows] = await PromotionParticipant.update(
       { consumedContractId: contractId, consumedAt: new Date() },
@@ -108,7 +157,7 @@ const consumeBenefits = async ({ userId, targetRole, applyTrigger, contractId, t
         contractId,
         promotionEventId: event.id,
         benefitType: event.benefitType,
-        discountAmount: event.discountAmount,
+        discountAmount, // 실제 적용된 금액 (FEE_WAIVER_FULL 은 feeCap 값)
         status: 'ACTIVE',
         appliedAt: new Date()
       }, { transaction });
@@ -116,7 +165,7 @@ const consumeBenefits = async ({ userId, targetRole, applyTrigger, contractId, t
       consumed.push({
         event,
         participant,
-        discountAmount: event.discountAmount
+        discountAmount
       });
     }
   }
@@ -194,6 +243,9 @@ const getUserEligibility = async ({ userId, targetRole, applyTrigger }) => {
         eventCode: event.code,
         eventName: event.name,
         benefitType: event.benefitType,
+        benefitMode: event.benefitMode,
+        // FEE_WAIVER_FULL 은 적용 시점(정산)의 platformFee 에 따라 결정됨
+        // 프리뷰 시점에는 event.discountAmount(=0)가 의미 없음 → 호출자가 mode 별 분기 필요
         discountAmount: event.discountAmount
       };
     })
@@ -202,6 +254,7 @@ const getUserEligibility = async ({ userId, targetRole, applyTrigger }) => {
 
 module.exports = {
   getActiveEvents,
+  isEventActiveAt,
   registerParticipant,
   consumeBenefits,
   voidContractBenefits,
