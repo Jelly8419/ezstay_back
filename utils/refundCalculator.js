@@ -1,5 +1,6 @@
 const { RefundPolicyType, RefundPolicyRule, Room, EzService } = require('../models');
 const { Op } = require('sequelize');
+const { splitVatFromTotal } = require('./feeCalculator');
 
 
 /**
@@ -195,10 +196,15 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
       }
     }
 
-    // 8. 하위 호환용 기존 필드 매핑
+    // 8. 하위 호환용 기존 필드 매핑 + VAT 분리
     const rentalFeeRefundAmount = usageFeeRefundAmount;
     const platformFeeDeducted = guestServiceFeeRefunded ? 0 : platformFee;
     const finalRefundAmount = totalRefundAmount;
+
+    // 원본 게스트 수수료 VAT 분리 (분기별 부가세 신고 시 역전 공급가액/VAT 추적용)
+    const originalPlatformFeeSplit = splitVatFromTotal(platformFee);
+    // 비환불 수수료 (플랫폼 실수익으로 남는 분)의 VAT 분리
+    const platformFeeDeductedSplit = splitVatFromTotal(platformFeeDeducted);
 
     // 9. 결과 반환
     return {
@@ -225,6 +231,8 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
         originalMaintenanceFee: maintenanceFee,
         originalDeposit: deposit,
         originalPlatformFee: platformFee,
+        originalPlatformFeeSupply: originalPlatformFeeSplit.supply,
+        originalPlatformFeeVat: originalPlatformFeeSplit.vat,
         originalRentalItemsFee: rentalItemsFee,
         originalTotalAmount: contract.finalTotalAmount,
 
@@ -247,6 +255,8 @@ async function calculateRefund(contract, cancellationDate = new Date(), options 
         // 수수료
         guestServiceFeeRefunded,
         platformFeeDeducted,
+        platformFeeDeductedSupply: platformFeeDeductedSplit.supply,  // 플랫폼 실수익 공급가액
+        platformFeeDeductedVat: platformFeeDeductedSplit.vat,        // 플랫폼 실수익 부가세
         finalRefundAmount,
 
         // 안내 메시지

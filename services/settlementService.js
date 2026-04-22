@@ -8,6 +8,10 @@ const {
   calculateSettlementDate,
   calculatePayoutAvailableDate,
 } = require('../utils/businessDayHelper');
+const {
+  calculateHostFee,
+  splitVatFromTotal,
+} = require('../utils/feeCalculator');
 
 /**
  * (하위 호환) 체크아웃 기준 정산 예정일 계산
@@ -38,6 +42,9 @@ const getSettlementStatus = (checkInDate) => {
  * 호스트 플랫폼 수수료율 (3.3%)
  * - 게스트 수수료 (9.9%): 게스트가 결제 시 추가 부담 → Contract.platformFee
  * - 호스트 수수료 (3.3%): 정산 시 차감 → Contract.hostPlatformFee
+ *
+ * @deprecated 요율 상수는 utils/feeCalculator.HOST_FEE_RATE 로 이관. 본 상수는
+ *   기존 외부 import 가 있을 수 있어 호환용으로 남김.
  */
 const HOST_PLATFORM_FEE_RATE = 0.033;
 
@@ -47,11 +54,13 @@ const HOST_PLATFORM_FEE_RATE = 0.033;
  * @param {number} contract.rentalFee - 임대료
  * @param {number} contract.maintenanceFee - 관리비
  * @param {number} contract.cleaningFee - 청소비
- * @param {number} contract.hostPlatformFee - 호스트 플랫폼 수수료 (3.3%)
+ * @param {number} contract.hostPlatformFee - 호스트 플랫폼 수수료 (3.3%, VAT 포함 총액)
+ * @param {number} [contract.hostPlatformFeeSupply] - 호스트 수수료 공급가액 (스냅샷)
+ * @param {number} [contract.hostPlatformFeeVat]    - 호스트 수수료 부가세 (스냅샷)
  * @param {Array} refunds - 환불 정보 배열
  * @param {Object} options - 옵션
  * @param {boolean} options.hasEzCleaningService - EZ청소서비스 사용 여부
- * @returns {Object} 정산 금액 breakdown
+ * @returns {Object} 정산 금액 breakdown (platformFee/Supply/Vat 포함)
  */
 const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
   const {
@@ -59,7 +68,9 @@ const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
     maintenanceFee = 0,
     cleaningFee = 0,
     discountAmount = 0,
-    hostPlatformFee: storedHostPlatformFee
+    hostPlatformFee: storedHostPlatformFee,
+    hostPlatformFeeSupply: storedSupply,
+    hostPlatformFeeVat: storedVat,
   } = contract;
 
   const { hasEzCleaningService = false } = options;
@@ -74,11 +85,29 @@ const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
   const subtotal = grossAmount - discountAmount;
 
   // 호스트 플랫폼 수수료 (3.3%)
-  // DB에 저장된 값 사용 (할인 적용 후 기준으로 계약 시 계산됨)
-  // 없으면 동적 계산 (이전 계약 호환)
-  const hostPlatformFee = storedHostPlatformFee != null
-    ? storedHostPlatformFee
-    : Math.floor(subtotal * HOST_PLATFORM_FEE_RATE);
+  // 1) Contract 스냅샷(VAT 포함 총액)이 있으면 우선 사용
+  //    - supply/vat 도 스냅샷에 있으면 그대로 사용
+  //    - 없으면 splitVatFromTotal 로 역산 (기존 계약 호환)
+  // 2) 스냅샷이 없으면 feeCalculator 로 재계산 (이전 계약 호환)
+  let hostPlatformFee;
+  let hostPlatformFeeSupply;
+  let hostPlatformFeeVat;
+  if (storedHostPlatformFee != null) {
+    hostPlatformFee = storedHostPlatformFee;
+    if (storedSupply != null && storedVat != null && storedSupply + storedVat === storedHostPlatformFee) {
+      hostPlatformFeeSupply = storedSupply;
+      hostPlatformFeeVat = storedVat;
+    } else {
+      const split = splitVatFromTotal(storedHostPlatformFee);
+      hostPlatformFeeSupply = split.supply;
+      hostPlatformFeeVat = split.vat;
+    }
+  } else {
+    const recomputed = calculateHostFee(subtotal);
+    hostPlatformFee = recomputed.total;
+    hostPlatformFeeSupply = recomputed.supply;
+    hostPlatformFeeVat = recomputed.vat;
+  }
 
   // 수수료 차감 후 정산 기준액
   const grossSettlement = subtotal - hostPlatformFee;
@@ -114,7 +143,9 @@ const calculateSettlementAmount = (contract, refunds = [], options = {}) => {
     hasEzCleaningService,
     grossAmount,      // 할인/수수료 전 총액 → DB gross_amount
     subtotal,         // 할인 적용 후 소계
-    platformFee: hostPlatformFee,  // 호스트 수수료 (3.3%)
+    platformFee: hostPlatformFee,  // 호스트 수수료 (3.3% VAT 포함)
+    platformFeeSupply: hostPlatformFeeSupply,  // 공급가액
+    platformFeeVat: hostPlatformFeeVat,        // 부가세
     platformFeeRate: HOST_PLATFORM_FEE_RATE * 100,  // 3.3%
     grossSettlement,  // subtotal - hostPlatformFee (환불 전 호스트 수령 기준액)
     refund: {
@@ -210,12 +241,17 @@ const applyHostBenefit = async ({ hostId, contractId, settlementAmounts, transac
   const newGrossSettlement = settlementAmounts.subtotal - newPlatformFee;
   const newFinalAmount = newGrossSettlement - settlementAmounts.refund.totalRefundAmount;
 
+  // 할인 적용된 platformFee 로 VAT 재분리 (부가세 신고 시 플랫폼 실수익 정확 반영)
+  const { supply: newSupply, vat: newVat } = splitVatFromTotal(newPlatformFee);
+
   return {
     applied: true,
     discountAmount: actualDiscount,
     adjustedAmounts: {
       ...settlementAmounts,
       platformFee: newPlatformFee,
+      platformFeeSupply: newSupply,
+      platformFeeVat: newVat,
       grossSettlement: newGrossSettlement,
       finalAmount: newFinalAmount
     }

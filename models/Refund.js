@@ -96,7 +96,27 @@ const Refund = sequelize.define('Refund', {
     allowNull: false,
     defaultValue: 0,
     field: 'original_platform_fee',
-    comment: '원본 게스트 서비스 수수료',
+    comment: '원본 게스트 서비스 수수료 (VAT 포함 총액)',
+    validate: {
+      min: 0
+    }
+  },
+  originalPlatformFeeSupply: {
+    type: DataTypes.BIGINT,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'original_platform_fee_supply',
+    comment: '원본 게스트 수수료 공급가액 (round(originalPlatformFee × 10/11))',
+    validate: {
+      min: 0
+    }
+  },
+  originalPlatformFeeVat: {
+    type: DataTypes.BIGINT,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'original_platform_fee_vat',
+    comment: '원본 게스트 수수료 부가세 (originalPlatformFee - originalPlatformFeeSupply)',
     validate: {
       min: 0
     }

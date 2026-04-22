@@ -381,6 +381,8 @@ async function updateInProgress() {
             maintenanceFee: settlementCalc.maintenanceFee,
             cleaningFee: settlementCalc.cleaningFee,
             hostPlatformFee: settlementCalc.platformFee,
+            hostPlatformFeeSupply: settlementCalc.platformFeeSupply,
+            hostPlatformFeeVat: settlementCalc.platformFeeVat,
             refundDeduction: 0,
             grossAmount: settlementCalc.grossAmount,      // 할인/수수료 전 총액
             netAmount: settlementCalc.grossSettlement,    // 수수료 차감 후 (초기 환불 없음)
@@ -392,7 +394,9 @@ async function updateInProgress() {
               rentalFee: fullContract.rentalFee,
               maintenanceFee: fullContract.maintenanceFee,
               cleaningFee: fullContract.cleaningFee,
-              hostPlatformFee: fullContract.hostPlatformFee
+              hostPlatformFee: fullContract.hostPlatformFee,
+              hostPlatformFeeSupply: fullContract.hostPlatformFeeSupply,
+              hostPlatformFeeVat: fullContract.hostPlatformFeeVat
             }
           }, { transaction });
         }
