@@ -53,17 +53,32 @@ router.get('/kakao', async (req, res) => {
           console.log('🔍 [Kakao Callback] redirect URL state:', state, '| stateParam:', stateParam);
           res.redirect(redirectUrl);
         } else {
-          // 실패 시 에러 메시지와 함께 리디렉트
-          res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent(data.message)}${stateParam}`);
+          // 실패 시 error_code와 message를 별도 파라미터로 리디렉트 (프론트 분기용)
+          const params = new URLSearchParams({
+            error_code: String(data.code || 'UNKNOWN'),
+            message: data.message || ''
+          });
+          if (state) params.append('state', state);
+          res.redirect(`${frontendUrl}/auth/callback?${params.toString()}`);
         }
       };
 
       kakaoLogin(req, res);
     } catch (error) {
-      res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent('로그인 중 오류가 발생했습니다.')}${stateParam}`);
+      const params = new URLSearchParams({
+        error_code: '5001',
+        message: '로그인 중 오류가 발생했습니다.'
+      });
+      if (state) params.append('state', state);
+      res.redirect(`${frontendUrl}/auth/callback?${params.toString()}`);
     }
   } else {
-    res.redirect(`${frontendUrl}/auth/callback?error=${encodeURIComponent('카카오 인증 코드가 필요합니다.')}${stateParam}`);
+    const params = new URLSearchParams({
+      error_code: '4002',
+      message: '카카오 인증 코드가 필요합니다.'
+    });
+    if (state) params.append('state', state);
+    res.redirect(`${frontendUrl}/auth/callback?${params.toString()}`);
   }
 });
 
