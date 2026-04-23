@@ -1,4 +1,4 @@
-const { sequelize, Contract, Room, User, RoomPhoto, RoomAmenity, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, ContractCancelRequest, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement, AdminRefund, RentalOrderRefundRequest, ContractBenefit, PromotionEvent, PromotionParticipant } = require('../models');
+const { sequelize, Contract, Room, User, RoomPhoto, RoomAmenity, ChatRoom, Refund, RefundPolicyType, RefundPolicyRule, ContractStatusLog, ContractCancelRequest, Payment, PaymentFailureLog, RentalOrder, RentalOrderItem, RentalOrderLog, RentalItemReservation, RentalItem, Settlement, Payout, DepositAgreement, AdminRefund, RentalOrderRefundRequest, ContractBenefit, PromotionEvent, PromotionParticipant, BrokerIncentive } = require('../models');
 const { Op } = require('sequelize');
 const { success, error, created, updated, ErrorCodes } = require('../utils/responseHelper');
 const paytagClient = require('../utils/paytagClient');
@@ -2258,6 +2258,11 @@ const requestRefund = async (req, res) => {
             { status: 'ON_HOLD', note: '계약 취소로 인한 정산 보류' },
             { where: { contractId: contract.id, status: 'PENDING' }, transaction }
           );
+          // 연계된 중개인 인센티브도 동기 ON_HOLD (PENDING 상태만)
+          await BrokerIncentive.update(
+            { status: 'ON_HOLD' },
+            { where: { contractId: contract.id, status: 'PENDING' }, transaction }
+          );
 
           // 호스트 혜택 무효화 + 슬롯 복구 (게스트 혜택은 환불 완료된 상태이므로 유지)
           await promotionService.voidContractBenefits({
@@ -3614,6 +3619,11 @@ const cancelContractByHost = async (req, res) => {
     );
     await Settlement.update(
       { status: 'ON_HOLD', note: '호스트 취소로 인한 정산 보류' },
+      { where: { contractId: contract.id, status: 'PENDING' }, transaction }
+    );
+    // 연계된 중개인 인센티브도 동기 ON_HOLD (PENDING 상태만)
+    await BrokerIncentive.update(
+      { status: 'ON_HOLD' },
       { where: { contractId: contract.id, status: 'PENDING' }, transaction }
     );
 
