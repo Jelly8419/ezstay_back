@@ -33,6 +33,7 @@ const {
 const NotificationService = require('../services/notificationService');
 const { CANCEL_TYPES, NotificationMessages } = require('../utils/notificationMessages');
 const { calculateSettlementDate, calculatePayoutAvailableDate, calculateSettlementAmount, applyHostBenefit } = require('../services/settlementService');
+const { approveContractPayment } = require('../services/paymentApprovalService');
 const promotionService = require('../services/promotionService');
 const { toKSTString, nowKSTString } = require('../utils/dateHelper');
 
@@ -2630,9 +2631,6 @@ const confirmPayment = async (req, res) => {
   // ── 3단계: DB 업데이트 (짧은 트랜잭션 — PG 성공 후) ──
   // PG 성공 후 DB 실패 시 즉시 PG 취소 (보상 트랜잭션)
   const now = new Date();
-  const paymentMethod = paytagClient.mapPaymentMethod(payType || 'CARD');
-  const easyPayProvider = paytagClient.mapEasyPayProvider(payType || 'CARD');
-  const pgPaymentKey = paytagResponse.tran_key || paytagResponse.recv_orderno || orderId;
 
   // TODO: 가상계좌(VBANK) 결제 지원 - 오픈 스펙 제외, 추후 구현
   // - VBANK 선택 시 status: 'WAITING_FOR_DEPOSIT', Contract APPROVED 유지
@@ -2644,115 +2642,12 @@ const confirmPayment = async (req, res) => {
   let initialRentalOrder;
   const transaction = await sequelize.transaction();
   try {
-    // Payment 레코드 생성 (테스트 모드에서도 실제 금액으로 저장)
-    payment = await Payment.create({
-      contractId: contract.id,
-      paymentType: 'CONTRACT',
-      paymentKey: pgPaymentKey,
-      orderId: contract.orderId,
-      method: paymentMethod,
-      easyPayProvider,
-      status: 'DONE',
-      requestedAt: now,
-      approvedAt: now,
-      totalAmount: realAmount,
-      balanceAmount: realAmount,
-      suppliedAmount: Math.round(realAmount / 1.1),
-      vat: realAmount - Math.round(realAmount / 1.1),
-      taxFreeAmount: 0,
-      currency: 'KRW',
-      receiptUrl: paytagResponse.receipt_url || null,
-      checkoutUrl: null,
-      paymentResponse: paytagResponse
-    }, { transaction });
-
-    // Contract 상태 업데이트
-    await contract.update({
-      status: 'PAYMENT_COMPLETED',
-      paymentMethod: paytagClient.mapContractPaymentMethod(payType || 'CARD'),
-      paidAt: now
-    }, { transaction });
-
-    // 렌탈 주문이 있으면 함께 결제 처리
-    initialRentalOrder = await RentalOrder.findOne({
-      where: { contractId: contract.id, orderType: 'INITIAL', status: 'PENDING' },
+    ({ payment, initialRentalOrder } = await approveContractPayment(
+      contract,
+      paytagResponse,
+      { payType, realAmount, now, guestId, req },
       transaction
-    });
-
-    // rental_orders가 없지만 contracts.rental_items에 데이터가 있는 경우 (레거시 데이터 마이그레이션)
-    if (!initialRentalOrder && contract.rentalItems && Array.isArray(contract.rentalItems) && contract.rentalItems.length > 0) {
-      console.log(`📦 레거시 렌탈 아이템 마이그레이션: contractId=${contract.id}`);
-      const rentalItemsForOrder = contract.rentalItems.map(item => ({
-        itemId: item.itemId,
-        quantity: item.quantity
-      }));
-      initialRentalOrder = await createInitialRentalOrder(
-        contract.id, rentalItemsForOrder,
-        contract.checkInDate, contract.checkOutDate,
-        guestId, req, transaction
-      );
-      console.log(`✅ 레거시 렌탈 주문 생성 완료: rentalOrderId=${initialRentalOrder.id}`);
-    }
-
-    if (initialRentalOrder) {
-      await confirmRentalOrderPayment(
-        initialRentalOrder, payment.paymentKey, paymentMethod, guestId, req, transaction
-      );
-      console.log(`✅ 렌탈 주문 결제 완료: rentalOrderId=${initialRentalOrder.id}`);
-    }
-
-    // Settlement + Payout 생성 (CONTRACT_SETTLEMENT)
-    // 지급 가능일: 결제일+3영업일 vs 입주일 다음날 중 더 늦은 날짜 (PRD 정책)
-    const pgAvailableDate = calculatePayoutAvailableDate(now);
-    const checkInNextDay = new Date(contract.checkInDate);
-    checkInNextDay.setDate(checkInNextDay.getDate() + 1);
-    checkInNextDay.setHours(0, 0, 0, 0);
-    const payoutAvailableDate = pgAvailableDate > checkInNextDay ? pgAvailableDate : checkInNextDay;
-    const settlementExpectedDate = calculateSettlementDate(contract.checkInDate);
-    const hasEzCleaningService = contract.snapshot?.ezService?.cleaningService || false;
-    const rawAmounts = calculateSettlementAmount(contract, [], { hasEzCleaningService });
-
-    const { adjustedAmounts: settlementAmounts } = await applyHostBenefit({
-      hostId: contract.hostId,
-      contractId: contract.id,
-      settlementAmounts: rawAmounts,
-      transaction
-    });
-
-    const settlement = await Settlement.create({
-      contractId: contract.id,
-      hostId: contract.hostId,
-      status: 'PENDING',
-      rentalFee: settlementAmounts.rentalFee,
-      maintenanceFee: settlementAmounts.maintenanceFee,
-      cleaningFee: settlementAmounts.cleaningFee,
-      hostPlatformFee: settlementAmounts.platformFee,
-      hostPlatformFeeSupply: settlementAmounts.platformFeeSupply,
-      hostPlatformFeeVat: settlementAmounts.platformFeeVat,
-      refundDeduction: 0,
-      grossAmount: settlementAmounts.grossAmount,
-      netAmount: settlementAmounts.grossSettlement,
-      expectedDate: settlementExpectedDate,
-      payoutAvailableDate
-    }, { transaction });
-
-    const hostBankAccount = await require('../models').UserBankAccount.findOne({
-      where: { userId: contract.hostId, isPrimary: true }
-    });
-
-    await Payout.create({
-      contractId: contract.id,
-      settlementId: settlement.id,
-      payoutType: 'CONTRACT_SETTLEMENT',
-      recipientType: 'HOST',
-      recipientId: contract.hostId,
-      amount: settlementAmounts.grossSettlement,
-      status: 'PENDING',
-      payableAfter: payoutAvailableDate,
-      bankName: hostBankAccount?.bankName || null,
-      accountNumber: hostBankAccount?.accountNumber || null,
-      accountHolder: hostBankAccount?.accountHolder || null
-    }, { transaction });
+    ));
 
     await transaction.commit();
 
