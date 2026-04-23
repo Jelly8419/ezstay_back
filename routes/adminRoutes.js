@@ -11,6 +11,8 @@ const inquiryController = require('../controllers/inquiryController');
 const adminReceiptController = require('../controllers/adminReceiptController');
 const adminPayoutController = require('../controllers/adminPayoutController');
 const adminPromotionController = require('../controllers/adminPromotionController');
+const adminBrokerController = require('../controllers/adminBrokerController');
+const adminBrokerIncentiveController = require('../controllers/adminBrokerIncentiveController');
 const { authenticateAdmin, requireAdminRole } = require('../middleware/auth');
 const actionLogger = require('../middleware/actionLogger');
 const { adminAuthLimiter, adminApiLimiter } = require('../middleware/rateLimiter');
@@ -596,5 +598,56 @@ router.patch(
 );
 router.get('/promotions/:id/participants', adminPromotionController.listParticipants);
 router.get('/promotions/:id/benefits', adminPromotionController.listBenefits);
+
+// ============================================
+// 중개인 인센티브 관리 (Broker / Rate / Host Mapping)
+// ============================================
+
+// 중개인 CRUD
+router.get('/brokers', adminBrokerController.listBrokers);
+router.post(
+  '/brokers',
+  requireAdminRole(['super_admin', 'admin']),
+  adminBrokerController.createBroker
+);
+// ⚠️ /brokers/:brokerId/... 하위 라우트가 있으므로 상세는 뒤로
+router.get('/brokers/:brokerId', adminBrokerController.getBrokerDetail);
+router.patch(
+  '/brokers/:brokerId',
+  requireAdminRole(['super_admin', 'admin']),
+  adminBrokerController.updateBroker
+);
+
+// 적용률 이력 / 추가
+router.get('/brokers/:brokerId/rates', adminBrokerController.listBrokerRates);
+router.post(
+  '/brokers/:brokerId/rates',
+  requireAdminRole(['super_admin', 'admin']),
+  adminBrokerController.addBrokerRate
+);
+
+// 임대인 귀속 조회 / 추가 / 해제
+router.get('/brokers/:brokerId/hosts', adminBrokerController.listBrokerHosts);
+router.post(
+  '/brokers/:brokerId/hosts',
+  requireAdminRole(['super_admin', 'admin']),
+  adminBrokerController.addBrokerHostMapping
+);
+router.delete(
+  '/brokers/:brokerId/hosts/:hostId',
+  requireAdminRole(['super_admin', 'admin']),
+  adminBrokerController.removeBrokerHostMapping
+);
+
+// 월별 인센티브 (⚠️ 더 구체적인 csv/monthly 라우트를 :payoutId 보다 먼저 등록)
+router.get('/broker-incentives/monthly/csv', adminBrokerIncentiveController.downloadMonthlyCsv);
+router.get('/broker-incentives/monthly/:payoutId/csv', adminBrokerIncentiveController.downloadPayoutCsv);
+router.get('/broker-incentives/monthly', adminBrokerIncentiveController.listMonthlyPayouts);
+router.get('/broker-incentives/monthly/:payoutId', adminBrokerIncentiveController.getMonthlyPayoutDetail);
+router.patch(
+  '/broker-incentives/monthly/:payoutId/pay',
+  requireAdminRole(['super_admin', 'admin']),
+  adminBrokerIncentiveController.markPayoutPaid
+);
 
 module.exports = router;

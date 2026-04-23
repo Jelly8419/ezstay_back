@@ -52,6 +52,11 @@ const KmcVerificationModel = require('./KmcVerification');
 const ContractBenefit = require('./ContractBenefit');
 const PromotionEvent = require('./PromotionEvent');
 const PromotionParticipant = require('./PromotionParticipant');
+const Broker = require('./Broker');
+const BrokerRate = require('./BrokerRate');
+const BrokerHostMapping = require('./BrokerHostMapping');
+const BrokerIncentive = require('./BrokerIncentive');
+const BrokerIncentivePayout = require('./BrokerIncentivePayout');
 
 // 핵심 유저 모델 초기화
 const User = UserModel(sequelize);
@@ -1131,6 +1136,132 @@ ContractBenefit.belongsTo(PromotionEvent, {
   onUpdate: 'CASCADE'
 });
 
+// =====================================================
+// Broker 관계 설정 (중개인 인센티브)
+// =====================================================
+
+// Broker ↔ BrokerRate (요율 이력)
+Broker.hasMany(BrokerRate, {
+  foreignKey: 'brokerId',
+  as: 'rates',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+BrokerRate.belongsTo(Broker, {
+  foreignKey: 'brokerId',
+  as: 'broker',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// Broker ↔ BrokerHostMapping (귀속 이력)
+Broker.hasMany(BrokerHostMapping, {
+  foreignKey: 'brokerId',
+  as: 'hostMappings',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+BrokerHostMapping.belongsTo(Broker, {
+  foreignKey: 'brokerId',
+  as: 'broker',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// User(호스트) ↔ BrokerHostMapping
+User.hasMany(BrokerHostMapping, {
+  foreignKey: 'hostId',
+  as: 'brokerMappings',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+BrokerHostMapping.belongsTo(User, {
+  foreignKey: 'hostId',
+  as: 'host',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// Broker ↔ BrokerIncentive
+Broker.hasMany(BrokerIncentive, {
+  foreignKey: 'brokerId',
+  as: 'incentives',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+BrokerIncentive.belongsTo(Broker, {
+  foreignKey: 'brokerId',
+  as: 'broker',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// Settlement ↔ BrokerIncentive (1:1)
+Settlement.hasOne(BrokerIncentive, {
+  foreignKey: 'settlementId',
+  as: 'brokerIncentive',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+BrokerIncentive.belongsTo(Settlement, {
+  foreignKey: 'settlementId',
+  as: 'settlement',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// Contract ↔ BrokerIncentive
+Contract.hasOne(BrokerIncentive, {
+  foreignKey: 'contractId',
+  as: 'brokerIncentive',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+BrokerIncentive.belongsTo(Contract, {
+  foreignKey: 'contractId',
+  as: 'contract',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// Broker ↔ BrokerIncentivePayout (월별 지급)
+Broker.hasMany(BrokerIncentivePayout, {
+  foreignKey: 'brokerId',
+  as: 'incentivePayouts',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+BrokerIncentivePayout.belongsTo(Broker, {
+  foreignKey: 'brokerId',
+  as: 'broker',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// BrokerIncentivePayout ↔ BrokerIncentive (집계 관계)
+BrokerIncentivePayout.hasMany(BrokerIncentive, {
+  foreignKey: 'payoutId',
+  as: 'incentives',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+BrokerIncentive.belongsTo(BrokerIncentivePayout, {
+  foreignKey: 'payoutId',
+  as: 'payout',
+  onDelete: 'NO ACTION',
+  onUpdate: 'CASCADE'
+});
+
+// Contract → broker_id_snapshot 참조 (느슨한 연결, as: 'snapshotBroker')
+// 스냅샷은 계약에 박혀있으므로 broker 삭제와 무관. required: false 로 조회 권장.
+Contract.belongsTo(Broker, {
+  foreignKey: 'brokerIdSnapshot',
+  as: 'snapshotBroker',
+  onDelete: 'NO ACTION',
+  onUpdate: 'NO ACTION',
+  constraints: false
+});
+
 module.exports = {
   sequelize,
   User,
@@ -1188,5 +1319,10 @@ module.exports = {
   KmcVerification,
   ContractBenefit,
   PromotionEvent,
-  PromotionParticipant
+  PromotionParticipant,
+  Broker,
+  BrokerRate,
+  BrokerHostMapping,
+  BrokerIncentive,
+  BrokerIncentivePayout
 };

@@ -1,8 +1,8 @@
 # 관리자 API 문서
 
 > **작성일**: 2025-10-27
-> **최종 갱신일**: 2026-03-10
-> **버전**: 5.0.0 (예약 취소 관리, 보증금 보류 관리, 영수증 관리 API 추가)
+> **최종 갱신일**: 2026-04-23
+> **버전**: 5.2.0 (중개인 인센티브 관리 API 추가)
 > **베이스 URL**: `http://localhost:3000/api/admin`
 
 ---
@@ -24,9 +24,11 @@
 13. [렌탈 주문 관리 API](#렌탈-주문-관리-api)
 14. [결제 관리 API](#결제-관리-api)
 15. [정산 관리 API](#정산-관리-api)
-16. [보증금 보류 관리 API](#보증금-보류-관리-api) 🆕
-17. [영수증 관리 API](#영수증-관리-api) 🆕
-18. [에러 코드](#에러-코드)
+16. [중개인 관리 API](#-중개인-관리-api) 🆕
+17. [중개인 인센티브 관리 API](#-중개인-인센티브-관리-api) 🆕
+18. [보증금 보류 관리 API](#보증금-보류-관리-api)
+19. [영수증 관리 API](#영수증-관리-api)
+20. [에러 코드](#에러-코드)
 
 ---
 
@@ -3112,6 +3114,507 @@ PATCH /api/admin/settlements/:contractId/hold
 
 ---
 
+## 🤝 중개인 관리 API
+
+중개인(부동산 파트너)이 유입시킨 임대인의 계약에 대해 월별 인센티브를 지급하는 체계입니다.
+
+### 핵심 개념
+
+- **귀속 판정 시점**: 결제 승인 시점(`payments.approvedAt`) 기준으로 해당 호스트가 어느 중개인에 귀속돼 있는지, 어떤 요율을 적용받는지 확정해 `contracts` 에 **스냅샷**으로 박는다.
+  - 이후 요율/매핑이 바뀌어도 **과거 계약의 인센티브는 절대 바뀌지 않음**.
+- **세무 처리**:
+  - `individual` (개인): 기타소득, 원천징수 8.8% (소득세 8% + 주민세 0.8%)
+  - `business` (사업자): 세금계산서 수취, 원천징수 없음, 공급가액/부가세 분리
+- **활동기간**: 중개인의 `start_date ~ end_date` 범위. 결제 시점이 이 범위 밖이면 인센티브 0 (스냅샷 NULL).
+- **적용률 변경**: 기존 활성 row 의 `effective_to` 가 자동으로 변경 시점으로 마감되고, 새 row 가 추가됨 (시간 구간 이력).
+
+### 인센티브 금액 계산
+
+```
+gross = floor(settlement.host_platform_fee × applied_rate)
+
+[individual]
+  withholding = floor(gross × 0.088)
+  net         = gross - withholding
+  supply = 0, vat = 0
+
+[business]
+  supply = floor(gross × 10/11)
+  vat    = gross - supply
+  net    = gross   (원천징수 없음)
+  withholding = 0
+```
+
+**불변식**:
+- individual: `gross = withholding + net`
+- business : `gross = supply + vat`, `net = gross`
+
+---
+
+### 1. 중개인 목록
+
+```
+GET /api/admin/brokers
+```
+
+> 🔒 관리자 인증 필요
+
+**Query Parameters:**
+| 파라미터 | 타입 | 기본값 | 설명 |
+|----------|------|--------|------|
+| `page` | number | 1 | 페이지 번호 |
+| `limit` | number | 20 | 페이지당 항목 수 |
+| `status` | string | - | 'active' \| 'inactive' |
+| `search` | string | - | 중개인명 / 연락처 검색 |
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "message": "중개인 목록을 조회했습니다.",
+  "data": {
+    "brokers": [
+      {
+        "id": 1,
+        "name": "00부동산",
+        "phone": "010-1234-5678",
+        "brokerType": "business",
+        "taxId": "123-45-67890",
+        "bankName": "국민은행",
+        "bankAccount": "123456789012",
+        "bankHolder": "홍길동",
+        "startDate": "2026-04-01",
+        "endDate": "2027-04-01",
+        "status": "active",
+        "currentRate": 0.5,
+        "hostCount": 3,
+        "memo": null,
+        "createdAt": "2026-04-23T10:00:00+09:00",
+        "updatedAt": "2026-04-23T10:00:00+09:00"
+      }
+    ],
+    "pagination": { "total": 1, "page": 1, "limit": 20, "totalPages": 1 }
+  }
+}
+```
+
+- `currentRate`: 현재 활성 요율 (broker_rates.effective_to IS NULL)
+- `hostCount`: 현재 귀속된 임대인 수
+
+---
+
+### 2. 중개인 상세
+
+```
+GET /api/admin/brokers/:brokerId
+```
+
+> 🔒 관리자 인증 필요
+
+요율 이력 + 귀속 호스트 전체 이력 포함.
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "broker": { /* 목록과 동일 포맷 */ },
+    "rates": [
+      {
+        "id": 2,
+        "rate": 0.3,
+        "effectiveFrom": "2026-07-01T00:00:00+09:00",
+        "effectiveTo": null,
+        "createdAt": "2026-07-01T00:00:00+09:00"
+      },
+      {
+        "id": 1,
+        "rate": 0.5,
+        "effectiveFrom": "2026-04-01T00:00:00+09:00",
+        "effectiveTo": "2026-07-01T00:00:00+09:00",
+        "createdAt": "2026-04-01T00:00:00+09:00"
+      }
+    ],
+    "hostMappings": [
+      {
+        "id": 5,
+        "hostId": 123,
+        "hostName": "김호스트",
+        "hostNickname": "kimhost",
+        "hostPhone": "010-9876-5432",
+        "startDate": "2026-04-01T00:00:00+09:00",
+        "endDate": null,
+        "isActive": true
+      }
+    ]
+  }
+}
+```
+
+---
+
+### 3. 중개인 생성
+
+```
+POST /api/admin/brokers
+```
+
+> 🔒 super_admin, admin 권한 필요
+
+**Request Body:**
+```json
+{
+  "name": "00부동산",
+  "phone": "010-1234-5678",
+  "brokerType": "business",
+  "taxId": "123-45-67890",
+  "bankName": "국민은행",
+  "bankAccount": "123456789012",
+  "bankHolder": "홍길동",
+  "startDate": "2026-04-01",
+  "endDate": "2027-04-01",
+  "status": "active",
+  "memo": null,
+  "initialRate": 0.5
+}
+```
+
+| 필드 | 필수 | 설명 |
+|------|------|------|
+| `name` | ✅ | 중개인명 (개인 이름 또는 상호) |
+| `phone` | ✅ | 연락처 |
+| `brokerType` | ✅ | `'individual'` \| `'business'` |
+| `taxId` | business 일 때 ✅ | 사업자등록번호 |
+| `startDate` | ✅ | 활동 시작일 (YYYY-MM-DD) |
+| `endDate` | ✅ | 활동 종료일 (YYYY-MM-DD) |
+| `status` | - | `'active'` (기본) \| `'inactive'` |
+| `initialRate` | - | 0 초과 1 이하 (옵션, 같이 BrokerRate 생성) |
+| `bankName/bankAccount/bankHolder` | - | 지급 계좌 (옵션) |
+| `memo` | - | 관리자 메모 |
+
+**Response (201):**
+```json
+{ "success": true, "data": { "brokerId": 1 }, "message": "중개인이 생성되었습니다." }
+```
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 400 | 4002 | 필수 정보를 모두 입력해주세요. |
+| 400 | 4911 | 사업자 중개인은 사업자등록번호가 필요합니다. |
+| 400 | 4912 | 종료일은 시작일 이후여야 합니다. |
+| 400 | 4913 | 적용률은 0 초과 1 이하 값이어야 합니다. |
+
+---
+
+### 4. 중개인 수정
+
+```
+PATCH /api/admin/brokers/:brokerId
+```
+
+> 🔒 super_admin, admin 권한 필요
+
+수정 가능 필드: `name`, `phone`, `brokerType`, `taxId`, `bankName/bankAccount/bankHolder`, `startDate`, `endDate`, `status`, `memo`.
+
+요율은 별도 엔드포인트(`POST /brokers/:brokerId/rates`)로 변경.
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 404 | 4910 | 중개인을 찾을 수 없습니다. |
+| 400 | 4911 | 사업자 중개인은 사업자등록번호가 필요합니다. |
+| 400 | 4912 | 종료일은 시작일 이후여야 합니다. |
+
+---
+
+### 5. 요율 이력 조회
+
+```
+GET /api/admin/brokers/:brokerId/rates
+```
+
+> 🔒 관리자 인증 필요
+
+최신순(`effective_from DESC`) 정렬.
+
+---
+
+### 6. 새 요율 추가
+
+```
+POST /api/admin/brokers/:brokerId/rates
+```
+
+> 🔒 super_admin, admin 권한 필요
+
+**Request Body:**
+```json
+{
+  "rate": 0.3,
+  "effectiveFrom": "2026-07-01T00:00:00+09:00"
+}
+```
+
+| 필드 | 필수 | 설명 |
+|------|------|------|
+| `rate` | ✅ | 0 초과 1 이하 (0.3 = 30%) |
+| `effectiveFrom` | - | 미지정 시 현재 시각 사용 |
+
+**동작:**
+1. 해당 broker 의 기존 활성 요율(`effective_to IS NULL`) 을 찾아 `effective_to = effectiveFrom` 으로 마감
+2. 새 row 를 `effective_to = NULL` 로 생성
+
+**Response (201):** `{ rateId }`
+
+**주의**: 이미 체결된 과거 계약의 인센티브는 스냅샷으로 보존되므로 요율 변경 영향을 받지 않음.
+
+---
+
+### 7. 귀속된 임대인 목록
+
+```
+GET /api/admin/brokers/:brokerId/hosts
+```
+
+> 🔒 관리자 인증 필요
+
+과거/현재 모든 매핑을 `startDate DESC` 순으로 반환. `isActive`(end_date IS NULL) 로 현재 여부 판단.
+
+---
+
+### 8. 임대인 귀속 추가
+
+```
+POST /api/admin/brokers/:brokerId/hosts
+```
+
+> 🔒 super_admin, admin 권한 필요
+
+**Request Body:**
+```json
+{
+  "hostId": 123,
+  "startDate": "2026-04-01T00:00:00+09:00"
+}
+```
+
+| 필드 | 필수 | 설명 |
+|------|------|------|
+| `hostId` | ✅ | `users.id` (userMode=host) |
+| `startDate` | - | 미지정 시 현재 시각 사용 |
+
+**검증**: 해당 host 에 **이미 활성 매핑이 존재하면 거부** (동일 시점 중복 귀속 금지).
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 404 | 4910 | 중개인을 찾을 수 없습니다. |
+| 404 | 4919 | 임대인(호스트)을 찾을 수 없습니다. |
+| 409 | 4914 | 해당 임대인은 이미 활성 매핑이 존재합니다. (`details.existingBrokerId` 포함) |
+
+---
+
+### 9. 임대인 귀속 해제
+
+```
+DELETE /api/admin/brokers/:brokerId/hosts/:hostId
+```
+
+> 🔒 super_admin, admin 권한 필요
+
+활성 매핑의 `end_date` 를 현재 시각으로 세팅 (soft end). 이후 다른 중개인에 재귀속 가능.
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 404 | 4915 | 중개인-임대인 매핑을 찾을 수 없습니다. |
+
+---
+
+## 💰 중개인 인센티브 관리 API
+
+중개인별 **월 단위 인센티브 집계 + 지급 처리** API입니다. 관리자가 월별 리스트를 조회할 때 자동으로 집계가 갱신됩니다.
+
+### 월별 집계 메커니즘
+
+- **트리거**: 온디맨드 (스케줄러 없음)
+- **대상**: `settlement_month = month` 이면서 `status IN ('PENDING', 'AGGREGATED')` 인 BrokerIncentive 전부
+- **제외**: `ON_HOLD` (계약 취소), `CANCELLED`
+- **보호**: `BrokerIncentivePayout.status='PAID'` 인 행은 **재계산하지 않음** (지급 완료 금액 고정)
+
+### 10. 월별 인센티브 리스트
+
+```
+GET /api/admin/broker-incentives/monthly?month=YYYY-MM
+```
+
+> 🔒 관리자 인증 필요
+
+호출 시 `aggregateMonth(month)` 가 실행되어 `broker_incentive_payouts` 가 upsert 됩니다 (PAID 는 skip).
+
+**Query Parameters:**
+| 파라미터 | 타입 | 필수 | 설명 |
+|----------|------|------|------|
+| `month` | string | ✅ | YYYY-MM 형식 (예: `2026-05`) |
+| `status` | string | - | `'PENDING'` \| `'PAID'` |
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "month": "2026-05",
+    "payouts": [
+      {
+        "payoutId": 10,
+        "brokerId": 1,
+        "brokerName": "00부동산",
+        "brokerPhone": "010-1234-5678",
+        "brokerType": "business",
+        "settlementMonth": "2026-05",
+        "contractCount": 3,
+        "totalGross": 49500,
+        "totalWithholding": 0,
+        "totalSupply": 45000,
+        "totalVat": 4500,
+        "totalNet": 49500,
+        "status": "PENDING",
+        "paidAt": null,
+        "paidByAdminId": null,
+        "memo": null,
+        "createdAt": "2026-06-01T09:00:00+09:00",
+        "updatedAt": "2026-06-01T09:00:00+09:00"
+      }
+    ],
+    "summary": {
+      "totalBrokers": 1,
+      "totalContracts": 3,
+      "totalGross": 49500,
+      "totalNet": 49500,
+      "pendingCount": 1,
+      "paidCount": 0
+    }
+  }
+}
+```
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 400 | 4918 | 월 형식은 YYYY-MM 이어야 합니다. |
+
+---
+
+### 11. 월별 지급 상세 (계약 리스트 포함)
+
+```
+GET /api/admin/broker-incentives/monthly/:payoutId
+```
+
+> 🔒 관리자 인증 필요
+
+해당 payout 에 집계된 `broker_incentives` 전체 + 계약/정산 정보.
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "payout": { /* (10번과 동일 포맷) */ },
+    "incentives": [
+      {
+        "id": 101,
+        "contractId": 5642,
+        "orderId": "260510-00023",
+        "hostId": 123,
+        "hostName": "김호스트",
+        "hostNickname": "kimhost",
+        "checkInDate": "2026-05-10T14:00:00+09:00",
+        "paidAt": "2026-04-15T10:00:00+09:00",
+        "settlementExpectedDate": "2026-05-15",
+        "settlementStatus": "READY",
+        "baseFee": 33000,
+        "appliedRate": 0.5,
+        "brokerType": "business",
+        "grossAmount": 16500,
+        "withholdingAmount": 0,
+        "supplyAmount": 15000,
+        "vatAmount": 1500,
+        "netAmount": 16500,
+        "status": "AGGREGATED"
+      }
+    ]
+  }
+}
+```
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 404 | 4916 | 중개인 월별 지급 정보를 찾을 수 없습니다. |
+
+---
+
+### 12. 지급 완료 처리
+
+```
+PATCH /api/admin/broker-incentives/monthly/:payoutId/pay
+```
+
+> 🔒 super_admin, admin 권한 필요
+
+**Request Body:**
+```json
+{ "memo": "4월분 인센티브 지급 완료" }
+```
+
+**동작:**
+- `status = 'PAID'` + `paid_at = now` + `paid_by_admin_id` 기록
+- 이후 같은 broker×month 의 재집계 요청이 와도 **금액이 변하지 않음** (보호)
+
+**Error Cases:**
+| Status | Code | Message |
+|--------|------|---------|
+| 404 | 4916 | 중개인 월별 지급 정보를 찾을 수 없습니다. |
+| 400 | 4917 | 이미 지급 완료된 건입니다. |
+
+---
+
+### 13. 월별 payout CSV 다운로드 (지급 상세)
+
+```
+GET /api/admin/broker-incentives/monthly/:payoutId/csv
+```
+
+> 🔒 관리자 인증 필요
+
+특정 payout 에 포함된 계약별 인센티브 행을 CSV 로 반환. 마지막에 합계 행 포함.
+
+**Response Headers:**
+```
+Content-Type: text/csv; charset=utf-8
+Content-Disposition: attachment; filename="broker-incentive-<이름>-<YYYY-MM>.csv"
+```
+
+**CSV 컬럼:** 계약번호 / 주문번호 / 임대인 / 결제일 / 정산예정일 / 호스트수수료(base) / 적용률 / 지급대상(gross) / 원천징수 / 공급가액 / 부가세 / 실지급액 / 상태
+
+---
+
+### 14. 월별 전체 CSV 다운로드
+
+```
+GET /api/admin/broker-incentives/monthly/csv?month=YYYY-MM
+```
+
+> 🔒 관리자 인증 필요
+
+해당 월의 **중개인별 합계** 리스트를 CSV 로 반환.
+
+**CSV 컬럼:** 정산월 / 중개인 / 연락처 / 타입 / 사업자번호 / 계약수 / 지급대상 / 원천징수 / 공급가액 / 부가세 / 실지급액 / 상태 / 지급일
+
+---
+
 ## 🔒 보증금 보류 관리 API
 
 호스트의 보증금 반환보류 신청을 관리자가 승인/거절하거나, 강제로 반환보류 처리하는 API입니다.
@@ -3732,6 +4235,20 @@ POST /api/admin/alimtalk/logs/:logId/retry
 |------|------|------|
 | 4901 | 404 | 정산 정보를 찾을 수 없습니다 (SETTLEMENT_NOT_FOUND) |
 
+### 중개인 인센티브 관리 에러 코드
+| 코드 | HTTP | 설명 |
+|------|------|------|
+| 4910 | 404 | 중개인을 찾을 수 없습니다 (BROKER_NOT_FOUND) |
+| 4911 | 400 | 사업자 중개인은 사업자등록번호가 필요합니다 (BROKER_TAX_ID_REQUIRED) |
+| 4912 | 400 | 종료일은 시작일 이후여야 합니다 (BROKER_INVALID_DATE_RANGE) |
+| 4913 | 400 | 적용률은 0 초과 1 이하 값이어야 합니다 (BROKER_RATE_INVALID) |
+| 4914 | 409 | 해당 임대인은 이미 활성 매핑이 존재합니다 (BROKER_HOST_ALREADY_MAPPED) |
+| 4915 | 404 | 중개인-임대인 매핑을 찾을 수 없습니다 (BROKER_HOST_MAPPING_NOT_FOUND) |
+| 4916 | 404 | 중개인 월별 지급 정보를 찾을 수 없습니다 (BROKER_INCENTIVE_PAYOUT_NOT_FOUND) |
+| 4917 | 400 | 이미 지급 완료된 건입니다 (BROKER_INCENTIVE_ALREADY_PAID) |
+| 4918 | 400 | 월 형식은 YYYY-MM 이어야 합니다 (BROKER_MONTH_INVALID) |
+| 4919 | 404 | 임대인(호스트)을 찾을 수 없습니다 (BROKER_HOST_NOT_FOUND) |
+
 ### 보증금 보류 관리 에러 코드
 | 코드 | HTTP | 설명 |
 |------|------|------|
@@ -3883,6 +4400,28 @@ POST /api/admin/alimtalk/logs/:logId/retry
 | PATCH | `/settlements/:contractId/complete` | super_admin, admin | 정산 완료 |
 | PATCH | `/settlements/:contractId/hold` | super_admin, admin | 정산 보류 |
 
+### 중개인 관리 🆕
+| Method | Endpoint | 권한 | 설명 |
+|--------|----------|------|------|
+| GET | `/brokers` | 모든 관리자 | 중개인 목록 (currentRate/hostCount 포함) |
+| POST | `/brokers` | super_admin, admin | 중개인 생성 (initialRate 옵션) |
+| GET | `/brokers/:brokerId` | 모든 관리자 | 중개인 상세 (요율 이력 + 귀속 호스트) |
+| PATCH | `/brokers/:brokerId` | super_admin, admin | 중개인 수정 |
+| GET | `/brokers/:brokerId/rates` | 모든 관리자 | 요율 이력 |
+| POST | `/brokers/:brokerId/rates` | super_admin, admin | 새 요율 추가 (기존 활성 row 자동 마감) |
+| GET | `/brokers/:brokerId/hosts` | 모든 관리자 | 귀속된 임대인 목록 |
+| POST | `/brokers/:brokerId/hosts` | super_admin, admin | 임대인 귀속 추가 |
+| DELETE | `/brokers/:brokerId/hosts/:hostId` | super_admin, admin | 임대인 귀속 해제 (soft end) |
+
+### 중개인 인센티브 관리 🆕
+| Method | Endpoint | 권한 | 설명 |
+|--------|----------|------|------|
+| GET | `/broker-incentives/monthly` | 모든 관리자 | 월별 집계 리스트 (호출 시 upsert) |
+| GET | `/broker-incentives/monthly/csv` | 모든 관리자 | 월별 전체 CSV |
+| GET | `/broker-incentives/monthly/:payoutId` | 모든 관리자 | 월별 지급 상세 (계약 리스트 포함) |
+| GET | `/broker-incentives/monthly/:payoutId/csv` | 모든 관리자 | payout 별 CSV |
+| PATCH | `/broker-incentives/monthly/:payoutId/pay` | super_admin, admin | 지급 완료 처리 (멱등) |
+
 ### 보증금 보류 관리
 | Method | Endpoint | 권한 | 설명 |
 |--------|----------|------|------|
@@ -3909,4 +4448,4 @@ POST /api/admin/alimtalk/logs/:logId/retry
 
 ---
 
-> 총 **70개** 관리자 API 엔드포인트 (v5.1.0 기준)
+> 총 **84개** 관리자 API 엔드포인트 (v5.2.0 기준 — 중개인 인센티브 14 추가)
