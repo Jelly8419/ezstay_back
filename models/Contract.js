@@ -172,6 +172,31 @@ const Contract = sequelize.define('Contract', {
       min: 0
     }
   },
+
+  // 중개인 인센티브 스냅샷 (결제 승인 시점 확정, NULL=미귀속)
+  brokerIdSnapshot: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    field: 'broker_id_snapshot',
+    comment: '결제 승인 시점 귀속 중개인 ID (NULL=미귀속)'
+  },
+  brokerRateSnapshot: {
+    type: DataTypes.DECIMAL(5, 4),
+    allowNull: true,
+    field: 'broker_rate_snapshot',
+    comment: '결제 승인 시점 적용 요율 스냅샷 (0.5000=50%)',
+    get() {
+      const v = this.getDataValue('brokerRateSnapshot');
+      return v === null || v === undefined ? null : parseFloat(v);
+    }
+  },
+  brokerTypeSnapshot: {
+    type: DataTypes.ENUM('individual', 'business'),
+    allowNull: true,
+    field: 'broker_type_snapshot',
+    comment: '결제 승인 시점 중개인 타입 스냅샷'
+  },
+
   discountAmount: {
     type: DataTypes.INTEGER,
     allowNull: false,

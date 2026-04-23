@@ -133,6 +133,18 @@ const ErrorCodes = {
   SETTLEMENT_NOT_FOUND: { code: 4901, message: '정산 정보를 찾을 수 없습니다.' },
   INVALID_USER_MODE: { code: 4802, message: 'userMode는 guest 또는 host여야 합니다.' },
 
+  // 중개인 인센티브 관련 (491x)
+  BROKER_NOT_FOUND:                 { code: 4910, message: '중개인을 찾을 수 없습니다.' },
+  BROKER_TAX_ID_REQUIRED:           { code: 4911, message: '사업자 중개인은 사업자등록번호가 필요합니다.' },
+  BROKER_INVALID_DATE_RANGE:        { code: 4912, message: '종료일은 시작일 이후여야 합니다.' },
+  BROKER_RATE_INVALID:              { code: 4913, message: '적용률은 0 초과 1 이하 값이어야 합니다.' },
+  BROKER_HOST_ALREADY_MAPPED:       { code: 4914, message: '해당 임대인은 이미 활성 매핑이 존재합니다.' },
+  BROKER_HOST_MAPPING_NOT_FOUND:    { code: 4915, message: '중개인-임대인 매핑을 찾을 수 없습니다.' },
+  BROKER_INCENTIVE_PAYOUT_NOT_FOUND:{ code: 4916, message: '중개인 월별 지급 정보를 찾을 수 없습니다.' },
+  BROKER_INCENTIVE_ALREADY_PAID:    { code: 4917, message: '이미 지급 완료된 건입니다.' },
+  BROKER_MONTH_INVALID:             { code: 4918, message: '월 형식은 YYYY-MM 이어야 합니다.' },
+  BROKER_HOST_NOT_FOUND:            { code: 4919, message: '임대인(호스트)을 찾을 수 없습니다.' },
+
   // 아이디/비밀번호 찾기 관련 (442x)
   FIND_ID_NOT_FOUND: { code: 4420, message: '본인인증 정보와 일치하는 계정이 없습니다.' },
   FIND_PW_MISMATCH: { code: 4421, message: '이메일과 본인인증 정보가 일치하지 않습니다.' },
