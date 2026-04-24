@@ -14,22 +14,38 @@
 ## 📅 날짜/시간 처리 규칙
 
 ### 환경 특성 (반드시 숙지)
-- `process.env.TZ = 'Asia/Seoul'` — `new Date()`, `getHours()` 등 로컬 메서드가 KST 기준으로 동작
-- Sequelize `timezone: '+09:00'`, `dialectOptions.timezone: '+09:00'` 설정
-- MySQL DATETIME 컬럼은 **시간대 정보 없이 저장** → Sequelize가 읽을 때 KST로 해석하여 Date 객체 반환
-- Date 객체의 `.toISOString()`은 **항상 UTC(Z)** 반환 → API 응답에 직접 사용 금지
+- **DB 저장: UTC 통일**
+  - `models/db.js` → Sequelize `timezone: '+00:00'`
+  - MySQL DATETIME 컬럼에 UTC 시각이 저장됨. Sequelize 가 읽으면 UTC 기준 `Date` 객체 반환.
+- **프로세스 로컬 TZ: Asia/Seoul**
+  - `server.js` 최상단에서 `process.env.TZ = 'Asia/Seoul'` 설정
+  - `new Date().getHours()` 등 **로컬 메서드**는 KST 기준으로 동작
+  - `d.setHours(14)` 는 KST 14:00 을 의도 → 저장될 땐 UTC 05:00 으로 자동 변환
+- **API 응답 전환**: DB 에서 읽은 UTC Date 는 **반드시 `toKSTString()` 으로 KST 문자열로 변환**하여 내려줌
+- `.toISOString()` 은 UTC(Z) 반환 → API 응답에 직접 사용 금지
+
+### DB에 상수 DATETIME 값 INSERT/UPDATE 시 (SQL 직접 작성)
+세션 타임존이 UTC(+00:00) 이므로 SQL 문자열도 **UTC 로 작성**해야 함.
+```sql
+-- ✅ KST 2026-08-31 23:59:59 을 저장하려면 UTC 환산값을 직접 입력
+UPDATE promotion_events SET end_at = '2026-08-31 14:59:59'  -- UTC = KST 23:59:59
+WHERE code = 'LAUNCH_HOST_2026';
+
+-- ❌ 금지 — KST 의도로 '23:59:59' 쓰면 UTC 로 저장되어 KST 기준 9시간 밀림
+UPDATE promotion_events SET end_at = '2026-08-31 23:59:59' WHERE ...;
+```
 
 ### API 응답 시 날짜 변환 규칙
 
-**`DataTypes.DATE` 컬럼 (시간 포함, checkInDate / checkOutDate 등)**
+**`DataTypes.DATE` 컬럼 (시간 포함, checkInDate / checkOutDate / createdAt / approvedAt 등)**
 ```js
 // ✅ 반드시 toKSTString() 사용
 checkInDate: toKSTString(contract.checkInDate)
-// → "2026-04-10T14:00:00"  (TZ 환경에서 로컬값 그대로)
+// → "2026-04-10T14:00:00+09:00"
 
-// ❌ 금지 — UTC로 직렬화되어 9시간 감소
+// ❌ 금지 — UTC ISO 형식으로 직렬화됨
 checkInDate: contract.checkInDate
-// → "2026-04-09T05:00:00.000Z"
+// → "2026-04-10T05:00:00.000Z"
 ```
 
 **`DataTypes.DATEONLY` 컬럼 (날짜만, expectedDate / payableAfter 등)**
@@ -39,30 +55,19 @@ expectedDate: settlement.expectedDate
 // → "2026-04-10"
 ```
 
-**타임스탬프 컬럼 (createdAt / updatedAt / approvedAt / paidAt 등)**
-```js
-// ✅ 반드시 toKSTString() 사용 — UTC 통일 이후 모든 DATE 컬럼 동일 규칙
-createdAt: toKSTString(contract.createdAt)
-// → "2026-04-10T14:00:00+09:00"
-
-// ❌ 금지 — .000Z 형태로 UTC 그대로 전달됨
-createdAt: contract.createdAt
-// → "2026-04-10T05:00:00.000Z"
-```
-
 ### 날짜 유틸 함수 위치: `utils/dateHelper.js`
 | 함수 | 용도 | 반환 예시 |
 |------|------|----------|
 | `toKSTString(date)` | DATE 컬럼 API 응답 변환 | `"2026-04-10T14:00:00+09:00"` |
-| `toDateStrKST(date)` | Date 객체 → 날짜 문자열 | `"2026-04-10"` |
-| `todayKST()` | 오늘 날짜 문자열 | `"2026-04-10"` |
-| `nowKSTString()` | 로그용 타임스탬프 | `"2026-04-10T14:00:00+09:00"` |
+| `toDateStrKST(date)` | Date 객체 → KST 날짜 문자열 | `"2026-04-10"` |
+| `todayKST()` | 오늘 날짜 문자열 (KST) | `"2026-04-10"` |
+| `nowKSTString()` | 로그용 KST 타임스탬프 | `"2026-04-10T14:00:00+09:00"` |
 
 ### 날짜 필터 쿼리 규칙
 ```js
 // ✅ 'YYYY-MM-DD' 문자열은 반드시 '+09:00' 붙여서 KST 명시
-new Date(startDate + 'T00:00:00+09:00')   // KST 자정으로 파싱 → UTC로 정규화
-new Date(endDate + 'T23:59:59+09:00')     // KST 끝으로 파싱 → UTC로 정규화
+new Date(startDate + 'T00:00:00+09:00')   // KST 자정으로 파싱 → UTC Date 객체
+new Date(endDate + 'T23:59:59+09:00')     // KST 끝으로 파싱 → UTC Date 객체
 
 // ❌ 금지 — 'YYYY-MM-DD' 단독 파싱은 UTC 자정으로 해석됨 (9시간 오차)
 new Date(startDate)
@@ -70,13 +75,15 @@ new Date(startDate)
 
 ### new Date() 조작 후 응답 포함 시
 ```js
-// ✅ toKSTString으로 감싸서 응답
+// ✅ toKSTString 으로 감싸서 응답
 estimatedCompletionDate: toKSTString(someDate)
 
 // ❌ 금지
 estimatedCompletionDate: someDate          // Date 객체 직접 포함
 estimatedCompletionDate: someDate.toISOString()  // UTC Z 반환
 ```
+
+### 참고: 마이그레이션 배경은 `docs/utc-migration-plan.md`
 
 ---
 

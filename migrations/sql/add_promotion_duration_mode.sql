@@ -37,12 +37,16 @@ ALTER TABLE promotion_events
 --   - participant_limit: NULL (무제한 — 방 등록한 모든 호스트)
 --   - benefit_mode:      FEE_WAIVER_FULL
 --   - start_at:          NULL 유지 (오픈 시점에 PATCH 로 설정)
---   - end_at:            2026-08-31 23:59:59 (KST 자정 직전, 고정 마감)
+--   - end_at:            KST 2026-08-31 23:59:59 기준 → UTC 로 환산 저장
+--                         DB/Sequelize 세션 타임존이 UTC(+00:00) 이므로 문자열
+--                         그대로 INSERT 하면 UTC 로 해석되어 KST 대비 9시간
+--                         밀림. KST 에서 UTC 로 변환해 저장:
+--                         KST 2026-08-31 23:59:59 = UTC 2026-08-31 14:59:59
 -- ------------------------------------------------------------
 UPDATE promotion_events
 SET is_active         = false,
     benefit_mode      = 'FEE_WAIVER_FULL',
     participant_limit = NULL,
     start_at          = NULL,
-    end_at            = '2026-08-31 23:59:59'
+    end_at            = '2026-08-31 14:59:59'  -- UTC (= KST 23:59:59)
 WHERE code = 'LAUNCH_HOST_2026';
