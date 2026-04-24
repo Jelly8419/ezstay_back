@@ -278,12 +278,24 @@ const getRoomById = async (req, res) => {
         targetRole: 'GUEST',
         applyTrigger: 'CONTRACT'
       });
+      // 🔍 DEBUG: 프로모션 자격 조회 결과 (진단용 임시 로그)
+      console.log('[DEBUG eligiblePromotions]', {
+        userId: req.user.id,
+        roomId: req.params.id,
+        eligibleCount: eligible.length,
+        eligible
+      });
       roomData.eligiblePromotions = eligible.map(e => ({
         eventCode: e.eventCode,
         eventName: e.eventName,
         discountAmount: e.discountAmount
       }));
     } else {
+      // 🔍 DEBUG: 비로그인 처리 (토큰 누락 또는 무효)
+      console.log('[DEBUG eligiblePromotions] req.user=null', {
+        roomId: req.params.id,
+        hasAuthHeader: !!req.headers.authorization
+      });
       roomData.eligiblePromotions = [];
     }
     // === 게스트 프로모션 자격 끝 ===
