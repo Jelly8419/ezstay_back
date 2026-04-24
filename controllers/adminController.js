@@ -634,6 +634,16 @@ const approveProperty = async (req, res) => {
       console.error('매물 승인 알림 전송 실패:', notifyErr);
     }
 
+    // 알림톡 발송 (방 심사 승인 안내 → 호스트)
+    try {
+      const AlimtalkService = require('../services/alimtalkService');
+      const host = await User.findByPk(room.hostId, { attributes: ['id', 'phoneNumber', 'name', 'nickname'] });
+      AlimtalkService.sendPropertyApproved(host, room)
+        .catch(err => console.error('[Alimtalk] property_approved_host 실패:', err.message));
+    } catch (alimtalkErr) {
+      console.error('매물 승인 알림톡 발송 실패 (무시됨):', alimtalkErr);
+    }
+
     return success(res, room, '매물 승인 완료');
   } catch (err) {
     console.error('매물 승인 실패:', err);

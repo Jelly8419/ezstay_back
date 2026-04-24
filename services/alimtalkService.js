@@ -381,6 +381,13 @@ class AlimtalkService {
   // 미등록 템플릿용 편의 메서드 (TODO: 검수 후 활성화)
   // =====================================================
 
+  /** 방 심사 승인 안내 알림톡 (호스트에게) */
+  static async sendPropertyApproved(host, room) {
+    await this.send('property_approved_host', host, {
+      roomName: room?.roomName || ''
+    }, { receiverRole: 'host', skipDedup: true });
+  }
+
   /** 4-2. 계약 승인 알림톡 */
   static async sendContractApproved(contract, guest, room) {
     await this.send('contract_approved_guest', guest, {
