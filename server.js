@@ -212,6 +212,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const gnbRoutes = require('./routes/gnbRoutes');
 const kmcRoutes = require('./routes/kmcRoutes');
 const promotionRoutes = require('./routes/promotionRoutes');
+const systemRoutes = require('./routes/systemRoutes');
 
 app.use('/api/rooms', roomRoutes);
 app.use('/api/auth', authRoutes);
@@ -231,6 +232,7 @@ app.use('/api/notifications', notificationRoutes);  // 알림 API
 app.use('/api/gnb', gnbRoutes);  // GNB 배지 상태 API
 app.use('/api/auth', kmcRoutes);  // KMC 본인인증
 app.use('/api/promotions', promotionRoutes);  // 프로모션 이벤트 (공개 조회)
+app.use('/api/system', systemRoutes);  // 서비스 런칭 여부 등 시스템 플래그
 
 // TODO: 가상계좌 지원 시 웹훅 라우트 활성화
 // const paytagWebhookController = require('./controllers/paytagWebhookController');
