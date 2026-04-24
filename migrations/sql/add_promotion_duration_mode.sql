@@ -32,13 +32,16 @@ ALTER TABLE promotion_events
 -- 호스트 런칭 이벤트 정책 전환
 -- ------------------------------------------------------------
 -- 주의: 실행 전 아래 값이 운영 정책과 일치하는지 확인
+--   - is_active:         false (오픈 전 비활성. 관리자 "오픈 버튼" 클릭 시
+--                         isActive=true + startAt=NOW() 로 동시 PATCH)
 --   - participant_limit: NULL (무제한 — 방 등록한 모든 호스트)
 --   - benefit_mode:      FEE_WAIVER_FULL
---   - start_at:          NULL 유지 (관리자가 오픈 시점에 PATCH 로 설정)
+--   - start_at:          NULL 유지 (오픈 시점에 PATCH 로 설정)
 --   - end_at:            2026-08-31 23:59:59 (KST 자정 직전, 고정 마감)
 -- ------------------------------------------------------------
 UPDATE promotion_events
-SET benefit_mode      = 'FEE_WAIVER_FULL',
+SET is_active         = false,
+    benefit_mode      = 'FEE_WAIVER_FULL',
     participant_limit = NULL,
     start_at          = NULL,
     end_at            = '2026-08-31 23:59:59'
