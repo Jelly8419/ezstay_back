@@ -27,11 +27,13 @@ const notificationRoutes = require('../../routes/notificationRoutes');
 const { adminRouter: rentalItemAdminRoutes } = require('../../routes/rentalItemRoutes');
 const rentalItemRoutes = require('../../routes/rentalItemRoutes');
 const adminRoutes      = require('../../routes/adminRoutes');
+const moveInRoutes     = require('../../routes/moveInRoutes');
 
 app.use('/api/rooms',          roomRoutes);
 app.use('/api/auth',           authRoutes);
 app.use('/api/user',           userRoutes);
 app.use('/api/host',           hostRoutes);
+app.use('/api/host/move-in',   moveInRoutes);
 app.use('/api/contracts',      contractRoutes);
 app.use('/api',                refundRoutes);
 app.use('/api',                rentalOrderRoutes);

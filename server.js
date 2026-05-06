@@ -157,6 +157,8 @@ initHolidayCache();
 // 계약 상태 자동 업데이트 스케줄러 시작
 const { startContractScheduler } = require('./schedulers/contractScheduler');
 startContractScheduler();
+const { startMoveInScheduler } = require('./schedulers/moveInScheduler');
+startMoveInScheduler();
 
 // 채팅 알림 스케줄러 시작 (체크인/체크아웃 D-1 알림)
 const { startChatReminderScheduler } = require('./schedulers/chatReminderScheduler');
@@ -213,6 +215,7 @@ const gnbRoutes = require('./routes/gnbRoutes');
 const kmcRoutes = require('./routes/kmcRoutes');
 const promotionRoutes = require('./routes/promotionRoutes');
 const systemRoutes = require('./routes/systemRoutes');
+const moveInRoutes = require('./routes/moveInRoutes');
 
 app.use('/api/rooms', roomRoutes);
 app.use('/api/auth', authRoutes);
@@ -220,6 +223,7 @@ app.use('/api/account', accountRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/host', hostRoutes);
 app.use('/api/host', scheduleRoutes);  // 호스트 일정 관리
+app.use('/api/host/move-in', moveInRoutes);  // 입주 준비 서비스 (임대인)
 app.use('/api/contracts', contractRoutes);
 app.use('/api/chats', chatRoutes);
 app.use('/api/admin', adminRoutes);

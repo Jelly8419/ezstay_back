@@ -90,4 +90,66 @@ async function generateOrderId(transaction = null) {
   }
 }
 
-module.exports = { generateOrderId };
+/**
+ * 입주 준비 서비스 청소 결제 주문번호 생성
+ * 형식: M + yymmdd + 00001 (5자리)
+ * 예: 'M25112700001'
+ *
+ * 기존 Contract.orderId(11자) 와 prefix로 구분.
+ * MoveInPayment.pgTid 또는 별도 컬럼이 아닌, PG에 보낼 orderid로만 사용 (DB 컬럼은 case_id+id로 식별).
+ *
+ * @param {Transaction} [transaction]
+ * @returns {Promise<string>}
+ */
+async function generateMoveInOrderId(transaction = null) {
+  const shouldCommit = !transaction;
+  const t = transaction || await sequelize.transaction();
+
+  try {
+    const { MoveInPayment } = require('../models');
+
+    const today = new Date();
+    const yymmdd = [
+      String(today.getFullYear()).slice(-2),
+      String(today.getMonth() + 1).padStart(2, '0'),
+      String(today.getDate()).padStart(2, '0')
+    ].join('');
+
+    // 오늘 날짜 prefix로 시작하는 가장 큰 order_id 조회
+    const prefix = `M${yymmdd}`;
+    const result = await MoveInPayment.findOne({
+      where: sequelize.where(
+        sequelize.fn('LEFT', sequelize.col('order_id'), prefix.length),
+        prefix
+      ),
+      attributes: [[sequelize.fn('MAX', sequelize.col('order_id')), 'maxOrderId']],
+      transaction: t,
+      raw: true
+    });
+
+    let nextNumber = 1;
+    if (result && result.maxOrderId) {
+      const seq = parseInt(result.maxOrderId.slice(prefix.length), 10);
+      if (Number.isFinite(seq)) nextNumber = seq + 1;
+    }
+
+    if (nextNumber > 99999) {
+      throw new Error('일일 입주 준비 결제 주문번호 한도 초과 (99999건)');
+    }
+
+    const orderId = `${prefix}${String(nextNumber).padStart(5, '0')}`;
+
+    if (shouldCommit) {
+      await t.commit();
+    }
+
+    return orderId;
+  } catch (err) {
+    if (shouldCommit) {
+      await t.rollback();
+    }
+    throw err;
+  }
+}
+
+module.exports = { generateOrderId, generateMoveInOrderId };

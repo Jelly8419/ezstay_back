@@ -8,6 +8,7 @@
 - `User.destroy()` 절대 금지 → Soft Delete만 허용
 - 모델에 `references` 옵션 사용 금지 → `models/index.js`에서만 관계 설정
 - `sync({ alter: false })` 유지
+- **JSON 컬럼**: MariaDB는 `LONGTEXT + json_valid` 형태로 저장됨. `DataTypes.JSON` 사용 시 char-by-char 객체 변환 이슈 발생 → **`DataTypes.TEXT('long')` + 명시적 `get/set` 직렬화 사용** (예: `models/MoveInRoom.js`의 `beds`, `models/MoveInCase.js`의 `roomSnapshot`)
 
 ---
 
@@ -105,11 +106,58 @@ estimatedCompletionDate: someDate.toISOString()  // UTC Z 반환
 
 ## 주요 라우트
 ```
-/api/auth      # 인증 (이메일/카카오)
-/api/user      # 사용자 관리
-/api/host      # 호스트 방 등록/관리
-/api/rooms     # 방 조회 (게스트용)
-/api/contracts # 계약/예약
-/api/chats     # 채팅
-/api/admin     # 관리자 전용
+/api/auth              # 인증 (이메일/카카오)
+/api/user              # 사용자 관리
+/api/host              # 호스트 방 등록/관리
+/api/host/move-in      # 입주 준비 서비스 (외부 플랫폼 임대인용 청소·옵션 부가 서비스)
+/api/rooms             # 방 조회 (게스트용)
+/api/contracts         # 계약/예약
+/api/chats             # 채팅
+/api/admin             # 관리자 전용 (service-tasks는 ?source=internal|move_in|all 분기)
 ```
+
+---
+
+## 🧹 입주 준비 서비스 (Move-in Service)
+
+외부 플랫폼(에어비앤비 등)에서 단기임대 계약이 발생한 임대인이 EZstay의 청소·옵션 부가 서비스만 사용하도록 한 **분리된 서브 도메인**.
+
+### 핵심 원칙 (PRD 15절)
+- 기존 `Room`/`Contract`/`ServiceTask`와 **절대 합치지 말 것** (목적·상태값 다름)
+- 임차인 옵션 결제 흐름과 임대인 청소 결제 흐름은 **독립 이벤트**로 처리
+- 청소비는 **서버에서만 산정** (`utils/moveInCleaningPriceCalculator.js`) — 클라이언트 amount 신뢰 X
+- 도어락/공동현관 비밀번호는 **AES-256-GCM 암호화 저장** (`utils/cryptoHelper.js`, env: `MOVE_IN_PASSWORD_KEY`)
+- 케이스에 `room_snapshot` JSON 락인 → 방 수정해도 기존 케이스 영향 X (PRD 12.5)
+
+### 도메인 모델
+```
+move_in_rooms              간편 방 정보 (정식 Room과 분리, 심사 X)
+  └─ move_in_cases         입주 준비 등록 (외부 계약 1건 단위)
+        ├─ move_in_payment_requests   임차인 옵션 결제 요청 토큰 (1:1)
+        ├─ move_in_payments           임대인 청소 결제 (별도 결제 테이블)
+        └─ move_in_service_tasks      외부 청소 업체 예약 (관리자 처리)
+              └─ move_in_service_task_logs   상태 변경 이력
+```
+
+### 결제 흐름 (PayTag + Mock 하이브리드)
+- `orderId`: `M + yymmdd + 5자리` (예: `M260507_00001`) — `utils/orderIdGenerator.js#generateMoveInOrderId`
+- `PAYMENT_USE_MOCK=true` 환경변수로 PayTag 미연동 환경에서도 동작
+- 실패 시 `MoveInPayment.status=FAILED`, 케이스 `cleaning_status=PAYMENT_PENDING` 유지 (재시도 가능)
+
+### 알림톡 (현재 TODO)
+`controllers/moveInPaymentRequestController.js`의 `dispatchPaymentRequestNotification`에 알리고 연동 hook만 작성됨. 템플릿명 `MOVE_IN_PAYMENT_REQUEST` 등록 후 주석 해제.
+
+### 스케줄러 (`schedulers/moveInScheduler.js`)
+- 매 10분 실행 (기존 contractScheduler와 독립)
+- `cleaning_status=PAID` & 퇴실일 D-7 이내 케이스 → `MoveInServiceTask(CLEANING, PENDING)` 자동 생성
+
+### 관리자 화면 통합
+기존 `/api/admin/service-tasks`에 `?source=` 쿼리로 분기:
+- `internal` (기본): 기존 ServiceTask
+- `move_in`: MoveInServiceTask (도어락 비밀번호 자동 복호화 응답)
+- `all`: 두 도메인 합쳐서 referenceDate 정렬 + `breakdown` 포함
+
+### 상세 문서
+- API: `C:\study\backend_md_list\입주준비서비스_임대인_API.md`
+- 관리자: `C:\study\backend_md_list\입주준비서비스_관리자_API.md`
+- 구현 이력: `C:\study\backend_md_list\입주준비서비스_임대인_구현계획.md`

@@ -4542,6 +4542,10 @@ const retryAlimtalkLog = async (req, res) => {
  * GET /api/admin/service-tasks
  *
  * Query:
+ *   source     : 'internal' | 'move_in' | 'all' (기본 internal)
+ *                - internal: 기존 EZstay 내부 계약 청소·침구 (service_tasks)
+ *                - move_in : 외부 플랫폼 입주 준비 청소 (move_in_service_tasks)
+ *                - all     : 두 도메인 통합 응답
  *   tab        : 'pending' | 'all'  (pending → status=PENDING 자동 필터)
  *   task_type  : CLEANING | BEDDING_DELIVERY | BEDDING_RETRIEVAL
  *   status     : PENDING | RESERVED | COMPLETED | ISSUE
@@ -4553,6 +4557,7 @@ const retryAlimtalkLog = async (req, res) => {
 const getServiceTasks = async (req, res) => {
   try {
     const {
+      source = 'internal',
       tab,
       task_type,
       status: statusFilter,
@@ -4561,6 +4566,25 @@ const getServiceTasks = async (req, res) => {
       page = 1,
       limit = 20
     } = req.query;
+
+    // ─ source=move_in 또는 all 분기 ─
+    if (source === 'move_in' || source === 'all') {
+      const adminMoveIn = require('./adminMoveInServiceTaskController');
+      const moveInResult = await adminMoveIn.listMoveInServiceTasks(req.query);
+
+      if (source === 'move_in') {
+        return success(res, {
+          total: moveInResult.total,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          items: moveInResult.items
+        });
+      }
+      // source=all: 아래 internal 결과와 합쳐서 반환 (페이지네이션은 단순 concat — total은 합)
+      // 정확한 통합 페이지네이션이 필요하면 향후 UNION 쿼리로 개선
+      // 일단 internal 결과를 별도로 가져오기 위해 변수만 보관, 아래 흐름 계속 진행
+      req._moveInResult = moveInResult;
+    }
 
     const where = {};
 
@@ -4614,8 +4638,10 @@ const getServiceTasks = async (req, res) => {
       const dDay = Math.ceil(diffMs / (1000 * 60 * 60 * 24)); // 양수=남은일, 0=당일, 음수=지남
 
       return {
+        source: 'internal',
         id: task.id,
         contractId: task.contractId,
+        caseId: null,
         roomName: task.contract?.room?.roomName ?? null,
         taskType: task.taskType,
         referenceDate: task.referenceDate,
@@ -4631,6 +4657,22 @@ const getServiceTasks = async (req, res) => {
       };
     });
 
+    // source=all 일 때 move_in 결과 병합
+    if (req._moveInResult) {
+      const merged = [...data, ...req._moveInResult.items]
+        .sort((a, b) => new Date(a.referenceDate) - new Date(b.referenceDate));
+      return success(res, {
+        total: count + req._moveInResult.total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        items: merged,
+        breakdown: {
+          internal: count,
+          move_in: req._moveInResult.total
+        }
+      });
+    }
+
     return success(res, {
       total: count,
       page: parseInt(page),
@@ -4645,11 +4687,17 @@ const getServiceTasks = async (req, res) => {
 
 /**
  * 서비스 태스크 단건 조회 (변경 이력 포함)
- * GET /api/admin/service-tasks/:id
+ * GET /api/admin/service-tasks/:id?source=internal|move_in
  */
 const getServiceTask = async (req, res) => {
   try {
     const { id } = req.params;
+    const { source = 'internal' } = req.query;
+
+    if (source === 'move_in') {
+      const adminMoveIn = require('./adminMoveInServiceTaskController');
+      return adminMoveIn.getMoveInServiceTask(req, res);
+    }
 
     const task = await ServiceTask.findByPk(id, {
       include: [
@@ -4719,7 +4767,7 @@ const getServiceTask = async (req, res) => {
 
 /**
  * 서비스 태스크 상태 변경
- * PATCH /api/admin/service-tasks/:id/status
+ * PATCH /api/admin/service-tasks/:id/status?source=internal|move_in
  *
  * Body:
  *   status         : PENDING | RESERVED | COMPLETED | ISSUE  (필수)
@@ -4733,6 +4781,12 @@ const getServiceTask = async (req, res) => {
 const updateServiceTaskStatus = async (req, res) => {
   try {
     const { id } = req.params;
+    const { source = 'internal' } = req.query;
+
+    if (source === 'move_in') {
+      const adminMoveIn = require('./adminMoveInServiceTaskController');
+      return adminMoveIn.updateMoveInServiceTaskStatus(req, res);
+    }
     const {
       status: newStatus,
       vendorName, vendorContact, vendorRefNo,

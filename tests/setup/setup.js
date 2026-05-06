@@ -13,6 +13,13 @@ process.env.TZ = 'Asia/Seoul';
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env.test') });
 
+// 입주 준비 서비스 암호화 키 (테스트용)
+if (!process.env.MOVE_IN_PASSWORD_KEY) {
+  process.env.MOVE_IN_PASSWORD_KEY = require('crypto').randomBytes(32).toString('base64');
+}
+// Mock 결제 모드 (PayTag 미연동 환경)
+process.env.PAYMENT_USE_MOCK = process.env.PAYMENT_USE_MOCK || 'true';
+
 // ─── Firebase 전체 mock ───────────────────────────────────────────
 // config/firebaseAdmin.js 가 요구하는 환경변수 세팅
 process.env.FIREBASE_PROJECT_ID = 'test-project';
