@@ -110,10 +110,12 @@ estimatedCompletionDate: someDate.toISOString()  // UTC Z 반환
 /api/user              # 사용자 관리
 /api/host              # 호스트 방 등록/관리
 /api/host/move-in      # 입주 준비 서비스 (외부 플랫폼 임대인용 청소·옵션 부가 서비스)
+/api/guest/move-in     # 입주 준비 서비스 임차인용 (옵션 결제, 본인 요청 조회)
 /api/rooms             # 방 조회 (게스트용)
 /api/contracts         # 계약/예약
 /api/chats             # 채팅
 /api/admin             # 관리자 전용 (service-tasks는 ?source=internal|move_in|all 분기)
+/api/admin/move-in     # 입주 준비 서비스 관리자 (옵션 카탈로그 + 게스트 주문 모니터링)
 ```
 
 ---
@@ -135,17 +137,44 @@ move_in_rooms              간편 방 정보 (정식 Room과 분리, 심사 X)
   └─ move_in_cases         입주 준비 등록 (외부 계약 1건 단위)
         ├─ move_in_payment_requests   임차인 옵션 결제 요청 토큰 (1:1)
         ├─ move_in_payments           임대인 청소 결제 (별도 결제 테이블)
-        └─ move_in_service_tasks      외부 청소 업체 예약 (관리자 처리)
-              └─ move_in_service_task_logs   상태 변경 이력
+        ├─ move_in_service_tasks      외부 청소 업체 예약 (관리자 처리)
+        │     └─ move_in_service_task_logs   상태 변경 이력
+        └─ move_in_guest_orders       임차인 옵션 주문 (1:N — INITIAL + ADDITIONAL)
+              ├─ move_in_guest_order_items   주문 라인 (option_id 참조, 라인 단위 취소)
+              ├─ move_in_guest_payments      PG 결제 (청소결제와 별도 테이블)
+              └─ move_in_guest_order_logs    상태 변경 이력 (GUEST/ADMIN/SYSTEM)
+
+move_in_options            임차인용 옵션 카탈로그 (관리자 CRUD, RentalItem과 분리)
 ```
 
 ### 결제 흐름 (PayTag + Mock 하이브리드)
-- `orderId`: `M + yymmdd + 5자리` (예: `M260507_00001`) — `utils/orderIdGenerator.js#generateMoveInOrderId`
+- 임대인 청소 `orderId`: `M + yymmdd + 5자리` — `generateMoveInOrderId`
+- 임차인 옵션 `orderId`: `yymmdd-G + 4자리` (예: `260507-G0001`) — `generateMoveInGuestOrderId`
 - `PAYMENT_USE_MOCK=true` 환경변수로 PayTag 미연동 환경에서도 동작
 - 실패 시 `MoveInPayment.status=FAILED`, 케이스 `cleaning_status=PAYMENT_PENDING` 유지 (재시도 가능)
+- 임차인 옵션 결제 실패 시 `MoveInGuestPayment.status=FAILED`, 주문은 PENDING 유지 (재시도 가능)
 
-### 알림톡 (현재 TODO)
-`controllers/moveInPaymentRequestController.js`의 `dispatchPaymentRequestNotification`에 알리고 연동 hook만 작성됨. 템플릿명 `MOVE_IN_PAYMENT_REQUEST` 등록 후 주석 해제.
+### 임차인 결제 가드 (게스트 도메인 전용)
+- **D-5 마감**: 입주일 -5일 KST 23:59:59 (`utils/moveInGuestPaymentGuard.js`)
+- **PENDING 1건 제한**: 케이스당 PENDING 주문은 1건만 (`findExistingPendingOrder`)
+- **ADDITIONAL 가드**: INITIAL `PAID` 주문 존재 시에만 진입 (`findPaidInitialOrder`)
+- **phone 매칭**: 모든 결제·조회 API 가 `req.user.phoneNumber == case.guestPhone` 정규화 후 비교 (`utils/phoneHelper.js`)
+- **자동 매칭 hook**: 가입/본인인증 4지점에서 `safeAutoBindByPhone` 호출하여 phone 일치하는 미연결 케이스 자동 bind (`services/moveInGuestBindService.js`)
+
+### ⚠️ 게스트 응답 시 청소 정보 절대 노출 금지 (PRD 14.7-8)
+임차인이 임대인의 청소 결제 여부를 알면 안 됨. 게스트 측 컨트롤러는 raw `MoveInCase` 직접 반환 금지. **반드시 `utils/moveInGuestSerializer.js`의 `serializeGuestCase()` / `serializeGuestOrder()` / `serializeOption()` 사용**. 차단 필드:
+- `cleaningStatus`, `cleaningFee`, `cleaningPaidAt`
+- `commonEntrancePassword`, `doorLockPassword` (room snapshot 의 비밀번호)
+
+관리자 게스트 주문 조회(`/api/admin/move-in/guest-orders`) 도 동일 정책 적용 — `case` 응답에서 청소 필드 의도적 제외.
+
+### 알림 (인앱 + 알림톡 TODO)
+**인앱 알림** 2종 구현됨 (`Notification.type` ENUM):
+- `MOVE_IN_PAYMENT_REQUEST` — 임대인이 결제 요청 발송 시 (게스트 가입돼 있으면 자동 생성)
+- `MOVE_IN_PAYMENT_COMPLETED` — 임차인 결제 성공 시
+- 둘 다 deeplink target=`move-in` (프론트는 `/guest/move-in/requests/:caseId` 라우팅)
+
+**🔴 알림톡 TODO**: `controllers/moveInPaymentRequestController.js`의 `dispatchPaymentRequestNotification`에 알리고 연동 hook만 작성됨. 템플릿명 `MOVE_IN_PAYMENT_REQUEST` 등록 후 주석 해제.
 
 ### 스케줄러 (`schedulers/moveInScheduler.js`)
 - 매 10분 실행 (기존 contractScheduler와 독립)
@@ -158,6 +187,10 @@ move_in_rooms              간편 방 정보 (정식 Room과 분리, 심사 X)
 - `all`: 두 도메인 합쳐서 referenceDate 정렬 + `breakdown` 포함
 
 ### 상세 문서
-- API: `C:\study\backend_md_list\입주준비서비스_임대인_API.md`
-- 관리자: `C:\study\backend_md_list\입주준비서비스_관리자_API.md`
-- 구현 이력: `C:\study\backend_md_list\입주준비서비스_임대인_구현계획.md`
+- 임대인 API: `C:\study\backend_md_list\입주준비서비스_임대인_API.md`
+- 임차인 API: `C:\study\backend_md_list\입주준비서비스_임차인_API.md`
+- 임대인 관리자: `C:\study\backend_md_list\입주준비서비스_관리자_API.md`
+- 임차인 관리자: `C:\study\backend_md_list\입주준비서비스_임차인_관리자_API.md`
+- 임대인 구현 이력: `C:\study\backend_md_list\입주준비서비스_임대인_구현계획.md`
+- 임차인 구현 이력: `C:\study\backend_md_list\입주준비서비스_임차인_구현계획.md`
+- 임차인 프론트 가이드: `C:\study\front_md_list\입주준비서비스_임차인_프론트_가이드.md`

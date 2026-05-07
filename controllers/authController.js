@@ -4,6 +4,7 @@ const { ErrorCodes, success, error, created } = require('../utils/responseHelper
 const { validateEmail, validatePassword, generateNickname } = require('../utils/validator');
 const { withTransaction } = require('../utils/transactionHelper');
 const { Op } = require('sequelize');
+const { safeAutoBindByPhone } = require('../services/moveInGuestBindService');
 
 // refreshToken 만료 기간 (환경변수 기반, 기본 14일)
 const getRefreshExpiresAt = () => {
@@ -151,6 +152,11 @@ const register = async (req, res) => {
 
     // KMC 인증 임시 레코드 사용 처리 (재사용 방지)
     await kmcRecord.update({ used: true }, { transaction });
+
+    // 입주 준비 서비스 자동 매칭 (PRD 4.4 / 10.2)
+    if (newUser.phoneNumber) {
+      await safeAutoBindByPhone(newUser.id, newUser.phoneNumber, transaction);
+    }
 
     // host 가입 시 계좌 저장
     if (isHost) {

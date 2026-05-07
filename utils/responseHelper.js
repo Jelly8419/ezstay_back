@@ -126,6 +126,23 @@ const ErrorCodes = {
   RENTAL_ORDER_ALREADY_CANCELLED: { code: 4713, message: '이미 취소된 주문입니다.' },
   RENTAL_MINIMUM_AMOUNT_REQUIRED: { code: 4714, message: '별도 배송이 필요한 경우 최소 주문금액은 10,000원입니다.' },
 
+  // 입주 준비 서비스 - 임차인 (478x)
+  MOVE_IN_GUEST_TOKEN_INVALID:           { code: 4780, message: '입주 준비 서비스 링크가 유효하지 않습니다.' },
+  MOVE_IN_GUEST_TOKEN_EXPIRED:           { code: 4781, message: '해당 입주 준비 서비스 링크가 만료되었거나 사용할 수 없습니다.' },
+  MOVE_IN_GUEST_PHONE_MISMATCH:          { code: 4782, message: '임대인이 등록한 임차인 연락처와 현재 계정의 연락처가 일치하지 않습니다.' },
+  MOVE_IN_GUEST_CASE_NOT_FOUND:          { code: 4783, message: '입주 준비 요청을 찾을 수 없습니다.' },
+  MOVE_IN_GUEST_PAYMENT_DEADLINE_PASSED: { code: 4784, message: '입주일 5일 전까지만 결제할 수 있습니다.' },
+  MOVE_IN_GUEST_OPTION_REQUIRED:         { code: 4785, message: '결제할 입주 준비 옵션을 선택해주세요.' },
+  MOVE_IN_GUEST_OPTION_UNAVAILABLE:      { code: 4786, message: '선택한 옵션을 현재 사용할 수 없습니다.' },
+  MOVE_IN_GUEST_OPTION_NOT_FOUND:        { code: 4787, message: '옵션을 찾을 수 없습니다.' },
+  MOVE_IN_GUEST_STOCK_INSUFFICIENT:      { code: 4788, message: '선택한 옵션의 재고가 부족합니다.' },
+  MOVE_IN_GUEST_AMOUNT_MISMATCH:         { code: 4789, message: '결제 금액이 변경되었습니다. 다시 시도해주세요.' },
+  MOVE_IN_GUEST_ORDER_NOT_FOUND:         { code: 4790, message: '주문을 찾을 수 없습니다.' },
+  MOVE_IN_GUEST_ORDER_NOT_PAYABLE:       { code: 4791, message: '결제 가능한 상태의 주문이 아닙니다.' },
+  MOVE_IN_GUEST_ORDER_NOT_CANCELLABLE:   { code: 4792, message: '미결제 주문만 취소할 수 있습니다.' },
+  MOVE_IN_GUEST_PENDING_ORDER_EXISTS:    { code: 4793, message: '결제 대기 중인 주문이 있습니다. 기존 주문을 결제하거나 취소해주세요.' },
+  MOVE_IN_GUEST_PAYMENT_NOT_FOUND:       { code: 4794, message: '결제 정보를 찾을 수 없습니다.' },
+
   // 알림 관련 (48xx)
   NOTIFICATION_NOT_FOUND: { code: 4801, message: '알림을 찾을 수 없습니다.' },
 

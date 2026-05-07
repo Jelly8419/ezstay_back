@@ -18,6 +18,8 @@ const {
 const { ErrorCodes, success, error, created, updated } = require('../utils/responseHelper');
 const cryptoHelper = require('../utils/cryptoHelper');
 const moveInCaseService = require('../services/moveInCaseService');
+const { normalizePhone } = require('../utils/phoneHelper');
+const { findGuestUserIdByPhone } = require('../services/moveInGuestBindService');
 const {
   _dispatchPaymentRequestNotification: dispatchPaymentRequestNotification
 } = require('./moveInPaymentRequestController');
@@ -181,7 +183,9 @@ const createCase = async (req, res) => {
       return error(res, ErrorCodes.VALIDATION_ERROR, 400, validationErrors);
     }
 
-    const { moveInRoomId, checkInDate, checkOutDate, guestName, guestPhone, requestMemo } = req.body;
+    const { moveInRoomId, checkInDate, checkOutDate, guestName, requestMemo } = req.body;
+    // guestPhone 은 저장 시점에 정규화 (Phase 4 정책: B+C 혼합 — 저장도 정규화, 매칭도 정규화)
+    const guestPhone = normalizePhone(req.body.guestPhone);
     const sendGuestPaymentRequest = req.body.sendGuestPaymentRequest !== false; // 기본 true
 
     // 1. 본인 방 확인
@@ -209,7 +213,9 @@ const createCase = async (req, res) => {
       );
     }
 
-    // 3. 케이스 생성
+    // 3. 케이스 생성 시점에 임차인이 이미 EZstay 가입돼 있으면 즉시 bind
+    const { userId: preBoundGuestUserId } = await findGuestUserIdByPhone(guestPhone, transaction);
+
     const caseRow = await MoveInCase.create({
       hostId,
       moveInRoomId,
@@ -217,6 +223,7 @@ const createCase = async (req, res) => {
       checkOutDate,
       guestName,
       guestPhone,
+      guestUserId: preBoundGuestUserId,
       requestMemo: requestMemo ?? null,
       cleaningStatus: 'NOT_REQUESTED',
       roomSnapshot: moveInCaseService.buildRoomSnapshot(room)
@@ -327,6 +334,10 @@ const updateCase = async (req, res) => {
     ['checkInDate', 'checkOutDate', 'guestName', 'guestPhone', 'requestMemo'].forEach(f => {
       if (req.body[f] !== undefined) updateData[f] = req.body[f];
     });
+    // guestPhone 변경 시 정규화 (Phase 4)
+    if (updateData.guestPhone !== undefined) {
+      updateData.guestPhone = normalizePhone(updateData.guestPhone);
+    }
 
     // 날짜 변경 시 겹침 재검증
     const newCheckIn = updateData.checkInDate ?? caseRow.checkInDate;
@@ -358,6 +369,12 @@ const updateCase = async (req, res) => {
 
     // 휴대폰 번호 변경 여부는 update 전에 판정 (update 후엔 caseRow.guestPhone이 이미 새 값)
     const phoneChanged = updateData.guestPhone && updateData.guestPhone !== caseRow.guestPhone;
+
+    // 휴대폰 번호 변경 시 guest_user_id 재매칭 시도 (Phase 4)
+    if (phoneChanged) {
+      const { userId: rebound } = await findGuestUserIdByPhone(updateData.guestPhone, transaction);
+      updateData.guestUserId = rebound; // null 이면 매칭 해제
+    }
 
     await caseRow.update(updateData, { transaction });
 

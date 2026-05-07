@@ -28,6 +28,9 @@ const { adminRouter: rentalItemAdminRoutes } = require('../../routes/rentalItemR
 const rentalItemRoutes = require('../../routes/rentalItemRoutes');
 const adminRoutes      = require('../../routes/adminRoutes');
 const moveInRoutes     = require('../../routes/moveInRoutes');
+const guestMoveInRoutes = require('../../routes/guestMoveInRoutes');
+const adminMoveInOptionRoutes = require('../../routes/adminMoveInOptionRoutes');
+const adminGuestOrderRoutes = require('../../routes/adminGuestOrderRoutes');
 
 app.use('/api/rooms',          roomRoutes);
 app.use('/api/auth',           authRoutes);
@@ -40,6 +43,9 @@ app.use('/api',                rentalOrderRoutes);
 app.use('/api/rental-items',   rentalItemRoutes);
 app.use('/api/admin/rental-items', rentalItemAdminRoutes);
 app.use('/api/admin',          adminRoutes);
+app.use('/api/admin/move-in',  adminMoveInOptionRoutes);
+app.use('/api/admin/move-in',  adminGuestOrderRoutes);
+app.use('/api/guest/move-in',  guestMoveInRoutes);
 app.use('/api/notifications',  notificationRoutes);
 
 app.get('/', (req, res) => res.json({ ok: true }));

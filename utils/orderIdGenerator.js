@@ -152,4 +152,66 @@ async function generateMoveInOrderId(transaction = null) {
   }
 }
 
-module.exports = { generateOrderId, generateMoveInOrderId };
+/**
+ * 입주 준비 서비스 임차인 옵션 결제 주문번호 생성
+ * 형식: yymmdd-G#### (4자리)
+ * 예: '260507-G0001'
+ *
+ * - 임대인 청소 결제 (M prefix) 와 분리
+ * - 내부 계약 렌탈 (R prefix, YYMMDD-R0001) 와 동일 길이/패턴 (총 12자)
+ * - move_in_guest_orders.order_id (VARCHAR(15)) 에 저장 + UNIQUE
+ *
+ * @param {Transaction} [transaction]
+ * @returns {Promise<string>}
+ */
+async function generateMoveInGuestOrderId(transaction = null) {
+  const shouldCommit = !transaction;
+  const t = transaction || await sequelize.transaction();
+
+  try {
+    const { MoveInGuestOrder } = require('../models');
+
+    const today = new Date();
+    const yymmdd = [
+      String(today.getFullYear()).slice(-2),
+      String(today.getMonth() + 1).padStart(2, '0'),
+      String(today.getDate()).padStart(2, '0')
+    ].join('');
+
+    const prefix = `${yymmdd}-G`;
+    const result = await MoveInGuestOrder.findOne({
+      where: sequelize.where(
+        sequelize.fn('LEFT', sequelize.col('order_id'), prefix.length),
+        prefix
+      ),
+      attributes: [[sequelize.fn('MAX', sequelize.col('order_id')), 'maxOrderId']],
+      transaction: t,
+      raw: true
+    });
+
+    let nextNumber = 1;
+    if (result && result.maxOrderId) {
+      const seq = parseInt(result.maxOrderId.slice(prefix.length), 10);
+      if (Number.isFinite(seq)) nextNumber = seq + 1;
+    }
+
+    if (nextNumber > 9999) {
+      throw new Error('일일 입주 준비 게스트 주문번호 한도 초과 (9999건)');
+    }
+
+    const orderId = `${prefix}${String(nextNumber).padStart(4, '0')}`;
+
+    if (shouldCommit) {
+      await t.commit();
+    }
+
+    return orderId;
+  } catch (err) {
+    if (shouldCommit) {
+      await t.rollback();
+    }
+    throw err;
+  }
+}
+
+module.exports = { generateOrderId, generateMoveInOrderId, generateMoveInGuestOrderId };

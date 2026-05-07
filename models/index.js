@@ -66,6 +66,13 @@ const MoveInPaymentModel = require('./MoveInPayment');
 const MoveInServiceTaskModel = require('./MoveInServiceTask');
 const MoveInServiceTaskLogModel = require('./MoveInServiceTaskLog');
 
+// 입주 준비 서비스 - 임차인(게스트) 도메인 모델
+const MoveInOptionModel = require('./MoveInOption');
+const MoveInGuestOrderModel = require('./MoveInGuestOrder');
+const MoveInGuestOrderItemModel = require('./MoveInGuestOrderItem');
+const MoveInGuestPaymentModel = require('./MoveInGuestPayment');
+const MoveInGuestOrderLogModel = require('./MoveInGuestOrderLog');
+
 // 핵심 유저 모델 초기화
 const User = UserModel(sequelize);
 const LocalUser = LocalUserModel(sequelize);
@@ -110,6 +117,13 @@ const MoveInPaymentRequest = MoveInPaymentRequestModel(sequelize);
 const MoveInPayment = MoveInPaymentModel(sequelize);
 const MoveInServiceTask = MoveInServiceTaskModel(sequelize);
 const MoveInServiceTaskLog = MoveInServiceTaskLogModel(sequelize);
+
+// 임차인(게스트) 도메인 초기화
+const MoveInOption = MoveInOptionModel(sequelize);
+const MoveInGuestOrder = MoveInGuestOrderModel(sequelize);
+const MoveInGuestOrderItem = MoveInGuestOrderItemModel(sequelize);
+const MoveInGuestPayment = MoveInGuestPaymentModel(sequelize);
+const MoveInGuestOrderLog = MoveInGuestOrderLogModel(sequelize);
 
 // 방 관리 모델 초기화
 const RoomMemoModel = require('./RoomMemo');
@@ -1186,6 +1200,100 @@ MoveInServiceTaskLog.belongsTo(MoveInServiceTask, {
 });
 
 // =====================================================
+// MoveIn 임차인(게스트) 도메인 관계 설정
+// =====================================================
+
+// MoveInCase ↔ MoveInGuestOrder (1:N)
+MoveInCase.hasMany(MoveInGuestOrder, {
+  foreignKey: 'caseId',
+  as: 'guestOrders',
+  onDelete: 'RESTRICT',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestOrder.belongsTo(MoveInCase, {
+  foreignKey: 'caseId',
+  as: 'case'
+});
+
+// User ↔ MoveInGuestOrder (게스트)
+User.hasMany(MoveInGuestOrder, {
+  foreignKey: 'guestUserId',
+  as: 'moveInGuestOrders',
+  onDelete: 'RESTRICT',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestOrder.belongsTo(User, {
+  foreignKey: 'guestUserId',
+  as: 'guest'
+});
+
+// MoveInGuestOrder ↔ MoveInGuestOrderItem (1:N)
+MoveInGuestOrder.hasMany(MoveInGuestOrderItem, {
+  foreignKey: 'guestOrderId',
+  as: 'items',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestOrderItem.belongsTo(MoveInGuestOrder, {
+  foreignKey: 'guestOrderId',
+  as: 'order'
+});
+
+// MoveInOption ↔ MoveInGuestOrderItem (1:N)
+MoveInOption.hasMany(MoveInGuestOrderItem, {
+  foreignKey: 'optionId',
+  as: 'orderItems',
+  onDelete: 'RESTRICT',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestOrderItem.belongsTo(MoveInOption, {
+  foreignKey: 'optionId',
+  as: 'option'
+});
+
+// MoveInGuestOrder ↔ MoveInGuestPayment (1:N)
+MoveInGuestOrder.hasMany(MoveInGuestPayment, {
+  foreignKey: 'guestOrderId',
+  as: 'payments',
+  onDelete: 'RESTRICT',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestPayment.belongsTo(MoveInGuestOrder, {
+  foreignKey: 'guestOrderId',
+  as: 'order'
+});
+MoveInGuestPayment.belongsTo(MoveInCase, {
+  foreignKey: 'caseId',
+  as: 'case'
+});
+MoveInGuestPayment.belongsTo(User, {
+  foreignKey: 'guestUserId',
+  as: 'guest'
+});
+
+// MoveInGuestOrder ↔ MoveInGuestOrderLog (1:N)
+MoveInGuestOrder.hasMany(MoveInGuestOrderLog, {
+  foreignKey: 'guestOrderId',
+  as: 'logs',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestOrderLog.belongsTo(MoveInGuestOrder, {
+  foreignKey: 'guestOrderId',
+  as: 'order'
+});
+MoveInGuestOrderItem.hasMany(MoveInGuestOrderLog, {
+  foreignKey: 'guestOrderItemId',
+  as: 'logs',
+  onDelete: 'SET NULL',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestOrderLog.belongsTo(MoveInGuestOrderItem, {
+  foreignKey: 'guestOrderItemId',
+  as: 'orderItem'
+});
+
+// =====================================================
 // PromotionEvent / PromotionParticipant 관계 설정
 // =====================================================
 PromotionEvent.hasMany(PromotionParticipant, {
@@ -1450,5 +1558,10 @@ module.exports = {
   MoveInPaymentRequest,
   MoveInPayment,
   MoveInServiceTask,
-  MoveInServiceTaskLog
+  MoveInServiceTaskLog,
+  MoveInOption,
+  MoveInGuestOrder,
+  MoveInGuestOrderItem,
+  MoveInGuestPayment,
+  MoveInGuestOrderLog
 };

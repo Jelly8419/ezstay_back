@@ -63,13 +63,27 @@ async function cleanupMoveInByHost(hostId) {
     MoveInServiceTaskLog,
     MoveInServiceTask,
     MoveInCase,
-    MoveInRoom
+    MoveInRoom,
+    MoveInGuestOrder,
+    MoveInGuestOrderItem,
+    MoveInGuestPayment,
+    MoveInGuestOrderLog
   } = require('../../../models');
 
   const cases = await MoveInCase.findAll({ where: { hostId }, attributes: ['id'] });
   const caseIds = cases.map(c => c.id);
 
   if (caseIds.length > 0) {
+    // 게스트 도메인 데이터 먼저 정리 (FK: orders → case)
+    const orders = await MoveInGuestOrder.findAll({ where: { caseId: caseIds }, attributes: ['id'] });
+    const orderIds = orders.map(o => o.id);
+    if (orderIds.length > 0) {
+      await MoveInGuestOrderLog.destroy({ where: { guestOrderId: orderIds } });
+      await MoveInGuestOrderItem.destroy({ where: { guestOrderId: orderIds } });
+      await MoveInGuestPayment.destroy({ where: { guestOrderId: orderIds } });
+      await MoveInGuestOrder.destroy({ where: { id: orderIds } });
+    }
+
     const tasks = await MoveInServiceTask.findAll({ where: { caseId: caseIds }, attributes: ['id'] });
     const taskIds = tasks.map(t => t.id);
     if (taskIds.length > 0) {

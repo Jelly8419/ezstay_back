@@ -65,6 +65,29 @@ async function dispatchPaymentRequestNotification({ caseRow, token }) {
     `[MoveIn][TODO] 알림톡 미연동 — 발송 스킵: caseId=${caseRow.id}, ` +
     `phone=${caseRow.guestPhone}, link=${buildPaymentLink(token)}`
   );
+
+  // 인앱 알림 — 임차인이 이미 EZstay 가입돼 있으면 알림함에 기록 (PRD 5.3)
+  // best-effort: 알림 실패가 발송 자체를 막지 않음
+  if (caseRow.guestUserId) {
+    try {
+      const NotificationService = require('../services/notificationService');
+      await NotificationService.create({
+        userId: caseRow.guestUserId,
+        userMode: 'guest',
+        type: 'MOVE_IN_PAYMENT_REQUEST',
+        title: '입주 준비 결제 요청',
+        message: '임대인이 입주 준비 서비스 결제를 요청했어요. 옵션을 선택해 결제해주세요.',
+        metadata: {
+          caseId: caseRow.id,
+          checkInDate: caseRow.checkInDate,
+          checkOutDate: caseRow.checkOutDate
+        }
+      });
+    } catch (notifyErr) {
+      console.error('[MoveIn] 인앱 알림 생성 실패:', notifyErr.message);
+    }
+  }
+
   return { success: true, mock: true };
 }
 
