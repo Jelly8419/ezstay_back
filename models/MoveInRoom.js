@@ -136,6 +136,42 @@ module.exports = (sequelize) => {
       comment: '비고'
     },
 
+    reviewStatus: {
+      type: DataTypes.ENUM('PENDING', 'APPROVED', 'REJECTED'),
+      allowNull: false,
+      defaultValue: 'PENDING',
+      field: 'review_status',
+      comment: '심사 상태'
+    },
+
+    submittedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'submitted_at',
+      comment: '심사 요청 시각'
+    },
+
+    approvedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'approved_at',
+      comment: '승인 시각'
+    },
+
+    rejectedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'rejected_at',
+      comment: '반려 시각'
+    },
+
+    rejectionReason: {
+      type: DataTypes.STRING(500),
+      allowNull: true,
+      field: 'rejection_reason',
+      comment: '반려 사유'
+    },
+
     deletedAt: {
       type: DataTypes.DATE,
       allowNull: true,

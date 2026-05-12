@@ -485,6 +485,24 @@ const templates = {
   },
 
   // =====================================================
+  // 입주 준비 서비스 - 임차인 결제 요청 (UH_7964)
+  // =====================================================
+  move_in_payment_request_guest: {
+    tplCode: 'UH_7964',
+    targetRole: 'guest',
+    eventLabel: '입주 준비 결제 요청_임차인',
+    varMap: { hostName: '임대인', checkInDate: '입주일' },
+    // 버튼 URL: http://#{url} — url 변수에 host 포함 없는 path (예: "ezstay.kr/move-in/payment/<token>")
+    fallbackContent:
+      `[입주 준비 서비스 확인 요청]\n\n` +
+      `#{임대인}님이 입주 준비 서비스를 요청했습니다.\n` +
+      `입주일: #{입주일}\n\n` +
+      `아래 버튼을 통해 입주 용품, 침구류 대여 등 필요한 옵션을 선택하고 확인할 수 있습니다.`,
+    buildFallbackSMS: (data) =>
+      `[EZstay] ${data.hostName}님이 입주 준비 서비스를 요청했습니다. 입주일: ${data.checkInDate}. 앱에서 확인해주세요.`
+  },
+
+  // =====================================================
   // 신규. 옵션 상품 결제 취소
   // =====================================================
   option_payment_canceled_guest: {

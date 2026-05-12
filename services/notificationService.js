@@ -731,6 +731,41 @@ class NotificationService {
       }
     });
   }
+
+  // =====================================================
+  // 입주 준비 서비스 - 방 심사 결과 알림 (임대인 수신)
+  // =====================================================
+
+  /**
+   * MoveInRoom 심사 승인/반려 시 임대인에게 인앱 알림 발송
+   *
+   * @param {MoveInRoom} room        - reviewStatus 갱신 후 인스턴스
+   * @param {boolean} approved
+   * @param {string} [rejectReason]  - 반려 시 사유
+   */
+  static async notifyMoveInRoomReviewResult(room, approved, rejectReason = '') {
+    const roomLabel = room.roomName || room.address || '입주 준비 방';
+    const title = approved
+      ? '입주 준비 방 심사 승인'
+      : '입주 준비 방 심사 반려';
+    const message = approved
+      ? `'${roomLabel}' 방이 심사 승인되어 입주 준비 등록을 진행할 수 있습니다.`
+      : `'${roomLabel}' 방이 심사 반려되었습니다.${rejectReason ? ` 사유: ${rejectReason}` : ''}`;
+
+    await this.create({
+      userId: room.hostId,
+      userMode: 'host',
+      type: 'MOVE_IN_ROOM_REVIEW_RESULT',
+      title,
+      message,
+      metadata: {
+        moveInRoomId: room.id,
+        roomLabel,
+        approved,
+        rejectReason: approved ? null : rejectReason
+      }
+    });
+  }
 }
 
 module.exports = NotificationService;

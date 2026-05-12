@@ -143,6 +143,9 @@ const ErrorCodes = {
   MOVE_IN_GUEST_PENDING_ORDER_EXISTS:    { code: 4793, message: '결제 대기 중인 주문이 있습니다. 기존 주문을 결제하거나 취소해주세요.' },
   MOVE_IN_GUEST_PAYMENT_NOT_FOUND:       { code: 4794, message: '결제 정보를 찾을 수 없습니다.' },
 
+  // 입주 준비 - 방 심사 (4795~)
+  MOVE_IN_ROOM_NOT_APPROVED:             { code: 4795, message: '심사 승인된 방만 사용할 수 있습니다.' },
+
   // 알림 관련 (48xx)
   NOTIFICATION_NOT_FOUND: { code: 4801, message: '알림을 찾을 수 없습니다.' },
 

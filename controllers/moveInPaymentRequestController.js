@@ -8,15 +8,14 @@
  *
  * PRD 10.1: 임대인에게 임차인 결제 완료 여부 비노출 → status는 NOT_SENT/SENT만
  *
- * ⚠️ TODO: 알림톡 발송
- *   - 현재 알리고에 청소 결제 요청용 알림톡 템플릿이 등록되지 않은 상태
- *   - 템플릿 등록 후 services/alimtalkService 의 sendAlimtalk 연동 필요
- *   - 등록 예정 템플릿: MOVE_IN_PAYMENT_REQUEST (게스트에게 결제 링크 안내)
- *   - 변수: 임차인이름, 입주일, 퇴실일, 결제링크
+ * 알림톡: UH_7964 (move_in_payment_request_guest)
+ *  - 변수: 임대인이름, 입주일
+ *  - 버튼: "확인하기" — paymentLink (모바일/PC 동일)
  */
-const { sequelize, MoveInCase, MoveInPaymentRequest } = require('../models');
+const { sequelize, MoveInCase, MoveInPaymentRequest, User } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 const moveInCaseService = require('../services/moveInCaseService');
+const AlimtalkService = require('../services/alimtalkService');
 
 const GUEST_PAYMENT_PAGE_URL = process.env.GUEST_MOVE_IN_PAYMENT_URL
   || 'https://ezstay.kr/move-in/payment';
@@ -41,33 +40,44 @@ async function loadCaseWithRequest(caseId, hostId, transaction = null) {
 }
 
 /**
- * 알림톡 발송 시뮬레이션 (TODO: 실제 발송 연동)
+ * 알림톡 + 인앱 알림 발송 (UH_7964)
  *
- * 현재는 항상 성공으로 가정. 실제 연동 시:
- *   - alimtalkService.sendAlimtalk(...) 호출
- *   - 실패 시 throw → 호출 측에서 NOT_SENT 유지
+ * 동작:
+ *  1. 임대인 정보 조회 (이름 변수용)
+ *  2. AlimtalkService.sendMoveInPaymentRequest 호출 (fire-and-forget — 실패해도 발송 자체는 진행)
+ *  3. 임차인이 EZstay 가입돼있으면 인앱 알림 생성 (best-effort)
+ *
+ * mock 플래그:
+ *  - 알림톡이 실제 발송됐으면 false
+ *  - 템플릿 미등록·전화번호 누락·발송 실패 등으로 skip 됐으면 true (UI 안내용)
  *
  * @returns {Promise<{ success: boolean, mock: boolean }>}
  */
 async function dispatchPaymentRequestNotification({ caseRow, token }) {
-  // TODO(알림톡 등록 후): 아래 주석 해제 + 템플릿 등록
-  // const { sendAlimtalk } = require('../services/alimtalkService');
-  // await sendAlimtalk('MOVE_IN_PAYMENT_REQUEST',
-  //   { phoneNumber: caseRow.guestPhone },
-  //   {
-  //     guestName: caseRow.guestName,
-  //     checkInDate: caseRow.checkInDate,
-  //     checkOutDate: caseRow.checkOutDate,
-  //     paymentLink: buildPaymentLink(token)
-  //   }
-  // );
-  console.log(
-    `[MoveIn][TODO] 알림톡 미연동 — 발송 스킵: caseId=${caseRow.id}, ` +
-    `phone=${caseRow.guestPhone}, link=${buildPaymentLink(token)}`
-  );
+  const paymentLink = buildPaymentLink(token);
+  let alimtalkSent = false;
+
+  try {
+    const host = await User.findByPk(caseRow.hostId, {
+      attributes: ['id', 'name', 'nickname']
+    });
+    const hostName = host?.nickname || host?.name || '임대인';
+
+    const result = await AlimtalkService.sendMoveInPaymentRequest(
+      { phoneNumber: caseRow.guestPhone },
+      {
+        hostName,
+        checkInDate: caseRow.checkInDate,
+        paymentLink
+      }
+    );
+    alimtalkSent = !!result?.sent;
+  } catch (notifyErr) {
+    // best-effort: 알림톡 실패가 발송 자체를 막지 않음
+    console.error('[MoveIn] 알림톡 발송 실패:', notifyErr.message);
+  }
 
   // 인앱 알림 — 임차인이 이미 EZstay 가입돼 있으면 알림함에 기록 (PRD 5.3)
-  // best-effort: 알림 실패가 발송 자체를 막지 않음
   if (caseRow.guestUserId) {
     try {
       const NotificationService = require('../services/notificationService');
@@ -88,7 +98,7 @@ async function dispatchPaymentRequestNotification({ caseRow, token }) {
     }
   }
 
-  return { success: true, mock: true };
+  return { success: true, mock: !alimtalkSent };
 }
 
 /**
@@ -156,7 +166,7 @@ const sendPaymentRequest = async (req, res) => {
       sentAt: now,
       paymentLink: buildPaymentLink(request.token),
       _note: dispatched.mock
-        ? '⚠️ 알림톡 템플릿 미등록 상태 — 실제 발송 없이 상태만 SENT로 변경되었습니다.'
+        ? '⚠️ 알림톡 발송이 스킵되었습니다 (템플릿 미동기화·전화번호 누락·발송 실패 중 하나). 상태는 SENT 로 변경되었습니다.'
         : undefined
     }, '결제 요청이 발송되었습니다.');
   } catch (err) {
@@ -225,7 +235,7 @@ const resendPaymentRequest = async (req, res) => {
       resendCount: request.resendCount,
       paymentLink: buildPaymentLink(request.token),
       _note: dispatched.mock
-        ? '⚠️ 알림톡 템플릿 미등록 상태 — 실제 발송 없이 카운트만 증가했습니다.'
+        ? '⚠️ 알림톡 발송이 스킵되었습니다 (템플릿 미동기화·전화번호 누락·발송 실패 중 하나). 카운트만 증가했습니다.'
         : undefined
     }, '결제 요청이 재발송되었습니다.');
   } catch (err) {

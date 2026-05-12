@@ -455,7 +455,12 @@ const updateUserStatus = async (req, res) => {
 
 /**
  * 매물 목록 조회 (관리자용)
- * GET /api/admin/properties
+ * GET /api/admin/properties[?source=internal|move_in|all][&status=...]
+ *
+ * source 분기:
+ *  - internal (기본): 정식 Room
+ *  - move_in: MoveInRoom (status 는 reviewStatus 로 매핑)
+ *  - all: 두 도메인 합쳐서 createdAt DESC + breakdown
  */
 const getProperties = async (req, res) => {
   try {
@@ -465,24 +470,92 @@ const getProperties = async (req, res) => {
       search = '',
       status = '',
       sortBy = 'createdAt',
-      sortOrder = 'DESC'
+      sortOrder = 'DESC',
+      source = 'internal'
     } = req.query;
 
+    if (source === 'move_in') {
+      const adminMoveInRoomController = require('./adminMoveInRoomController');
+      const { rows, count } = await adminMoveInRoomController.listMoveInRooms({
+        status: status || undefined,
+        search: search || undefined,
+        page, limit
+      });
+      return success(res, {
+        properties: rows,
+        pagination: {
+          total: count,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: Math.ceil(count / limit)
+        }
+      }, '매물 목록 조회 성공 (입주 준비 서비스)');
+    }
+
+    if (source === 'all') {
+      const adminMoveInRoomController = require('./adminMoveInRoomController');
+      const internalWhere = {};
+      if (search) {
+        internalWhere[Op.or] = [
+          { roomName: { [Op.like]: `%${search}%` } },
+          { address: { [Op.like]: `%${search}%` } }
+        ];
+      }
+      if (status) internalWhere.status = status;
+
+      const [internalResult, moveInResult] = await Promise.all([
+        Room.findAndCountAll({
+          where: internalWhere,
+          order: [[sortBy, sortOrder]],
+          include: [
+            { model: User, as: 'host', attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber'] },
+            { model: RoomPhoto, as: 'photos', attributes: ['id', 'url'], limit: 1, order: [['order', 'ASC']] }
+          ]
+        }),
+        adminMoveInRoomController.listMoveInRooms({
+          status: status || undefined,
+          search: search || undefined,
+          page: 1, limit: 10000
+        })
+      ]);
+
+      const internalRows = internalResult.rows.map(r => {
+        const obj = r.toJSON();
+        obj.source = 'internal';
+        obj.dailyRentLabel = null;
+        return obj;
+      });
+      const merged = [...internalRows, ...moveInResult.rows].sort((a, b) => {
+        const aT = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const bT = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return sortOrder === 'ASC' ? aT - bT : bT - aT;
+      });
+      const offset = (parseInt(page) - 1) * parseInt(limit);
+      const paged = merged.slice(offset, offset + parseInt(limit));
+      const total = internalResult.count + moveInResult.count;
+      return success(res, {
+        properties: paged,
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: Math.ceil(total / limit)
+        },
+        breakdown: { internal: internalResult.count, move_in: moveInResult.count }
+      }, '매물 목록 조회 성공 (통합)');
+    }
+
+    // internal (기본)
     const offset = (page - 1) * limit;
     const where = {};
 
-    // 검색 조건
     if (search) {
       where[Op.or] = [
         { roomName: { [Op.like]: `%${search}%` } },
         { address: { [Op.like]: `%${search}%` } }
       ];
     }
-
-    // 상태 필터
-    if (status) {
-      where.status = status;
-    }
+    if (status) where.status = status;
 
     const { rows: properties, count: total } = await Room.findAndCountAll({
       where,
@@ -490,18 +563,8 @@ const getProperties = async (req, res) => {
       limit: parseInt(limit),
       order: [[sortBy, sortOrder]],
       include: [
-        {
-          model: User,
-          as: 'host',
-          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
-        },
-        {
-          model: RoomPhoto,
-          as: 'photos',
-          attributes: ['id', 'url'],
-          limit: 1,
-          order: [['order', 'ASC']]
-        }
+        { model: User, as: 'host', attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber'] },
+        { model: RoomPhoto, as: 'photos', attributes: ['id', 'url'], limit: 1, order: [['order', 'ASC']] }
       ]
     });
 
@@ -522,29 +585,84 @@ const getProperties = async (req, res) => {
 
 /**
  * 매물 심사 대기 목록 조회
- * GET /api/admin/properties/pending-review
+ * GET /api/admin/properties/pending-review[?source=internal|move_in|all]
+ *
+ * source 분기 (Notion "입주 준비 서비스 Admin" PRD):
+ *  - internal (기본): 기존 정식 Room
+ *  - move_in: MoveInRoom (reviewStatus=PENDING)
+ *  - all: 두 도메인 합쳐서 submittedAt ASC 정렬 + breakdown 포함
  */
 const getPendingReviews = async (req, res) => {
   try {
-    const { page = 1, limit = 20 } = req.query;
-    const offset = (page - 1) * limit;
+    const { page = 1, limit = 20, source = 'internal' } = req.query;
 
+    if (source === 'move_in') {
+      const adminMoveInRoomController = require('./adminMoveInRoomController');
+      const { rows, count } = await adminMoveInRoomController.listMoveInRooms({
+        page, limit, pendingOnly: true
+      });
+      return success(res, {
+        properties: rows,
+        pagination: {
+          total: count,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: Math.ceil(count / limit)
+        }
+      }, '심사 대기 매물 조회 성공 (입주 준비 서비스)');
+    }
+
+    if (source === 'all') {
+      const adminMoveInRoomController = require('./adminMoveInRoomController');
+      const [internalResult, moveInResult] = await Promise.all([
+        Room.findAndCountAll({
+          where: { status: 'pending_review' },
+          order: [['submittedAt', 'ASC']],
+          include: [
+            { model: User, as: 'host', attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber'] },
+            { model: RoomPhoto, as: 'photos', attributes: ['id', 'url', 'order'] }
+          ]
+        }),
+        adminMoveInRoomController.listMoveInRooms({
+          page: 1, limit: 10000, pendingOnly: true
+        })
+      ]);
+      const internalRows = internalResult.rows.map(r => {
+        const obj = r.toJSON();
+        obj.source = 'internal';
+        obj.dailyRentLabel = null;
+        return obj;
+      });
+      const merged = [...internalRows, ...moveInResult.rows].sort((a, b) => {
+        const aT = a.submittedAt ? new Date(a.submittedAt).getTime() : 0;
+        const bT = b.submittedAt ? new Date(b.submittedAt).getTime() : 0;
+        return aT - bT;
+      });
+      const offset = (parseInt(page) - 1) * parseInt(limit);
+      const paged = merged.slice(offset, offset + parseInt(limit));
+      const total = internalResult.count + moveInResult.count;
+      return success(res, {
+        properties: paged,
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: Math.ceil(total / limit)
+        },
+        breakdown: { internal: internalResult.count, move_in: moveInResult.count }
+      }, '심사 대기 매물 조회 성공 (통합)');
+    }
+
+    // internal (기본)
+    const offset = (page - 1) * limit;
     const { rows: properties, count: total } = await Room.findAndCountAll({
       where: { status: 'pending_review' },
       offset: parseInt(offset),
       limit: parseInt(limit),
-      order: [['submittedAt', 'ASC']], // 제출일 순
+      order: [['submittedAt', 'ASC']],
       include: [
-        {
-          model: User,
-          as: 'host',
-          attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber']
-        },
-        {
-          model: RoomPhoto,
-          as: 'photos',
-          attributes: ['id', 'url', 'order']
-        }
+        { model: User, as: 'host', attributes: ['id', 'name', 'nickname', 'email', 'phoneNumber'] },
+        { model: RoomPhoto, as: 'photos', attributes: ['id', 'url', 'order'] }
       ]
     });
 
@@ -565,11 +683,26 @@ const getPendingReviews = async (req, res) => {
 
 /**
  * 매물 승인
- * POST /api/admin/properties/:roomId/approve
+ * POST /api/admin/properties/:roomId/approve[?source=internal|move_in]
  */
 const approveProperty = async (req, res) => {
   try {
     const { roomId } = req.params;
+    const { source = 'internal' } = req.query;
+
+    if (source === 'move_in') {
+      const adminMoveInRoomController = require('./adminMoveInRoomController');
+      const result = await adminMoveInRoomController.approveMoveInRoom(roomId, req.admin, req);
+      if (!result.ok) {
+        if (result.code === 'ROOM_NOT_FOUND') return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+        if (result.code === 'NOT_PENDING') return error(res, {
+          code: 4301,
+          message: '심사 대기 중인 매물만 승인할 수 있습니다.'
+        }, 400, { currentStatus: result.currentStatus });
+      }
+      return success(res, result.room, '입주 준비 방 승인 완료');
+    }
+
     const adminId = req.admin.id;
     const ipAddress = req.ip || req.connection.remoteAddress;
     const userAgent = req.get('User-Agent');
@@ -653,19 +786,35 @@ const approveProperty = async (req, res) => {
 
 /**
  * 매물 반려
- * POST /api/admin/properties/:roomId/reject
+ * POST /api/admin/properties/:roomId/reject[?source=internal|move_in]
  */
 const rejectProperty = async (req, res) => {
   try {
     const { roomId } = req.params;
     const { rejectionReason } = req.body;
-    const adminId = req.admin.id;
-    const ipAddress = req.ip || req.connection.remoteAddress;
-    const userAgent = req.get('User-Agent');
+    const { source = 'internal' } = req.query;
 
     if (!rejectionReason) {
       return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
     }
+
+    if (source === 'move_in') {
+      const adminMoveInRoomController = require('./adminMoveInRoomController');
+      const result = await adminMoveInRoomController.rejectMoveInRoom(roomId, rejectionReason, req.admin, req);
+      if (!result.ok) {
+        if (result.code === 'ROOM_NOT_FOUND') return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+        if (result.code === 'NOT_PENDING') return error(res, {
+          code: 4302,
+          message: '심사 대기 중인 매물만 반려할 수 있습니다.'
+        }, 400, { currentStatus: result.currentStatus });
+        if (result.code === 'MISSING_REASON') return error(res, ErrorCodes.MISSING_REQUIRED_FIELDS, 400);
+      }
+      return success(res, result.room, '입주 준비 방 반려 완료');
+    }
+
+    const adminId = req.admin.id;
+    const ipAddress = req.ip || req.connection.remoteAddress;
+    const userAgent = req.get('User-Agent');
 
     const room = await Room.findByPk(roomId);
     if (!room) {
@@ -727,11 +876,23 @@ const rejectProperty = async (req, res) => {
 
 /**
  * 매물 상세 조회 (관리자용 - 심사용)
- * GET /api/admin/properties/:roomId
+ * GET /api/admin/properties/:roomId[?source=internal|move_in]
+ *
+ * source=move_in 의 경우:
+ *  - 비밀번호 자동 복호화 (관리자 청소 업체 응대용)
+ *  - statusHistories 50건 포함
  */
 const getPropertyDetail = async (req, res) => {
   try {
     const { roomId } = req.params;
+    const { source = 'internal' } = req.query;
+
+    if (source === 'move_in') {
+      const adminMoveInRoomController = require('./adminMoveInRoomController');
+      const detail = await adminMoveInRoomController.getMoveInRoomDetail(roomId);
+      if (!detail) return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+      return success(res, detail, '입주 준비 방 상세 조회 성공');
+    }
 
     // Room 정보 조회 (호스트 검증 없음, 관리자는 모든 방 조회 가능)
     const room = await Room.findByPk(roomId, {

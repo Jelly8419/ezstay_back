@@ -114,7 +114,7 @@ estimatedCompletionDate: someDate.toISOString()  // UTC Z 반환
 /api/rooms             # 방 조회 (게스트용)
 /api/contracts         # 계약/예약
 /api/chats             # 채팅
-/api/admin             # 관리자 전용 (service-tasks는 ?source=internal|move_in|all 분기)
+/api/admin             # 관리자 전용 (service-tasks 와 properties 둘 다 ?source=internal|move_in|all 분기)
 /api/admin/move-in     # 입주 준비 서비스 관리자 (옵션 카탈로그 + 게스트 주문 모니터링)
 ```
 
@@ -133,8 +133,9 @@ estimatedCompletionDate: someDate.toISOString()  // UTC Z 반환
 
 ### 도메인 모델
 ```
-move_in_rooms              간편 방 정보 (정식 Room과 분리, 심사 X)
-  └─ move_in_cases         입주 준비 등록 (외부 계약 1건 단위)
+move_in_rooms                          간편 방 정보 (정식 Room과 분리)
+  ├─ move_in_room_status_histories    🆕 심사 상태 이력 (HOST/ADMIN/SYSTEM)
+  └─ move_in_cases                    입주 준비 등록 (외부 계약 1건 단위)
         ├─ move_in_payment_requests   임차인 옵션 결제 요청 토큰 (1:1)
         ├─ move_in_payments           임대인 청소 결제 (별도 결제 테이블)
         ├─ move_in_service_tasks      외부 청소 업체 예약 (관리자 처리)
@@ -146,6 +147,15 @@ move_in_rooms              간편 방 정보 (정식 Room과 분리, 심사 X)
 
 move_in_options            임차인용 옵션 카탈로그 (관리자 CRUD, RentalItem과 분리)
 ```
+
+### 🆕 방 심사 정책 (2026-05-11, Notion "입주 준비 서비스 Admin")
+- **`MoveInRoom.reviewStatus`** ENUM: `PENDING`(기본) / `APPROVED` / `REJECTED`
+- 신규 등록 → `PENDING` 으로 시작, 관리자 승인 전엔 케이스 생성 불가 (`4795 MOVE_IN_ROOM_NOT_APPROVED`)
+- **재심사 트리거 필드**: `address`, `detailAddress`, `areaPyeong`, `livingRoomCount`, `roomCount`, `bathroomCount`, `bedCount`
+  → `APPROVED|REJECTED` 방에서 이 중 하나라도 변경되면 `PENDING` 으로 자동 복귀
+- 관리자 화면 통합: `/api/admin/properties/*` 에 `?source=internal|move_in|all` 분기
+- 비밀번호 복호화는 **관리자 단건 조회** (`?source=move_in`) 에서만 응답
+- 응답 플래그: `isSelectable` / `isEditable` (둘 다 APPROVED 일 때만 `true`)
 
 ### 결제 흐름 (PayTag + Mock 하이브리드)
 - 임대인 청소 `orderId`: `M + yymmdd + 5자리` — `generateMoveInOrderId`
@@ -168,13 +178,17 @@ move_in_options            임차인용 옵션 카탈로그 (관리자 CRUD, Ren
 
 관리자 게스트 주문 조회(`/api/admin/move-in/guest-orders`) 도 동일 정책 적용 — `case` 응답에서 청소 필드 의도적 제외.
 
-### 알림 (인앱 + 알림톡 TODO)
-**인앱 알림** 2종 구현됨 (`Notification.type` ENUM):
+### 알림 (인앱 + 알림톡)
+**인앱 알림** 3종 구현됨 (`Notification.type` ENUM):
 - `MOVE_IN_PAYMENT_REQUEST` — 임대인이 결제 요청 발송 시 (게스트 가입돼 있으면 자동 생성)
 - `MOVE_IN_PAYMENT_COMPLETED` — 임차인 결제 성공 시
-- 둘 다 deeplink target=`move-in` (프론트는 `/guest/move-in/requests/:caseId` 라우팅)
+- `MOVE_IN_ROOM_REVIEW_RESULT` — 관리자 방 심사 승인/반려 시 (임대인 수신, deeplink target=`move-in-room`)
+- 결제 알림 2종 deeplink target=`move-in` (프론트는 `/guest/move-in/requests/:caseId`)
+- 방 심사 알림 deeplink target=`move-in-room` (프론트는 `/host/move-in/rooms/:id`)
 
-**🔴 알림톡 TODO**: `controllers/moveInPaymentRequestController.js`의 `dispatchPaymentRequestNotification`에 알리고 연동 hook만 작성됨. 템플릿명 `MOVE_IN_PAYMENT_REQUEST` 등록 후 주석 해제.
+**알림톡 연동 상태**:
+- ✅ `move_in_payment_request_guest` (UH_7964) — 임차인 결제 요청. `AlimtalkService.sendMoveInPaymentRequest` 로 발송. 버튼 "확인하기" → paymentLink (linkMo/linkPc override)
+- 🔴 **TODO**: 방 심사 알림톡 — 템플릿 등록 후 `NotificationService.notifyMoveInRoomReviewResult` 또는 `adminMoveInRoomController.approve/rejectMoveInRoom` 에서 `AlimtalkService.send` 호출 hook 추가 필요
 
 ### 스케줄러 (`schedulers/moveInScheduler.js`)
 - 매 10분 실행 (기존 contractScheduler와 독립)

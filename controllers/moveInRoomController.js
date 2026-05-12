@@ -7,11 +7,50 @@
  * - 본인(host)만 자신의 방을 조회/수정/삭제 가능
  */
 const { Op } = require('sequelize');
-const { sequelize, MoveInRoom, MoveInCase } = require('../models');
+const { sequelize, MoveInRoom, MoveInCase, MoveInRoomStatusHistory } = require('../models');
 const { ErrorCodes, success, error, created, updated, deleted } = require('../utils/responseHelper');
 const cryptoHelper = require('../utils/cryptoHelper');
+const { toKSTString } = require('../utils/dateHelper');
 
 const VALID_BED_SIZES = ['SINGLE', 'SUPER_SINGLE', 'DOUBLE', 'QUEEN', 'KING'];
+
+/**
+ * 재심사 트리거 필드 (Notion "입주 준비 서비스 Admin" PRD)
+ * 이 필드들이 변경되면 reviewStatus 가 PENDING 으로 재진입
+ */
+const REVIEW_TRIGGER_FIELDS = [
+  'address',
+  'detailAddress',
+  'areaPyeong',
+  'livingRoomCount',
+  'roomCount',
+  'bathroomCount',
+  'bedCount'
+];
+
+/**
+ * 재심사가 트리거되는 현재 상태 — APPROVED 또는 REJECTED 일 때만 PENDING 으로 재진입.
+ * PENDING 상태에서 수정은 그대로 PENDING 유지 (이미 심사 대기 중).
+ */
+const REVIEW_TRIGGER_STATUSES = ['APPROVED', 'REJECTED'];
+
+/**
+ * 트리거 필드 변경 여부 판정
+ * - 숫자/문자열은 != 비교, 기타(객체/배열)는 stringify 비교
+ */
+function detectChangedTriggerFields(body, room) {
+  return REVIEW_TRIGGER_FIELDS.filter((f) => {
+    if (body[f] === undefined) return false;
+    const before = room[f];
+    const after = body[f];
+    if (typeof before === 'object' || typeof after === 'object') {
+      return JSON.stringify(before) !== JSON.stringify(after);
+    }
+    // areaPyeong 은 DECIMAL → 문자열 비교 시 오해 가능 → Number 비교
+    if (f === 'areaPyeong') return Number(before) !== Number(after);
+    return before !== after;
+  });
+}
 
 /**
  * 입력값 정규화 + 검증
@@ -72,10 +111,16 @@ function validateRoomPayload(body, { partial = false } = {}) {
 }
 
 /**
- * MoveInRoom 인스턴스 → API 응답 객체 (비밀번호 복호화)
+ * MoveInRoom 인스턴스 → API 응답 객체 (비밀번호 복호화 + 심사 상태 노출)
+ *
+ * UI 가이드 필드:
+ *   - isSelectable: 케이스 등록 화면에서 라디오/선택 활성화 여부 (APPROVED 만)
+ *   - isEditable:   카드 편집 버튼 노출 여부 (APPROVED 만, PRD)
+ *                   ※ 백엔드 PATCH 자체는 모든 상태에서 허용 — UI 가드만 강제
  */
 function serializeRoom(room) {
   if (!room) return null;
+  const isApproved = room.reviewStatus === 'APPROVED';
   return {
     id: room.id,
     roomName: room.roomName,
@@ -92,6 +137,13 @@ function serializeRoom(room) {
     cleaningSuppliesAvailable: room.cleaningSuppliesAvailable,
     cleaningSuppliesLocation: room.cleaningSuppliesLocation,
     memo: room.memo,
+    reviewStatus: room.reviewStatus,
+    submittedAt: toKSTString(room.submittedAt),
+    approvedAt: toKSTString(room.approvedAt),
+    rejectedAt: toKSTString(room.rejectedAt),
+    rejectionReason: room.rejectionReason,
+    isSelectable: isApproved,
+    isEditable: isApproved,
     createdAt: room.createdAt,
     updatedAt: room.updatedAt
   };
@@ -118,15 +170,21 @@ const getRooms = async (req, res) => {
 /**
  * POST /api/host/move-in/rooms
  * 간편 방 등록
+ *
+ * 정책: 등록 시 reviewStatus=PENDING 으로 시작 (Notion "입주 준비 서비스 Admin" PRD)
+ *       관리자 승인 후에만 케이스 등록 가능
  */
 const createRoom = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const hostId = req.user.id;
     const validationErrors = validateRoomPayload(req.body);
     if (validationErrors.length > 0) {
+      await transaction.rollback();
       return error(res, ErrorCodes.VALIDATION_ERROR, 400, validationErrors);
     }
 
+    const now = new Date();
     const room = await MoveInRoom.create({
       hostId,
       roomName: req.body.roomName ?? null,
@@ -144,11 +202,27 @@ const createRoom = async (req, res) => {
       cleaningSuppliesLocation: req.body.cleaningSuppliesAvailable
         ? (req.body.cleaningSuppliesLocation ?? null)
         : null,
-      memo: req.body.memo ?? null
-    });
+      memo: req.body.memo ?? null,
+      reviewStatus: 'PENDING',
+      submittedAt: now
+    }, { transaction });
 
-    return created(res, serializeRoom(room), '간편 방 정보가 등록되었습니다.');
+    await MoveInRoomStatusHistory.create({
+      moveInRoomId: room.id,
+      adminId: null,
+      changedBy: 'SYSTEM',
+      previousStatus: null,
+      newStatus: 'PENDING',
+      reason: '최초 방 등록',
+      ipAddress: req.ip || req.connection?.remoteAddress || null,
+      userAgent: req.get?.('User-Agent') || null,
+      changedAt: now
+    }, { transaction });
+
+    await transaction.commit();
+    return created(res, serializeRoom(room), '간편 방 정보가 등록되었습니다. 관리자 심사 후 사용 가능합니다.');
   } catch (err) {
+    await transaction.rollback();
     console.error('MoveInRoom 생성 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }
@@ -182,23 +256,37 @@ const getRoom = async (req, res) => {
  * PATCH /api/host/move-in/rooms/:roomId
  * 간편 방 정보 수정
  *
- * PRD 12.5: 수정된 방 정보는 이후 신규 케이스에만 반영
- * (이미 생성된 케이스는 room_snapshot으로 락인되어 있음)
+ * 정책:
+ *  - PRD 12.5: 수정된 방 정보는 이후 신규 케이스에만 반영
+ *    (이미 생성된 케이스는 room_snapshot 으로 락인)
+ *  - Notion Admin PRD: 트리거 필드(주소·평수·거실·방·화장실·침대 수) 변경 시
+ *    APPROVED/REJECTED 였던 방은 PENDING 으로 재진입 → 재심사 필요
+ *  - PENDING 상태에서 수정은 그대로 PENDING (이미 심사 대기 중)
  */
 const updateRoom = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
     const hostId = req.user.id;
     const { roomId } = req.params;
 
-    const room = await MoveInRoom.findOne({ where: { id: roomId, hostId } });
+    const room = await MoveInRoom.findOne({ where: { id: roomId, hostId }, transaction });
     if (!room) {
+      await transaction.rollback();
       return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
     const validationErrors = validateRoomPayload(req.body, { partial: true });
     if (validationErrors.length > 0) {
+      await transaction.rollback();
       return error(res, ErrorCodes.VALIDATION_ERROR, 400, validationErrors);
     }
+
+    // 1) 재심사 트리거 판정 — update 전에 비교
+    const changedTriggerFields = detectChangedTriggerFields(req.body, room);
+    const needsReReview =
+      changedTriggerFields.length > 0
+      && REVIEW_TRIGGER_STATUSES.includes(room.reviewStatus);
+    const previousStatus = room.reviewStatus;
 
     const updateData = {};
     const directFields = [
@@ -228,10 +316,42 @@ const updateRoom = async (req, res) => {
       updateData.cleaningSuppliesLocation = req.body.cleaningSuppliesLocation;
     }
 
-    await room.update(updateData);
+    // 2) 재심사 진입 처리
+    const now = new Date();
+    if (needsReReview) {
+      updateData.reviewStatus = 'PENDING';
+      updateData.submittedAt = now;
+      updateData.rejectionReason = null; // 이전 반려 사유 초기화
+      updateData.rejectedAt = null;
+    }
 
-    return updated(res, serializeRoom(room), '간편 방 정보가 수정되었습니다.');
+    await room.update(updateData, { transaction });
+
+    // 3) 재심사 진입 시 이력 기록
+    if (needsReReview) {
+      await MoveInRoomStatusHistory.create({
+        moveInRoomId: room.id,
+        adminId: null,
+        changedBy: 'HOST',
+        previousStatus,
+        newStatus: 'PENDING',
+        reason: '심사 트리거 필드 변경으로 재심사 진입',
+        triggeredFields: changedTriggerFields,
+        ipAddress: req.ip || req.connection?.remoteAddress || null,
+        userAgent: req.get?.('User-Agent') || null,
+        changedAt: now
+      }, { transaction });
+    }
+
+    await transaction.commit();
+
+    const message = needsReReview
+      ? '방 정보가 수정되었습니다. 변경된 항목이 있어 재심사가 진행됩니다.'
+      : '간편 방 정보가 수정되었습니다.';
+
+    return updated(res, serializeRoom(room), message);
   } catch (err) {
+    await transaction.rollback();
     console.error('MoveInRoom 수정 오류:', err);
     return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
   }

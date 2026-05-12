@@ -9,9 +9,14 @@ const cryptoHelper = require('../../../utils/cryptoHelper');
 
 /**
  * MoveInRoom 직접 생성 (DB insert)
+ *
+ * 기본값: reviewStatus='APPROVED' (기존 테스트 호환성 유지)
+ * 심사 흐름 자체를 테스트할 때는 overrides 로 reviewStatus 명시.
  */
 async function createMoveInRoom(hostId, overrides = {}) {
   const { MoveInRoom } = require('../../../models');
+  const now = new Date();
+  const reviewStatus = overrides.reviewStatus ?? 'APPROVED';
   return MoveInRoom.create({
     hostId,
     roomName: overrides.roomName ?? '테스트 방',
@@ -32,6 +37,11 @@ async function createMoveInRoom(hostId, overrides = {}) {
     cleaningSuppliesAvailable: overrides.cleaningSuppliesAvailable ?? true,
     cleaningSuppliesLocation: overrides.cleaningSuppliesLocation ?? '현관 수납장',
     memo: overrides.memo ?? null,
+    reviewStatus,
+    submittedAt: overrides.submittedAt ?? now,
+    approvedAt: overrides.approvedAt ?? (reviewStatus === 'APPROVED' ? now : null),
+    rejectedAt: overrides.rejectedAt ?? null,
+    rejectionReason: overrides.rejectionReason ?? null,
     ...overrides
   });
 }
@@ -64,6 +74,7 @@ async function cleanupMoveInByHost(hostId) {
     MoveInServiceTask,
     MoveInCase,
     MoveInRoom,
+    MoveInRoomStatusHistory,
     MoveInGuestOrder,
     MoveInGuestOrderItem,
     MoveInGuestPayment,
@@ -93,6 +104,12 @@ async function cleanupMoveInByHost(hostId) {
     await MoveInPayment.destroy({ where: { caseId: caseIds } });
     await MoveInPaymentRequest.destroy({ where: { caseId: caseIds } });
     await MoveInCase.destroy({ where: { id: caseIds } });
+  }
+  // 심사 이력 정리 (FK CASCADE 라 MoveInRoom 삭제로도 처리되지만 명시)
+  const rooms = await MoveInRoom.findAll({ where: { hostId }, attributes: ['id'] });
+  const roomIds = rooms.map(r => r.id);
+  if (roomIds.length > 0) {
+    await MoveInRoomStatusHistory.destroy({ where: { moveInRoomId: roomIds } });
   }
   await MoveInRoom.destroy({ where: { hostId }, force: true });
 }

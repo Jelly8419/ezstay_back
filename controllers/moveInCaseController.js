@@ -198,6 +198,18 @@ const createCase = async (req, res) => {
       return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
     }
 
+    // 1-2. 방 심사 가드 (Notion "입주 준비 서비스 Admin" PRD)
+    //      APPROVED 방만 케이스 등록 가능
+    if (room.reviewStatus !== 'APPROVED') {
+      await transaction.rollback();
+      return error(
+        res,
+        ErrorCodes.MOVE_IN_ROOM_NOT_APPROVED,
+        400,
+        { reviewStatus: room.reviewStatus }
+      );
+    }
+
     // 2. 날짜 겹침 차단 (PRD 16절)
     const overlap = await moveInCaseService.findOverlappingCase(
       { moveInRoomId, checkInDate, checkOutDate },

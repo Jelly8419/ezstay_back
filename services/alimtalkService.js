@@ -41,10 +41,19 @@ class AlimtalkService {
    * @param {number} [options.contractId] - 관련 계약 ID
    * @param {number} [options.chatRoomId] - 관련 채팅방 ID
    * @param {boolean} [options.skipDedup=false] - 중복 체크 skip 여부
+   * @param {Array} [options.buttonOverride] - 캐시된 버튼 대신 사용할 버튼 배열
+   *   - 알리고 콘솔에 버튼 URL 을 `http://#{url}` 처럼 등록한 템플릿 발송 시
+   *     {linkMo, linkPc} 등을 발송 시점에 실제 값으로 치환해서 넘겨야 함
    * @returns {Promise<{sent: boolean, skipped: boolean, logId: number|null, error: string|null}>}
    */
   static async send(eventName, receiver, templateData = {}, options = {}) {
-    const { contractId = null, chatRoomId = null, skipDedup = false, receiverRole = null } = options;
+    const {
+      contractId = null,
+      chatRoomId = null,
+      skipDedup = false,
+      receiverRole = null,
+      buttonOverride = null
+    } = options;
 
     try {
       // 1. 템플릿 활성 여부 확인
@@ -91,14 +100,14 @@ class AlimtalkService {
         requestPayload: { message, fallbackSMS }
       });
 
-      // 6. 발송 (캐시된 버튼 정보 포함)
-      const cachedButtons = getCachedButtons(template.tplCode);
+      // 6. 발송 (버튼 우선순위: buttonOverride > 캐시된 버튼)
+      const buttons = buttonOverride || getCachedButtons(template.tplCode);
       const result = await sendAlimtalk({
         receiver: receiver.phoneNumber,
         tplCode: template.tplCode,
         subject: template.eventLabel || eventName,
         message,
-        button: cachedButtons || undefined,
+        button: buttons || undefined,
         failover: 'Y',
         fsubject: `[EZstay] ${template.eventLabel || eventName}`,
         fmessage: fallbackSMS
@@ -386,6 +395,43 @@ class AlimtalkService {
     await this.send('property_approved_host', host, {
       roomName: room?.roomName || ''
     }, { receiverRole: 'host', skipDedup: true });
+  }
+
+  /**
+   * 입주 준비 결제 요청 알림톡 — 임차인 수신 (UH_7964)
+   *
+   * 알리고 콘솔에 등록된 버튼 URL 은 `http://#{url}` 형식이므로,
+   * 발송 시 buttonOverride 로 실제 paymentLink 를 채워서 보낸다.
+   *
+   * @param {Object} guest        - { phoneNumber } (가입돼있으면 id 도 포함 가능)
+   * @param {Object} payload      - { hostName, checkInDate, paymentLink }
+   */
+  static async sendMoveInPaymentRequest(guest, { hostName, checkInDate, paymentLink }) {
+    // paymentLink 에서 scheme 분리 — 템플릿이 "http://#{url}" 형식이므로 host+path 만 넘김
+    const urlWithoutScheme = String(paymentLink || '').replace(/^https?:\/\//, '');
+
+    const buttonOverride = [{
+      name: '확인하기',
+      linkType: 'WL',          // 웹링크
+      linkMo: paymentLink,     // 풀 URL 사용 (모바일)
+      linkPc: paymentLink      // 풀 URL 사용 (PC)
+    }];
+
+    return this.send(
+      'move_in_payment_request_guest',
+      guest,
+      {
+        hostName: hostName || '임대인',
+        checkInDate: this._formatDate(checkInDate),
+        // 본문 내 #{url} 변수가 만약 추가되면 여기서 채움 (현재 템플릿은 본문에 url 없음)
+        url: urlWithoutScheme
+      },
+      {
+        receiverRole: 'guest',
+        skipDedup: true,        // 케이스 단위 재발송 허용 (resendCount 별도 추적)
+        buttonOverride
+      }
+    );
   }
 
   /** 4-2. 계약 승인 알림톡 */

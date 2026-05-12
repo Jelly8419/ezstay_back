@@ -65,6 +65,7 @@ const MoveInPaymentRequestModel = require('./MoveInPaymentRequest');
 const MoveInPaymentModel = require('./MoveInPayment');
 const MoveInServiceTaskModel = require('./MoveInServiceTask');
 const MoveInServiceTaskLogModel = require('./MoveInServiceTaskLog');
+const MoveInRoomStatusHistoryModel = require('./MoveInRoomStatusHistory');
 
 // 입주 준비 서비스 - 임차인(게스트) 도메인 모델
 const MoveInOptionModel = require('./MoveInOption');
@@ -117,6 +118,7 @@ const MoveInPaymentRequest = MoveInPaymentRequestModel(sequelize);
 const MoveInPayment = MoveInPaymentModel(sequelize);
 const MoveInServiceTask = MoveInServiceTaskModel(sequelize);
 const MoveInServiceTaskLog = MoveInServiceTaskLogModel(sequelize);
+const MoveInRoomStatusHistory = MoveInRoomStatusHistoryModel(sequelize);
 
 // 임차인(게스트) 도메인 초기화
 const MoveInOption = MoveInOptionModel(sequelize);
@@ -1199,6 +1201,22 @@ MoveInServiceTaskLog.belongsTo(MoveInServiceTask, {
   as: 'serviceTask'
 });
 
+// MoveInRoom ↔ MoveInRoomStatusHistory (1:N) — 심사 이력
+MoveInRoom.hasMany(MoveInRoomStatusHistory, {
+  foreignKey: 'moveInRoomId',
+  as: 'statusHistories',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInRoomStatusHistory.belongsTo(MoveInRoom, {
+  foreignKey: 'moveInRoomId',
+  as: 'room'
+});
+MoveInRoomStatusHistory.belongsTo(Admin, {
+  foreignKey: 'adminId',
+  as: 'admin'
+});
+
 // =====================================================
 // MoveIn 임차인(게스트) 도메인 관계 설정
 // =====================================================
@@ -1559,6 +1577,7 @@ module.exports = {
   MoveInPayment,
   MoveInServiceTask,
   MoveInServiceTaskLog,
+  MoveInRoomStatusHistory,
   MoveInOption,
   MoveInGuestOrder,
   MoveInGuestOrderItem,
