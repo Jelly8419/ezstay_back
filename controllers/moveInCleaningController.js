@@ -269,7 +269,8 @@ const initCleaningPayment = async (req, res) => {
             orderId: payment.orderId,
             amount: payment.amount,
             productName: '입주 준비 청소 서비스',
-            buyerName: req.user.name || ''
+            buyerName: req.user.name || '',
+            customerPhone: req.user.phoneNumber || null
           }
     }, '결제 페이로드가 발급되었습니다.');
   } catch (err) {

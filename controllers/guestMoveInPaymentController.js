@@ -180,7 +180,8 @@ async function runInit(req, res, orderType) {
             orderId: order.orderId,
             amount: payment.amount,
             productName: orderType === 'ADDITIONAL' ? '입주 준비 옵션 (추가)' : '입주 준비 옵션',
-            buyerName: req.user.name || ''
+            buyerName: req.user.name || '',
+            customerPhone: req.user.phoneNumber || null
           }
     }, '결제 페이로드가 발급되었습니다.');
   } catch (err) {
