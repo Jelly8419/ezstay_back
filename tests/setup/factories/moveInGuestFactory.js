@@ -125,7 +125,8 @@ async function createPaidGuestOrder({
     quantity,
     pricePerItem: option.price,
     totalPrice: option.price * quantity,
-    optionType: option.optionType
+    optionType: option.optionType,
+    category: option.category
   }));
   const totalAmount = lines.reduce((s, l) => s + l.totalPrice, 0);
 

@@ -34,7 +34,7 @@ const RENTAL_BUFFER_DAYS = 3;
  * @param {Array<{optionId, quantity}>} items
  * @param {Transaction} transaction
  * @returns {Promise<{ lines, totalAmount, options, errors }>}
- *   - lines:    [{ optionId, quantity, pricePerItem, totalPrice, optionType }]
+ *   - lines:    [{ optionId, quantity, pricePerItem, totalPrice, optionType, category, name }]
  *   - errors:   [{ optionId, reason }]
  */
 async function calculateOrderTotal(items, transaction = null) {
@@ -85,6 +85,7 @@ async function calculateOrderTotal(items, transaction = null) {
       pricePerItem,
       totalPrice: pricePerItem * quantity,
       optionType: option.optionType,
+      category: option.category,
       name: option.name
     });
   }
@@ -182,7 +183,8 @@ async function createPendingOrder({
       quantity: l.quantity,
       pricePerItem: l.pricePerItem,
       totalPrice: l.totalPrice,
-      optionType: l.optionType
+      optionType: l.optionType,
+      category: l.category
     })),
     deliveryStatus: 'PENDING'
   }, { transaction });

@@ -31,6 +31,7 @@ const moveInRoutes     = require('../../routes/moveInRoutes');
 const guestMoveInRoutes = require('../../routes/guestMoveInRoutes');
 const adminMoveInOptionRoutes = require('../../routes/adminMoveInOptionRoutes');
 const adminGuestOrderRoutes = require('../../routes/adminGuestOrderRoutes');
+const adminMoveInCaseRoutes = require('../../routes/adminMoveInCaseRoutes');
 
 app.use('/api/rooms',          roomRoutes);
 app.use('/api/auth',           authRoutes);
@@ -45,6 +46,7 @@ app.use('/api/admin/rental-items', rentalItemAdminRoutes);
 app.use('/api/admin',          adminRoutes);
 app.use('/api/admin/move-in',  adminMoveInOptionRoutes);
 app.use('/api/admin/move-in',  adminGuestOrderRoutes);
+app.use('/api/admin/move-in',  adminMoveInCaseRoutes);
 app.use('/api/guest/move-in',  guestMoveInRoutes);
 app.use('/api/notifications',  notificationRoutes);
 

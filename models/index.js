@@ -1149,6 +1149,20 @@ MoveInCase.belongsTo(User, {
   onUpdate: 'CASCADE'
 });
 
+// MoveInCase ↔ Admin (최종 관리자 수정자, 관리자 화면 전용)
+Admin.hasMany(MoveInCase, {
+  foreignKey: 'lastModifiedByAdminId',
+  as: 'lastModifiedMoveInCases',
+  onDelete: 'SET NULL',
+  onUpdate: 'CASCADE'
+});
+MoveInCase.belongsTo(Admin, {
+  foreignKey: 'lastModifiedByAdminId',
+  as: 'lastModifiedByAdmin',
+  onDelete: 'SET NULL',
+  onUpdate: 'CASCADE'
+});
+
 // MoveInCase ↔ MoveInPaymentRequest (1:1)
 MoveInCase.hasOne(MoveInPaymentRequest, {
   foreignKey: 'caseId',

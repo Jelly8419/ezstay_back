@@ -99,6 +99,15 @@ module.exports = (sequelize) => {
   };
 
   /**
+   * 관리자 화면 카테고리 그룹
+   * - 침구류: BEDDING_SET
+   * - 입주용품: 그 외 전부 (어메니티/헤어드라이어/수건/기타)
+   * 게스트 주문 라인의 옵션 카테고리로 그룹 단위 결제 상태 산출에 사용.
+   */
+  MoveInOption.BEDDING_CATEGORIES = ['BEDDING_SET'];
+  MoveInOption.AMENITY_CATEGORIES = ['AMENITY_KIT', 'HAIR_DRYER', 'TOWEL_SET', 'OTHER'];
+
+  /**
    * 옵션 유형 한글 라벨
    */
   MoveInOption.OPTION_TYPE_LABELS = {

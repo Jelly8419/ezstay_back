@@ -218,6 +218,7 @@ const systemRoutes = require('./routes/systemRoutes');
 const moveInRoutes = require('./routes/moveInRoutes');
 const adminMoveInOptionRoutes = require('./routes/adminMoveInOptionRoutes');
 const adminGuestOrderRoutes = require('./routes/adminGuestOrderRoutes');
+const adminMoveInCaseRoutes = require('./routes/adminMoveInCaseRoutes');
 const guestMoveInRoutes = require('./routes/guestMoveInRoutes');
 
 app.use('/api/rooms', roomRoutes);
@@ -229,6 +230,7 @@ app.use('/api/host', scheduleRoutes);  // 호스트 일정 관리
 app.use('/api/host/move-in', moveInRoutes);  // 입주 준비 서비스 (임대인)
 app.use('/api/admin/move-in', adminMoveInOptionRoutes);  // 입주 준비 서비스 (관리자 옵션 카탈로그)
 app.use('/api/admin/move-in', adminGuestOrderRoutes);    // 입주 준비 서비스 (관리자 게스트 주문 모니터링)
+app.use('/api/admin/move-in', adminMoveInCaseRoutes);    // 입주 준비 서비스 (관리자 케이스 단위 조회/수정/재발송)
 app.use('/api/guest/move-in', guestMoveInRoutes);  // 입주 준비 서비스 (임차인)
 app.use('/api/contracts', contractRoutes);
 app.use('/api/chats', chatRoutes);

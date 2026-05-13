@@ -116,6 +116,27 @@ module.exports = (sequelize) => {
           this.setDataValue('roomSnapshot', JSON.stringify(val));
         }
       }
+    },
+
+    adminMemo: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'admin_memo',
+      comment: '관리자 메모 (관리자 화면 전용)'
+    },
+
+    lastModifiedByAdminId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: 'last_modified_by_admin_id',
+      comment: '최종 관리자 수정자 admin_id'
+    },
+
+    lastModifiedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'last_modified_at',
+      comment: '최종 관리자 수정 일시'
     }
   }, {
     tableName: 'move_in_cases',
