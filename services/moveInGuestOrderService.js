@@ -17,6 +17,7 @@
 
 const { Op } = require('sequelize');
 const {
+  sequelize,
   MoveInOption,
   MoveInGuestOrder,
   MoveInGuestOrderItem,
@@ -25,6 +26,7 @@ const {
 } = require('../models');
 const { generateMoveInGuestOrderId } = require('../utils/orderIdGenerator');
 const { calculatePaymentDeadline } = require('../utils/moveInGuestPaymentGuard');
+const paytagClient = require('../utils/paytagClient');
 
 const RENTAL_BUFFER_DAYS = 3;
 
@@ -256,11 +258,132 @@ async function findPaidInitialOrder(caseId, transaction = null) {
   });
 }
 
+/**
+ * 만료된 PENDING 주문 자동 취소.
+ *
+ * 정책:
+ *  - 측정 시점: MoveInGuestOrder.createdAt
+ *  - 만료 시간: thresholdMinutes (기본 30분, env MOVE_IN_GUEST_PENDING_EXPIRY_MINUTES 우선)
+ *  - 1회 실행당 최대 batchLimit 건 처리 (기본 100)
+ *  - PayTag cancelOrder 는 best-effort — 실패해도 DB 정리 진행
+ *
+ * 각 주문에 대해 단일 트랜잭션으로:
+ *  1. PayTag cancelOrder 호출 (best-effort, 실패 시 로그만)
+ *  2. MoveInGuestOrder.status = 'CANCELLED'
+ *  3. ACTIVE 라인 → CANCELLED + cancelledAt + cancelReason='AUTO_EXPIRED_PENDING'
+ *  4. PENDING 결제 → CANCELLED + failedAt + failureReason='AUTO_EXPIRED'
+ *  5. MoveInGuestOrderLog actor='SYSTEM', action='PENDING_EXPIRED_AUTO_CANCEL'
+ *
+ * @param {Object} [opts]
+ * @param {number} [opts.thresholdMinutes=30]
+ * @param {number} [opts.batchLimit=100]
+ * @returns {Promise<{ processed: number, cancelled: number, paytagFailures: number }>}
+ */
+async function expireStalePendingOrders({
+  thresholdMinutes,
+  batchLimit = 100
+} = {}) {
+  const minutes = Number.isInteger(thresholdMinutes)
+    ? thresholdMinutes
+    : parseInt(process.env.MOVE_IN_GUEST_PENDING_EXPIRY_MINUTES, 10) || 30;
+
+  const cutoff = new Date(Date.now() - minutes * 60 * 1000);
+
+  const stale = await MoveInGuestOrder.findAll({
+    where: {
+      status: 'PENDING',
+      createdAt: { [Op.lt]: cutoff }
+    },
+    order: [['createdAt', 'ASC']],
+    limit: batchLimit
+  });
+
+  let cancelled = 0;
+  let paytagFailures = 0;
+
+  for (const order of stale) {
+    let paytagOk = true;
+
+    // 1. PayTag 측 미결제 주문 취소 — best-effort
+    //    PG 에 결제 시도 전 PENDING 이면 PayTag 측에 주문이 없어 4xx 반환 가능 → 무시.
+    try {
+      await paytagClient.cancelOrder({ orderno: order.orderId });
+    } catch (err) {
+      paytagOk = false;
+      paytagFailures++;
+      console.warn(
+        `[expirePending] PayTag cancelOrder 실패 orderId=${order.orderId}: ${err.message || err}`
+      );
+    }
+
+    // 2~5. DB 정리 트랜잭션
+    const t = await sequelize.transaction();
+    try {
+      await order.update({ status: 'CANCELLED' }, { transaction: t });
+
+      const now = new Date();
+      await MoveInGuestOrderItem.update(
+        {
+          status: 'CANCELLED',
+          cancelledAt: now,
+          cancelReason: 'AUTO_EXPIRED_PENDING'
+        },
+        {
+          where: { guestOrderId: order.id, status: 'ACTIVE' },
+          transaction: t
+        }
+      );
+
+      await MoveInGuestPayment.update(
+        {
+          status: 'CANCELLED',
+          failedAt: now,
+          failureReason: 'AUTO_EXPIRED'
+        },
+        {
+          where: { guestOrderId: order.id, status: 'PENDING' },
+          transaction: t
+        }
+      );
+
+      await MoveInGuestOrderLog.createLog({
+        guestOrderId: order.id,
+        caseId: order.caseId,
+        actor: 'SYSTEM',
+        action: 'PENDING_EXPIRED_AUTO_CANCEL',
+        amountChange: 0,
+        balanceAfter: 0,
+        metadata: {
+          thresholdMinutes: minutes,
+          ageMinutes: Math.floor((Date.now() - new Date(order.createdAt).getTime()) / 60000),
+          paytagCancelOk: paytagOk
+        },
+        description: paytagOk
+          ? '30분 경과 PENDING 자동 취소'
+          : '30분 경과 PENDING 자동 취소 (PayTag cancelOrder 실패 — best-effort 진행)'
+      }, t);
+
+      await t.commit();
+      cancelled++;
+    } catch (err) {
+      await t.rollback();
+      console.error(`[expirePending] DB 정리 실패 orderId=${order.orderId}:`, err);
+    }
+  }
+
+  return {
+    processed: stale.length,
+    cancelled,
+    paytagFailures
+  };
+}
+
 module.exports = {
   RENTAL_BUFFER_DAYS,
   calculateOrderTotal,
   validateGuestStock,
   createPendingOrder,
   findExistingPendingOrder,
-  findPaidInitialOrder
+  findPaidInitialOrder,
+  expireStalePendingOrders
 };

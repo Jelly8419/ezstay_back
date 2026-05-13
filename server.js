@@ -159,6 +159,8 @@ const { startContractScheduler } = require('./schedulers/contractScheduler');
 startContractScheduler();
 const { startMoveInScheduler } = require('./schedulers/moveInScheduler');
 startMoveInScheduler();
+const { startMoveInGuestOrderScheduler } = require('./schedulers/moveInGuestOrderScheduler');
+startMoveInGuestOrderScheduler();
 
 // 채팅 알림 스케줄러 시작 (체크인/체크아웃 D-1 알림)
 const { startChatReminderScheduler } = require('./schedulers/chatReminderScheduler');
