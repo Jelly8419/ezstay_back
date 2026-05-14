@@ -20,6 +20,7 @@ const cryptoHelper = require('../utils/cryptoHelper');
 const { calculateCleaningPrice } = require('../utils/moveInCleaningPriceCalculator');
 const { generateMoveInOrderId } = require('../utils/orderIdGenerator');
 const paytagClient = require('../utils/paytagClient');
+const { isCleaningPayable } = require('../utils/moveInCleaningPaymentGuard');
 
 const USE_MOCK = process.env.PAYMENT_USE_MOCK === 'true';
 
@@ -232,6 +233,12 @@ const initCleaningPayment = async (req, res) => {
     if (!caseRow.cleaningFee || caseRow.cleaningFee <= 0) {
       await transaction.rollback();
       return error(res, ErrorCodes.VALIDATION_ERROR, 400, '청소비가 산정되지 않았습니다.');
+    }
+
+    // 청소 결제 D-2 마감 가드 (입주일 D-2 KST 23:59:59.999 까지만 결제 가능)
+    if (!isCleaningPayable(caseRow.checkInDate)) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MOVE_IN_CLEANING_PAYMENT_DEADLINE_PASSED, 400);
     }
 
     // 기존 PENDING 결제가 있으면 재사용, 없으면 신규 생성

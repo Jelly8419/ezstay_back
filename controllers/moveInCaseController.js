@@ -21,6 +21,13 @@ const moveInCaseService = require('../services/moveInCaseService');
 const { normalizePhone } = require('../utils/phoneHelper');
 const { findGuestUserIdByPhone } = require('../services/moveInGuestBindService');
 const {
+  isValidCleaningTime,
+  normalizeCleaningTime
+} = require('../utils/moveInCleaningSchedule');
+const { calculateCleaningPaymentDeadline } = require('../utils/moveInCleaningPaymentGuard');
+const { calculatePaymentDeadline: calculateOptionPaymentDeadline } = require('../utils/moveInGuestPaymentGuard');
+const { toKSTString } = require('../utils/dateHelper');
+const {
   _dispatchPaymentRequestNotification: dispatchPaymentRequestNotification
 } = require('./moveInPaymentRequestController');
 
@@ -60,6 +67,19 @@ function validateCasePayload(body, { partial = false } = {}) {
     }
   }
 
+  // 청소 희망 일자/시간 (선택). 한쪽만 들어오면 거절.
+  const hasDate = body.cleaningDate !== undefined && body.cleaningDate !== null;
+  const hasTime = body.cleaningTime !== undefined && body.cleaningTime !== null;
+  if (hasDate !== hasTime) {
+    errors.push('cleaningDate와 cleaningTime은 함께 입력하거나 함께 비워야 합니다.');
+  }
+  if (hasDate && !/^\d{4}-\d{2}-\d{2}$/.test(String(body.cleaningDate))) {
+    errors.push('cleaningDate는 YYYY-MM-DD 형식이어야 합니다.');
+  }
+  if (hasTime && !isValidCleaningTime(body.cleaningTime)) {
+    errors.push('cleaningTime은 30분 단위 09:00~18:00 사이여야 합니다.');
+  }
+
   return errors;
 }
 
@@ -74,6 +94,16 @@ function serializeCase(caseRow) {
     snapshot.doorLockPassword = cryptoHelper.decrypt(snapshot.doorLockPassword);
   }
 
+  // 결제 마감 시각 — 호스트 측은 두 도메인 모두 노출
+  let cleaningPaymentDeadline = null;
+  let optionPaymentDeadline = null;
+  try {
+    if (caseRow.checkInDate) {
+      cleaningPaymentDeadline = toKSTString(calculateCleaningPaymentDeadline(caseRow.checkInDate));
+      optionPaymentDeadline   = toKSTString(calculateOptionPaymentDeadline(caseRow.checkInDate));
+    }
+  } catch (_) { /* checkInDate 비정상 시 null */ }
+
   return {
     id: caseRow.id,
     moveInRoomId: caseRow.moveInRoomId,
@@ -86,6 +116,10 @@ function serializeCase(caseRow) {
     cleaningStatus: caseRow.cleaningStatus,
     cleaningFee: caseRow.cleaningFee,
     cleaningPaidAt: caseRow.cleaningPaidAt,
+    cleaningDate: caseRow.cleaningDate,
+    cleaningTime: caseRow.cleaningTime,
+    cleaningPaymentDeadline,
+    optionPaymentDeadline,
     roomSnapshot: snapshot,
     paymentRequest: caseRow.paymentRequest
       ? {
@@ -188,6 +222,12 @@ const createCase = async (req, res) => {
     const guestPhone = normalizePhone(req.body.guestPhone);
     const sendGuestPaymentRequest = req.body.sendGuestPaymentRequest !== false; // 기본 true
 
+    // 청소 희망 일자/시간 (선택) — 검증은 validateCasePayload 통과
+    const cleaningDate = req.body.cleaningDate ?? null;
+    const cleaningTime = req.body.cleaningTime
+      ? normalizeCleaningTime(req.body.cleaningTime)
+      : null;
+
     // 1. 본인 방 확인
     const room = await MoveInRoom.findOne({
       where: { id: moveInRoomId, hostId },
@@ -238,6 +278,8 @@ const createCase = async (req, res) => {
       guestUserId: preBoundGuestUserId,
       requestMemo: requestMemo ?? null,
       cleaningStatus: 'NOT_REQUESTED',
+      cleaningDate,
+      cleaningTime,
       roomSnapshot: moveInCaseService.buildRoomSnapshot(room)
     }, { transaction });
 
@@ -343,12 +385,29 @@ const updateCase = async (req, res) => {
     }
 
     const updateData = {};
-    ['checkInDate', 'checkOutDate', 'guestName', 'guestPhone', 'requestMemo'].forEach(f => {
+    ['checkInDate', 'checkOutDate', 'guestName', 'guestPhone', 'requestMemo',
+     'cleaningDate', 'cleaningTime'].forEach(f => {
       if (req.body[f] !== undefined) updateData[f] = req.body[f];
     });
     // guestPhone 변경 시 정규화 (Phase 4)
     if (updateData.guestPhone !== undefined) {
       updateData.guestPhone = normalizePhone(updateData.guestPhone);
+    }
+    // 청소 시간 정규화 ('HH:MM' → 'HH:MM:SS')
+    if (updateData.cleaningTime !== undefined && updateData.cleaningTime !== null) {
+      updateData.cleaningTime = normalizeCleaningTime(updateData.cleaningTime);
+    }
+    // 한쪽만 null/값 으로 들어오는 경우 — 최종 상태 기준으로 다시 검증
+    {
+      const finalDate = updateData.cleaningDate !== undefined ? updateData.cleaningDate : caseRow.cleaningDate;
+      const finalTime = updateData.cleaningTime !== undefined ? updateData.cleaningTime : caseRow.cleaningTime;
+      const dateSet = !!finalDate;
+      const timeSet = !!finalTime;
+      if (dateSet !== timeSet) {
+        await transaction.rollback();
+        return error(res, ErrorCodes.VALIDATION_ERROR, 400,
+          'cleaningDate와 cleaningTime은 함께 입력하거나 함께 비워야 합니다.');
+      }
     }
 
     // 날짜 변경 시 겹침 재검증

@@ -148,6 +148,8 @@ const ErrorCodes = {
 
   // 입주 준비 - 케이스 (4796~)
   MOVE_IN_CASE_NOT_FOUND:                { code: 4796, message: '입주 준비 케이스를 찾을 수 없습니다.' },
+  MOVE_IN_CLEANING_PAYMENT_DEADLINE_PASSED: { code: 4797, message: '입주일 2일 전까지만 청소 결제가 가능합니다.' },
+  MOVE_IN_CLEANING_SCHEDULE_INVALID:     { code: 4798, message: '청소 희망 시간은 30분 단위로 09:00~18:00 사이여야 합니다.' },
 
   // 알림 관련 (48xx)
   NOTIFICATION_NOT_FOUND: { code: 4801, message: '알림을 찾을 수 없습니다.' },

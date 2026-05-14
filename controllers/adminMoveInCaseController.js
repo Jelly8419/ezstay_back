@@ -41,6 +41,8 @@ const {
 const { toKSTString } = require('../utils/dateHelper');
 const cryptoHelper = require('../utils/cryptoHelper');
 const { computeGroupStatuses } = require('../utils/moveInGuestCategoryHelper');
+const { calculateCleaningPaymentDeadline } = require('../utils/moveInCleaningPaymentGuard');
+const { calculatePaymentDeadline: calculateOptionPaymentDeadline } = require('../utils/moveInGuestPaymentGuard');
 const moveInCaseService = require('../services/moveInCaseService');
 const {
   _dispatchPaymentRequestNotification: dispatchPaymentRequestNotification
@@ -76,6 +78,18 @@ const GUEST_PAYMENT_PAGE_URL = process.env.GUEST_MOVE_IN_PAYMENT_URL
 function buildPaymentLink(token) {
   if (!token) return null;
   return `${GUEST_PAYMENT_PAGE_URL}/${token}`;
+}
+
+/**
+ * checkInDate 가 비정상이면 deadline 계산이 throw — 응답 직렬화를 깨지 않게 null 폴백.
+ */
+function safeDeadline(checkInDate, calcFn) {
+  if (!checkInDate) return null;
+  try {
+    return toKSTString(calcFn(checkInDate));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -280,6 +294,9 @@ function serializeCaseDetail(c) {
       statusLabel: CLEANING_STATUS_LABELS[c.cleaningStatus] || c.cleaningStatus,
       fee: c.cleaningFee,
       paidAt: toKSTString(c.cleaningPaidAt),
+      desiredDate: c.cleaningDate,
+      desiredTime: c.cleaningTime,
+      paymentDeadline: safeDeadline(c.checkInDate, calculateCleaningPaymentDeadline),
       payment: cleaningLatest ? {
         id: cleaningLatest.id,
         orderId: cleaningLatest.orderId,
@@ -296,11 +313,13 @@ function serializeCaseDetail(c) {
     amenity: {
       status: groupStatuses.amenity,
       statusLabel: groupStatuses.amenity ? GROUP_STATUS_LABELS[groupStatuses.amenity] : null,
+      paymentDeadline: safeDeadline(c.checkInDate, calculateOptionPaymentDeadline),
       orders: amenityOrders
     },
     bedding: {
       status: groupStatuses.bedding,
       statusLabel: groupStatuses.bedding ? GROUP_STATUS_LABELS[groupStatuses.bedding] : null,
+      paymentDeadline: safeDeadline(c.checkInDate, calculateOptionPaymentDeadline),
       orders: beddingOrders
     },
     paymentRequest: c.paymentRequest ? {

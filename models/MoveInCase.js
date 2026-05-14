@@ -137,6 +137,22 @@ module.exports = (sequelize) => {
       allowNull: true,
       field: 'last_modified_at',
       comment: '최종 관리자 수정 일시'
+    },
+
+    cleaningDate: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+      field: 'cleaning_date',
+      comment: '청소 희망 일자 (호스트 신청 시점 의도, 입주일·퇴실일 범위 강제 X)'
+    },
+
+    cleaningTime: {
+      // MariaDB TIME 컬럼은 Sequelize 가 'HH:MM:SS' 문자열로 반환.
+      // 30분 단위 09:00~18:00 범위는 컨트롤러/헬퍼 레벨에서 검증.
+      type: DataTypes.STRING(8),
+      allowNull: true,
+      field: 'cleaning_time',
+      comment: '청소 희망 시작 시각 HH:MM:SS (30분 단위, 09:00~18:00)'
     }
   }, {
     tableName: 'move_in_cases',
