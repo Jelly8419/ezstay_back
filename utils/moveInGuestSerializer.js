@@ -123,6 +123,7 @@ function serializeGuestOrder(orderRow) {
   const o = typeof orderRow.get === 'function' ? orderRow.get({ plain: true }) : orderRow;
 
   return {
+    orderDbId: o.id,
     orderId: o.orderId ?? o.order_id,
     orderType: o.orderType ?? o.order_type,
     status: o.status,

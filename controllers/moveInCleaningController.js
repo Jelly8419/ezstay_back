@@ -13,7 +13,8 @@
 const {
   sequelize,
   MoveInCase,
-  MoveInPayment
+  MoveInPayment,
+  MoveInServiceTask
 } = require('../models');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
 const cryptoHelper = require('../utils/cryptoHelper');
@@ -21,6 +22,7 @@ const { calculateCleaningPrice } = require('../utils/moveInCleaningPriceCalculat
 const { generateMoveInOrderId } = require('../utils/orderIdGenerator');
 const paytagClient = require('../utils/paytagClient');
 const { isCleaningPayable } = require('../utils/moveInCleaningPaymentGuard');
+const { evaluateCleaningRefund } = require('../utils/moveInRefundPolicy');
 
 const USE_MOCK = process.env.PAYMENT_USE_MOCK === 'true';
 
@@ -414,10 +416,147 @@ const confirmCleaningPayment = async (req, res) => {
   }
 };
 
+/**
+ * MoveInPayment → PayTag cancelPayment 파라미터.
+ * (paymentResponse 없는 도메인 — 직접 구성)
+ */
+function buildCleaningCancelParams(payment) {
+  const paidAt = payment.paidAt ? new Date(payment.paidAt) : new Date();
+  const y = paidAt.getFullYear();
+  const m = String(paidAt.getMonth() + 1).padStart(2, '0');
+  const d = String(paidAt.getDate()).padStart(2, '0');
+  return {
+    orderno: payment.orderId,
+    orgpaydate: `${y}${m}${d}`,
+    orgtranamt: payment.amount
+  };
+}
+
+/**
+ * POST /api/host/move-in/cases/:caseId/cleaning/refund
+ * 임대인 청소 결제 환불 (셀프 즉시, 관리자 승인 X)
+ *
+ * 정책 (moveInRefundPolicy.evaluateCleaningRefund):
+ *   - 결제완료 ~ 청소 희망일 2일 전: 전액 환불
+ *   - 희망일 D-1 ~ 당일: 10,000원 차감 후 환불
+ *   - 희망 시간 1시간 전부터: 환불 불가
+ *
+ * PG-First 패턴 + ServiceTask 동반 CANCELLED.
+ */
+const refundCleaningPayment = async (req, res) => {
+  const preTx = await sequelize.transaction();
+  try {
+    const hostId = req.user.id;
+    const { caseId } = req.params;
+    const { reason } = req.body || {};
+
+    const caseRow = await MoveInCase.findOne({
+      where: { id: caseId, hostId },
+      transaction: preTx
+    });
+    if (!caseRow) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.NOT_FOUND, 404, '케이스를 찾을 수 없습니다.');
+    }
+
+    if (caseRow.cleaningStatus !== 'PAID') {
+      await preTx.rollback();
+      return error(res, ErrorCodes.MOVE_IN_CLEANING_REFUND_NOT_ALLOWED, 400, {
+        reason: `결제 완료된 청소만 환불할 수 있습니다. (현재: ${caseRow.cleaningStatus})`
+      });
+    }
+
+    const verdict = evaluateCleaningRefund({
+      cleaningDate: caseRow.cleaningDate,
+      cleaningTime: caseRow.cleaningTime,
+      paidAmount: caseRow.cleaningFee
+    });
+    if (!verdict.allowed) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.MOVE_IN_CLEANING_REFUND_NOT_ALLOWED, 400, { reason: verdict.reason });
+    }
+
+    const payment = await MoveInPayment.findOne({
+      where: { caseId: caseRow.id, status: 'PAID' },
+      transaction: preTx
+    });
+    if (!payment) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.PAYMENT_NOT_FOUND, 404);
+    }
+
+    const isMock = payment.pgProvider === 'mock' || USE_MOCK;
+
+    await preTx.rollback();
+
+    if (!isMock) {
+      const { orderno, orgpaydate, orgtranamt } = buildCleaningCancelParams(payment);
+      try {
+        await paytagClient.cancelPayment({
+          orderno, orgpaydate, orgtranamt,
+          cancelamt: verdict.refundAmount,
+          canceltype: '0'
+        });
+      } catch (pgErr) {
+        if (pgErr.paytagErrorCode === '1023') {
+          return error(res, { code: 4901, message: '이미 취소 완료된 결제입니다.' }, 400);
+        }
+        console.error('[moveInCleaning.refund] PayTag 오류:', pgErr.message);
+        return error(res, { code: 4900, message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}` }, 502);
+      }
+    }
+
+    const tx = await sequelize.transaction();
+    try {
+      const now = new Date();
+      await payment.update({
+        status: 'REFUNDED',
+        failedAt: now,
+        failureReason: reason || '임대인 청소 환불'
+      }, { transaction: tx });
+      await caseRow.update({
+        cleaningStatus: 'CANCELLED',
+        cleaningPaidAt: null
+      }, { transaction: tx });
+      // 자동 생성된 미완료 ServiceTask 동반 취소
+      await MoveInServiceTask.update(
+        { status: 'CANCELLED', issueNote: '청소 결제 환불로 취소' },
+        {
+          where: {
+            caseId: caseRow.id,
+            taskType: 'CLEANING',
+            status: { [require('sequelize').Op.in]: ['PENDING', 'RESERVED', 'ISSUE'] }
+          },
+          transaction: tx
+        }
+      );
+      await tx.commit();
+    } catch (dbErr) {
+      await tx.rollback();
+      console.error('[moveInCleaning.refund] DB 반영 실패 (PG는 이미 취소됨):', dbErr);
+      return error(res, ErrorCodes.INTERNAL_ERROR, 500, 'PG 취소는 완료됐으나 DB 반영에 실패했습니다.');
+    }
+
+    return success(res, {
+      caseId: caseRow.id,
+      cleaningStatus: 'CANCELLED',
+      refundAmount: verdict.refundAmount,
+      deduction: verdict.deduction
+    }, verdict.deduction > 0
+      ? `청소 결제가 환불되었습니다. (${verdict.deduction}원 차감 후 ${verdict.refundAmount}원 환불)`
+      : '청소 결제가 전액 환불되었습니다.');
+  } catch (err) {
+    if (!preTx.finished) await preTx.rollback();
+    console.error('[moveInCleaning.refund] error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
 module.exports = {
   getCleaningQuote,
   requestCleaning,
   cancelCleaning,
+  refundCleaningPayment,
   initCleaningPayment,
   confirmCleaningPayment
 };

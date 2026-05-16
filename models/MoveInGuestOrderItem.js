@@ -53,10 +53,10 @@ module.exports = (sequelize) => {
     },
 
     status: {
-      type: DataTypes.ENUM('ACTIVE', 'CANCELLED'),
+      type: DataTypes.ENUM('ACTIVE', 'CANCELLED', 'RETURN_REQUESTED'),
       allowNull: false,
       defaultValue: 'ACTIVE',
-      comment: '라인 상태'
+      comment: '라인 상태 (RETURN_REQUESTED=반품 승인 대기)'
     },
 
     cancelledAt: {
@@ -86,8 +86,9 @@ module.exports = (sequelize) => {
   });
 
   MoveInGuestOrderItem.STATUS_LABELS = {
-    ACTIVE:    '활성',
-    CANCELLED: '취소됨'
+    ACTIVE:           '활성',
+    CANCELLED:        '취소됨',
+    RETURN_REQUESTED: '반품 요청됨'
   };
 
   /**

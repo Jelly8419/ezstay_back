@@ -45,10 +45,10 @@ module.exports = (sequelize) => {
     },
 
     status: {
-      type: DataTypes.ENUM('PENDING', 'RESERVED', 'COMPLETED', 'ISSUE'),
+      type: DataTypes.ENUM('PENDING', 'RESERVED', 'COMPLETED', 'ISSUE', 'CANCELLED'),
       allowNull: false,
       defaultValue: 'PENDING',
-      comment: '상태'
+      comment: '상태 (CANCELLED=청소 환불로 취소)'
     },
 
     vendorName: {

@@ -73,6 +73,7 @@ const MoveInGuestOrderModel = require('./MoveInGuestOrder');
 const MoveInGuestOrderItemModel = require('./MoveInGuestOrderItem');
 const MoveInGuestPaymentModel = require('./MoveInGuestPayment');
 const MoveInGuestOrderLogModel = require('./MoveInGuestOrderLog');
+const MoveInGuestRefundRequestModel = require('./MoveInGuestRefundRequest');
 
 // 핵심 유저 모델 초기화
 const User = UserModel(sequelize);
@@ -126,6 +127,7 @@ const MoveInGuestOrder = MoveInGuestOrderModel(sequelize);
 const MoveInGuestOrderItem = MoveInGuestOrderItemModel(sequelize);
 const MoveInGuestPayment = MoveInGuestPaymentModel(sequelize);
 const MoveInGuestOrderLog = MoveInGuestOrderLogModel(sequelize);
+const MoveInGuestRefundRequest = MoveInGuestRefundRequestModel(sequelize);
 
 // 방 관리 모델 초기화
 const RoomMemoModel = require('./RoomMemo');
@@ -1325,6 +1327,36 @@ MoveInGuestOrderLog.belongsTo(MoveInGuestOrderItem, {
   as: 'orderItem'
 });
 
+// MoveInGuestOrder ↔ MoveInGuestRefundRequest (1:N — 반품 요청)
+MoveInGuestOrder.hasMany(MoveInGuestRefundRequest, {
+  foreignKey: 'guestOrderId',
+  as: 'refundRequests',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestRefundRequest.belongsTo(MoveInGuestOrder, {
+  foreignKey: 'guestOrderId',
+  as: 'order'
+});
+MoveInCase.hasMany(MoveInGuestRefundRequest, {
+  foreignKey: 'caseId',
+  as: 'guestRefundRequests',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestRefundRequest.belongsTo(MoveInCase, {
+  foreignKey: 'caseId',
+  as: 'case'
+});
+MoveInGuestRefundRequest.belongsTo(User, {
+  foreignKey: 'requestedBy',
+  as: 'requester'
+});
+MoveInGuestRefundRequest.belongsTo(Admin, {
+  foreignKey: 'adminId',
+  as: 'processedByAdmin'
+});
+
 // =====================================================
 // PromotionEvent / PromotionParticipant 관계 설정
 // =====================================================
@@ -1596,5 +1628,6 @@ module.exports = {
   MoveInGuestOrder,
   MoveInGuestOrderItem,
   MoveInGuestPayment,
-  MoveInGuestOrderLog
+  MoveInGuestOrderLog,
+  MoveInGuestRefundRequest
 };

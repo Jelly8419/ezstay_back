@@ -26,6 +26,7 @@ const {
   MoveInGuestOrderItem,
   MoveInGuestPayment,
   MoveInGuestOrderLog,
+  MoveInGuestRefundRequest,
   User
 } = require('../models');
 const {
@@ -35,6 +36,8 @@ const {
   updated
 } = require('../utils/responseHelper');
 const { toKSTString } = require('../utils/dateHelper');
+const paytagClient = require('../utils/paytagClient');
+const { calcReturnRefund } = require('../utils/moveInRefundPolicy');
 
 const VALID_ORDER_STATUSES   = ['PENDING', 'PAID', 'PARTIAL_REFUND', 'FULLY_REFUNDED', 'CANCELLED'];
 const VALID_DELIVERY_STATUSES = ['PENDING', 'IN_TRANSIT', 'DELIVERED'];
@@ -383,8 +386,238 @@ const updateDeliveryStatus = async (req, res) => {
   }
 };
 
+/**
+ * MoveInGuestPayment → PayTag cancelPayment 파라미터.
+ * (게스트 컨트롤러 buildGuestCancelParams 와 동일 — paymentResponse 없는 도메인)
+ */
+function buildCancelParams(order, payment) {
+  const paidAt = payment.paidAt ? new Date(payment.paidAt) : new Date();
+  const y = paidAt.getFullYear();
+  const m = String(paidAt.getMonth() + 1).padStart(2, '0');
+  const d = String(paidAt.getDate()).padStart(2, '0');
+  return {
+    orderno: order.orderId,
+    orgpaydate: `${y}${m}${d}`,
+    orgtranamt: payment.amount
+  };
+}
+
+const USE_MOCK = process.env.PAYMENT_USE_MOCK === 'true';
+
+/**
+ * PATCH /api/admin/move-in/refund-requests/:requestId/approve
+ * 반품 요청 승인 → 왕복배송비 차감 후 PG 환불.
+ *
+ * 흐름:
+ *   1. PENDING 반품요청 + 주문 + RETURN_REQUESTED 라인 + PAID 결제 로드
+ *   2. calcReturnRefund 로 수거비 차감 금액 산정
+ *   3. PG 취소 (트랜잭션 밖, Mock 분기)
+ *   4. 라인 CANCELLED / 결제 CANCELLED / 주문 FULLY_REFUNDED / 요청 APPROVED + 로그
+ */
+const approveReturn = async (req, res) => {
+  const preTx = await sequelize.transaction();
+  try {
+    const adminId = req.admin?.id ?? null;
+    const requestId = parseInt(req.params.requestId, 10);
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, 'requestId는 정수여야 합니다.');
+    }
+
+    const reqRow = await MoveInGuestRefundRequest.findByPk(requestId, {
+      include: [{ model: MoveInGuestOrder, as: 'order' }],
+      transaction: preTx
+    });
+    if (!reqRow) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.MOVE_IN_REFUND_REQUEST_NOT_FOUND, 404);
+    }
+    if (reqRow.status !== 'PENDING') {
+      await preTx.rollback();
+      return error(res, ErrorCodes.MOVE_IN_REFUND_REQUEST_NOT_PENDING, 400);
+    }
+
+    const order = reqRow.order;
+    if (!order) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.MOVE_IN_GUEST_ORDER_NOT_FOUND, 404);
+    }
+
+    const returnItems = await MoveInGuestOrderItem.findAll({
+      where: { guestOrderId: order.id, status: 'RETURN_REQUESTED' },
+      transaction: preTx
+    });
+    if (returnItems.length === 0) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, '반품 요청 상태인 라인이 없습니다.');
+    }
+    const itemTotalAmount = returnItems.reduce((s, it) => s + Number(it.totalPrice), 0);
+
+    const { shippingDeduction, finalRefundAmount } = calcReturnRefund(itemTotalAmount);
+    if (finalRefundAmount <= 0) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400,
+        `환불 금액(${itemTotalAmount}원)이 왕복배송비(${shippingDeduction}원) 이하입니다.`);
+    }
+
+    const payment = await MoveInGuestPayment.findOne({
+      where: { guestOrderId: order.id, status: 'PAID' },
+      transaction: preTx
+    });
+    if (!payment) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.MOVE_IN_GUEST_PAYMENT_NOT_FOUND, 404);
+    }
+
+    const isMock = payment.pgProvider === 'mock' || USE_MOCK;
+
+    await preTx.rollback();
+
+    if (!isMock) {
+      const { orderno, orgpaydate, orgtranamt } = buildCancelParams(order, payment);
+      try {
+        await paytagClient.cancelPayment({
+          orderno, orgpaydate, orgtranamt,
+          cancelamt: finalRefundAmount,
+          canceltype: '0'
+        });
+      } catch (pgErr) {
+        if (pgErr.paytagErrorCode === '1023') {
+          return error(res, { code: 4901, message: '이미 취소 완료된 결제입니다.' }, 400);
+        }
+        console.error('[adminGuestOrder.approveReturn] PayTag 오류:', pgErr.message);
+        return error(res, { code: 4900, message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}` }, 502);
+      }
+    }
+
+    const tx = await sequelize.transaction();
+    try {
+      const now = new Date();
+      await MoveInGuestOrderItem.update(
+        { status: 'CANCELLED', cancelledAt: now, refundAmount: sequelize.literal('total_price') },
+        { where: { guestOrderId: order.id, status: 'RETURN_REQUESTED' }, transaction: tx }
+      );
+      await payment.update({
+        status: 'CANCELLED',
+        failedAt: now,
+        failureReason: '반품 승인 환불'
+      }, { transaction: tx });
+      await order.update({
+        status: 'FULLY_REFUNDED',
+        refundedAmount: Number(order.refundedAmount || 0) + finalRefundAmount
+      }, { transaction: tx });
+      await reqRow.update({
+        status: 'APPROVED',
+        shippingDeduction,
+        finalRefundAmount,
+        adminId,
+        processedAt: now
+      }, { transaction: tx });
+
+      await MoveInGuestOrderLog.createLog({
+        guestOrderId: order.id,
+        caseId: order.caseId,
+        actor: 'ADMIN',
+        actorId: adminId,
+        action: 'RETURN_APPROVED',
+        amountChange: -finalRefundAmount,
+        balanceAfter: 0,
+        metadata: { refundRequestId: reqRow.id, itemTotalAmount, shippingDeduction, finalRefundAmount, mock: isMock },
+        req
+      }, tx);
+
+      await tx.commit();
+    } catch (dbErr) {
+      await tx.rollback();
+      console.error('[adminGuestOrder.approveReturn] DB 반영 실패 (PG는 이미 취소됨):', dbErr);
+      return error(res, ErrorCodes.INTERNAL_ERROR, 500, 'PG 취소는 완료됐으나 DB 반영에 실패했습니다.');
+    }
+
+    return success(res, {
+      refundRequestId: reqRow.id,
+      orderDbId: order.id,
+      orderId: order.orderId,
+      status: 'APPROVED',
+      itemTotalAmount,
+      shippingDeduction,
+      finalRefundAmount
+    }, '반품 요청이 승인되어 환불 처리되었습니다.');
+  } catch (err) {
+    if (!preTx.finished) await preTx.rollback();
+    console.error('[adminGuestOrder.approveReturn] error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * PATCH /api/admin/move-in/refund-requests/:requestId/reject
+ * 반품 요청 거절 → 라인 RETURN_REQUESTED → ACTIVE 원복.
+ * Body: { rejectReason }
+ */
+const rejectReturn = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const adminId = req.admin?.id ?? null;
+    const requestId = parseInt(req.params.requestId, 10);
+    const { rejectReason } = req.body || {};
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, 'requestId는 정수여야 합니다.');
+    }
+
+    const reqRow = await MoveInGuestRefundRequest.findByPk(requestId, { transaction });
+    if (!reqRow) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MOVE_IN_REFUND_REQUEST_NOT_FOUND, 404);
+    }
+    if (reqRow.status !== 'PENDING') {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MOVE_IN_REFUND_REQUEST_NOT_PENDING, 400);
+    }
+
+    const now = new Date();
+    await MoveInGuestOrderItem.update(
+      { status: 'ACTIVE' },
+      { where: { guestOrderId: reqRow.guestOrderId, status: 'RETURN_REQUESTED' }, transaction }
+    );
+    await reqRow.update({
+      status: 'REJECTED',
+      rejectReason: rejectReason || null,
+      adminId,
+      processedAt: now
+    }, { transaction });
+
+    await MoveInGuestOrderLog.createLog({
+      guestOrderId: reqRow.guestOrderId,
+      caseId: reqRow.caseId,
+      actor: 'ADMIN',
+      actorId: adminId,
+      action: 'RETURN_REJECTED',
+      amountChange: 0,
+      balanceAfter: 0,
+      metadata: { refundRequestId: reqRow.id },
+      description: rejectReason || null,
+      req
+    }, transaction);
+
+    await transaction.commit();
+
+    return success(res, {
+      refundRequestId: reqRow.id,
+      status: 'REJECTED'
+    }, '반품 요청이 거절되었습니다.');
+  } catch (err) {
+    if (!transaction.finished) await transaction.rollback();
+    console.error('[adminGuestOrder.rejectReturn] error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
 module.exports = {
   listGuestOrders,
   getGuestOrder,
-  updateDeliveryStatus
+  updateDeliveryStatus,
+  approveReturn,
+  rejectReturn
 };

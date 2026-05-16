@@ -26,7 +26,8 @@ const {
   MoveInGuestOrder,
   MoveInGuestOrderItem,
   MoveInGuestPayment,
-  MoveInGuestOrderLog
+  MoveInGuestOrderLog,
+  MoveInGuestRefundRequest
 } = require('../models');
 const {
   ErrorCodes,
@@ -47,6 +48,10 @@ const {
   findExistingPendingOrder,
   findPaidInitialOrder
 } = require('../services/moveInGuestOrderService');
+const {
+  evaluateGuestCancel,
+  evaluateGuestReturn
+} = require('../utils/moveInRefundPolicy');
 
 const USE_MOCK = process.env.PAYMENT_USE_MOCK === 'true';
 
@@ -564,6 +569,298 @@ const getPaymentResult = async (req, res) => {
   }
 };
 
+/**
+ * MoveInGuestPayment → PayTag cancelPayment 파라미터.
+ * MoveInGuestPayment 에는 paymentResponse 가 없어 직접 구성.
+ *   - orderno    = 우리 주문번호 (order.orderId)
+ *   - orgpaydate = 결제 완료일 YYYYMMDD (KST)
+ *   - orgtranamt = 원결제 금액
+ *   - loginid    = env 폴백 (paytagClient 내부에서 PAYTAG_LOGIN_ID 사용)
+ */
+function buildGuestCancelParams(order, payment) {
+  const paidAt = payment.paidAt ? new Date(payment.paidAt) : new Date();
+  // KST 기준 YYYYMMDD (process.env.TZ=Asia/Seoul 전제)
+  const y = paidAt.getFullYear();
+  const m = String(paidAt.getMonth() + 1).padStart(2, '0');
+  const d = String(paidAt.getDate()).padStart(2, '0');
+  return {
+    orderno: order.orderId,
+    orgpaydate: `${y}${m}${d}`,
+    orgtranamt: payment.amount
+  };
+}
+
+/**
+ * POST /api/guest/move-in/orders/:orderId/cancel
+ * 결제 완료 옵션 주문 "취소" (즉시 환불, 관리자 승인 X)
+ *
+ * 정책 (moveInRefundPolicy.evaluateGuestCancel):
+ *   - 결제완료 ~ 입주 D-5 전: 전액 취소
+ *   - 입주 D-5 이후 ~ 입주일 전: 배송 전(deliveryStatus=PENDING)만
+ *   - 입주일 이후: 불가 (반품 이용)
+ *
+ * PG-First 패턴: 검증 → 트랜잭션 rollback → PG 취소 → 새 트랜잭션 DB 반영.
+ */
+const cancelPaidOrder = async (req, res) => {
+  const preTx = await sequelize.transaction();
+  try {
+    const userId = req.user.id;
+    const { orderId } = req.params;
+    const { reason } = req.body || {};
+
+    const orderDbId = parseInt(orderId, 10);
+    if (!Number.isInteger(orderDbId) || orderDbId <= 0) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, 'orderId는 정수여야 합니다.');
+    }
+
+    const order = await MoveInGuestOrder.findOne({
+      where: { id: orderDbId, guestUserId: userId },
+      include: [{ model: MoveInCase, as: 'case' }],
+      transaction: preTx
+    });
+    if (!order) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.MOVE_IN_GUEST_ORDER_NOT_FOUND, 404);
+    }
+
+    const caseRow = order.case;
+    if (!caseRow || !isSamePhone(req.user.phoneNumber, caseRow.guestPhone)) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.MOVE_IN_GUEST_PHONE_MISMATCH, 403);
+    }
+
+    const activeItems = await MoveInGuestOrderItem.findAll({
+      where: { guestOrderId: order.id, status: 'ACTIVE' },
+      transaction: preTx
+    });
+    if (activeItems.length === 0) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.MOVE_IN_GUEST_ORDER_NOT_CANCELLABLE, 400, {
+        reason: '취소할 활성 라인이 없습니다.'
+      });
+    }
+    const orderTotalAmount = activeItems.reduce((s, it) => s + Number(it.totalPrice), 0);
+
+    const verdict = evaluateGuestCancel({
+      checkInDate: caseRow.checkInDate,
+      checkOutDate: caseRow.checkOutDate,
+      orderStatus: order.status,
+      deliveryStatus: order.deliveryStatus,
+      orderTotalAmount
+    });
+    if (!verdict.allowed) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.MOVE_IN_GUEST_REFUND_NOT_ALLOWED, 400, { reason: verdict.reason });
+    }
+
+    const payment = await MoveInGuestPayment.findOne({
+      where: { guestOrderId: order.id, status: 'PAID' },
+      transaction: preTx
+    });
+    if (!payment) {
+      await preTx.rollback();
+      return error(res, ErrorCodes.MOVE_IN_GUEST_PAYMENT_NOT_FOUND, 404);
+    }
+
+    const isMock = payment.pgProvider === 'mock' || USE_MOCK;
+
+    // 검증 완료 → 트랜잭션 닫고 PG 취소 먼저
+    await preTx.rollback();
+
+    if (!isMock) {
+      const { orderno, orgpaydate, orgtranamt } = buildGuestCancelParams(order, payment);
+      try {
+        await paytagClient.cancelPayment({
+          orderno,
+          orgpaydate,
+          orgtranamt,
+          cancelamt: verdict.refundAmount,
+          canceltype: '0'
+        });
+      } catch (pgErr) {
+        if (pgErr.paytagErrorCode === '1023') {
+          return error(res, { code: 4901, message: '이미 취소 완료된 결제입니다.' }, 400);
+        }
+        console.error('[guestMoveInPayment.cancelPaid] PayTag 오류:', pgErr.message);
+        return error(res, { code: 4900, message: `PG 취소 실패: ${pgErr.paytagErrorMessage || pgErr.message}` }, 502);
+      }
+    }
+
+    // PG 성공 → DB 반영
+    const tx = await sequelize.transaction();
+    try {
+      const now = new Date();
+      await MoveInGuestOrderItem.update(
+        { status: 'CANCELLED', cancelledAt: now, cancelReason: reason || '임차인 옵션 취소', refundAmount: sequelize.literal('total_price') },
+        { where: { guestOrderId: order.id, status: 'ACTIVE' }, transaction: tx }
+      );
+      await payment.update({
+        status: 'CANCELLED',
+        failedAt: now,
+        failureReason: '임차인 옵션 취소 환불'
+      }, { transaction: tx });
+      await order.update({
+        status: 'FULLY_REFUNDED',
+        refundedAmount: Number(order.refundedAmount || 0) + verdict.refundAmount
+      }, { transaction: tx });
+
+      await MoveInGuestOrderLog.createLog({
+        guestOrderId: order.id,
+        caseId: order.caseId,
+        actor: 'GUEST',
+        actorId: userId,
+        action: 'ORDER_REFUNDED',
+        amountChange: -verdict.refundAmount,
+        balanceAfter: 0,
+        metadata: {
+          refundAmount: verdict.refundAmount,
+          shippingDeduction: verdict.shippingDeduction,
+          mock: isMock
+        },
+        description: reason || '임차인 옵션 취소',
+        req
+      }, tx);
+
+      await tx.commit();
+    } catch (dbErr) {
+      await tx.rollback();
+      console.error('[guestMoveInPayment.cancelPaid] DB 반영 실패 (PG는 이미 취소됨):', dbErr);
+      return error(res, ErrorCodes.INTERNAL_ERROR, 500, 'PG 취소는 완료됐으나 DB 반영에 실패했습니다. 관리자에게 문의하세요.');
+    }
+
+    return success(res, {
+      orderDbId: order.id,
+      orderId: order.orderId,
+      status: 'FULLY_REFUNDED',
+      refundAmount: verdict.refundAmount,
+      shippingDeduction: verdict.shippingDeduction
+    }, '옵션 주문이 취소되어 환불 처리되었습니다.');
+  } catch (err) {
+    if (!preTx.finished) await preTx.rollback();
+    console.error('[guestMoveInPayment.cancelPaid] error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * POST /api/guest/move-in/orders/:orderId/return
+ * 결제 완료 + 배송 완료 옵션 주문 "반품 요청" (관리자 승인 대상)
+ *
+ * 정책 (moveInRefundPolicy.evaluateGuestReturn):
+ *   - 입주일 ~ 퇴실일, deliveryStatus=DELIVERED 만
+ *   - 케이스당 PENDING 반품요청 1건 제한
+ *   - 실제 환불(왕복배송비 차감)은 관리자 승인 시 확정
+ */
+const requestReturn = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const userId = req.user.id;
+    const { orderId } = req.params;
+    const { reason } = req.body || {};
+
+    const orderDbId = parseInt(orderId, 10);
+    if (!Number.isInteger(orderDbId) || orderDbId <= 0) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, 'orderId는 정수여야 합니다.');
+    }
+
+    const order = await MoveInGuestOrder.findOne({
+      where: { id: orderDbId, guestUserId: userId },
+      include: [{ model: MoveInCase, as: 'case' }],
+      transaction
+    });
+    if (!order) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MOVE_IN_GUEST_ORDER_NOT_FOUND, 404);
+    }
+
+    const caseRow = order.case;
+    if (!caseRow || !isSamePhone(req.user.phoneNumber, caseRow.guestPhone)) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MOVE_IN_GUEST_PHONE_MISMATCH, 403);
+    }
+
+    const verdict = evaluateGuestReturn({
+      checkInDate: caseRow.checkInDate,
+      checkOutDate: caseRow.checkOutDate,
+      orderStatus: order.status,
+      deliveryStatus: order.deliveryStatus
+    });
+    if (!verdict.allowed) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MOVE_IN_GUEST_REFUND_NOT_ALLOWED, 400, { reason: verdict.reason });
+    }
+
+    // 케이스당 PENDING 반품요청 1건 제한
+    const existing = await MoveInGuestRefundRequest.findOne({
+      where: { guestOrderId: order.id, status: 'PENDING' },
+      transaction
+    });
+    if (existing) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MOVE_IN_GUEST_RETURN_ALREADY_REQUESTED, 409, {
+        refundRequestId: existing.id
+      });
+    }
+
+    const activeItems = await MoveInGuestOrderItem.findAll({
+      where: { guestOrderId: order.id, status: 'ACTIVE' },
+      transaction
+    });
+    if (activeItems.length === 0) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MOVE_IN_GUEST_ORDER_NOT_CANCELLABLE, 400, {
+        reason: '반품할 활성 라인이 없습니다.'
+      });
+    }
+    const itemTotalAmount = activeItems.reduce((s, it) => s + Number(it.totalPrice), 0);
+
+    // 활성 라인 → RETURN_REQUESTED
+    await MoveInGuestOrderItem.update(
+      { status: 'RETURN_REQUESTED', cancelReason: reason || '임차인 반품 요청' },
+      { where: { guestOrderId: order.id, status: 'ACTIVE' }, transaction }
+    );
+
+    const refundRequest = await MoveInGuestRefundRequest.create({
+      guestOrderId: order.id,
+      caseId: order.caseId,
+      requestedBy: userId,
+      status: 'PENDING',
+      returnReason: reason || '임차인 반품 요청',
+      deliveryStatusSnapshot: order.deliveryStatus,
+      itemTotalAmount
+    }, { transaction });
+
+    await MoveInGuestOrderLog.createLog({
+      guestOrderId: order.id,
+      caseId: order.caseId,
+      actor: 'GUEST',
+      actorId: userId,
+      action: 'RETURN_REQUESTED',
+      amountChange: 0,
+      balanceAfter: 0,
+      metadata: { refundRequestId: refundRequest.id, itemTotalAmount },
+      description: reason || '임차인 반품 요청',
+      req
+    }, transaction);
+
+    await transaction.commit();
+
+    return success(res, {
+      refundRequestId: refundRequest.id,
+      orderDbId: order.id,
+      orderId: order.orderId,
+      status: 'PENDING',
+      itemTotalAmount
+    }, '반품 요청이 접수되었습니다. 관리자 승인 후 환불 처리됩니다.');
+  } catch (err) {
+    if (!transaction.finished) await transaction.rollback();
+    console.error('[guestMoveInPayment.requestReturn] error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
 module.exports = {
   initPayment,
   confirmPayment,
@@ -572,5 +869,7 @@ module.exports = {
   initAdditionalPayment,
   confirmAdditionalPayment: confirmPayment,
   cancelPendingOrder,
+  cancelPaidOrder,
+  requestReturn,
   getPaymentResult
 };

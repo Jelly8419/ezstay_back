@@ -151,6 +151,13 @@ const ErrorCodes = {
   MOVE_IN_CLEANING_PAYMENT_DEADLINE_PASSED: { code: 4797, message: '입주일 2일 전까지만 청소 결제가 가능합니다.' },
   MOVE_IN_CLEANING_SCHEDULE_INVALID:     { code: 4798, message: '청소 희망 시간은 30분 단위로 09:00~18:00 사이여야 합니다.' },
 
+  // 입주 준비 - 환불/반품 (4799~)
+  MOVE_IN_GUEST_REFUND_NOT_ALLOWED:      { code: 4799, message: '현재 환불/취소가 불가한 상태입니다.' },
+  MOVE_IN_GUEST_RETURN_ALREADY_REQUESTED:{ code: 4810, message: '이미 처리 중인 반품 요청이 있습니다.' },
+  MOVE_IN_REFUND_REQUEST_NOT_FOUND:      { code: 4811, message: '반품 요청을 찾을 수 없습니다.' },
+  MOVE_IN_REFUND_REQUEST_NOT_PENDING:    { code: 4812, message: '이미 처리된 반품 요청입니다.' },
+  MOVE_IN_CLEANING_REFUND_NOT_ALLOWED:   { code: 4813, message: '현재 청소 환불이 불가한 상태입니다.' },
+
   // 알림 관련 (48xx)
   NOTIFICATION_NOT_FOUND: { code: 4801, message: '알림을 찾을 수 없습니다.' },
 

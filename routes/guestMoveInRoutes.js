@@ -30,6 +30,8 @@ const {
   initAdditionalPayment,
   confirmAdditionalPayment,
   cancelPendingOrder,
+  cancelPaidOrder,
+  requestReturn,
   getPaymentResult
 } = require('../controllers/guestMoveInPaymentController');
 
@@ -134,6 +136,22 @@ router.post('/requests/:caseId/additional/confirm', authenticateToken, confirmAd
  * @access Authenticated user (본인 주문만)
  */
 router.delete('/orders/:orderId', authenticateToken, cancelPendingOrder);
+
+/**
+ * @route POST /api/guest/move-in/orders/:orderId/cancel
+ * @desc  결제 완료 옵션 주문 취소 (즉시 환불, PG-First)
+ *        결제완료~D-5 전액 / D-5 이후 배송 전만 / 입주일 이후 불가
+ * @access Authenticated user (본인 주문만)
+ */
+router.post('/orders/:orderId/cancel', authenticateToken, cancelPaidOrder);
+
+/**
+ * @route POST /api/guest/move-in/orders/:orderId/return
+ * @desc  배송 완료 옵션 주문 반품 요청 (관리자 승인 대상)
+ *        입주일~퇴실일, deliveryStatus=DELIVERED 만
+ * @access Authenticated user (본인 주문만)
+ */
+router.post('/orders/:orderId/return', authenticateToken, requestReturn);
 
 // ============================================
 // 결제 결과 조회 (Phase 10)

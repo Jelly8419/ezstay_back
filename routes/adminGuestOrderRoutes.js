@@ -13,7 +13,9 @@ const { authenticateAdmin } = require('../middleware/auth');
 const {
   listGuestOrders,
   getGuestOrder,
-  updateDeliveryStatus
+  updateDeliveryStatus,
+  approveReturn,
+  rejectReturn
 } = require('../controllers/adminGuestOrderController');
 
 /**
@@ -34,5 +36,18 @@ router.get('/guest-orders/:orderId', authenticateAdmin, getGuestOrder);
  * @body  { deliveryStatus, note? }
  */
 router.patch('/guest-orders/:orderId/delivery', authenticateAdmin, updateDeliveryStatus);
+
+/**
+ * @route PATCH /api/admin/move-in/refund-requests/:requestId/approve
+ * @desc  임차인 반품 요청 승인 (왕복배송비 차감 후 PG 환불)
+ */
+router.patch('/refund-requests/:requestId/approve', authenticateAdmin, approveReturn);
+
+/**
+ * @route PATCH /api/admin/move-in/refund-requests/:requestId/reject
+ * @desc  임차인 반품 요청 거절 (라인 ACTIVE 원복)
+ * @body  { rejectReason? }
+ */
+router.patch('/refund-requests/:requestId/reject', authenticateAdmin, rejectReturn);
 
 module.exports = router;
