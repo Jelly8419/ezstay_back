@@ -225,6 +225,78 @@ describe('MoveIn Guest — INITIAL Payment (Mock)', () => {
     expect(payment.status).toBe('FAILED');
   });
 
+  test('결제 실패 후 재init → 기존 주문 재사용 + 새 paymentId', async () => {
+    const c = await freshCase({ checkInDate: '2028-05-25', checkOutDate: '2028-05-30' });
+    const token = generateToken(guest);
+
+    // 1차 init → 결제 실패
+    const init1 = await request(app)
+      .post(`/api/guest/move-in/requests/${c.id}/payment/init`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ items: [{ optionId: opt1.id, quantity: 1 }] });
+    expect(init1.status).toBe(201);
+    const order1Db = init1.body.data.orderDbId;
+    const payment1 = init1.body.data.paymentId;
+
+    await request(app)
+      .post(`/api/guest/move-in/requests/${c.id}/payment/confirm`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ paymentId: payment1, simulateFailure: true });
+
+    // 2차 init (옵션 변경) → 409 아니라 기존 주문 재사용
+    const init2 = await request(app)
+      .post(`/api/guest/move-in/requests/${c.id}/payment/init`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ items: [{ optionId: opt1.id, quantity: 2 }] });
+    expect(init2.status).toBe(201);
+    // 같은 주문 재사용 (orderDbId 동일, orderId 동일)
+    expect(init2.body.data.orderDbId).toBe(order1Db);
+    // 새 paymentId 발급
+    expect(init2.body.data.paymentId).not.toBe(payment1);
+    // 옵션 변경 반영 (수량 2 → 금액 2배)
+    expect(init2.body.data.amount).toBe(opt1.price * 2);
+
+    // 기존 FAILED payment 는 이력 보존
+    const oldPay = await MoveInGuestPayment.findByPk(payment1);
+    expect(oldPay.status).toBe('FAILED');
+    // 새 payment 는 PENDING
+    const newPay = await MoveInGuestPayment.findByPk(init2.body.data.paymentId);
+    expect(newPay.status).toBe('PENDING');
+    expect(newPay.amount).toBe(opt1.price * 2);
+
+    // 케이스당 주문 1건 유지
+    const orderCount = await MoveInGuestOrder.count({ where: { caseId: c.id } });
+    expect(orderCount).toBe(1);
+
+    // 2차 결제 성공 → PAID
+    const ok = await request(app)
+      .post(`/api/guest/move-in/requests/${c.id}/payment/confirm`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ paymentId: init2.body.data.paymentId });
+    expect(ok.status).toBe(200);
+    const finalOrder = await MoveInGuestOrder.findByPk(order1Db);
+    expect(finalOrder.status).toBe('PAID');
+  });
+
+  test('결제 진행 중(PENDING payment 살아있음) 재init → 409 유지', async () => {
+    const c = await freshCase({ checkInDate: '2028-07-25', checkOutDate: '2028-07-30' });
+    const token = generateToken(guest);
+
+    const init1 = await request(app)
+      .post(`/api/guest/move-in/requests/${c.id}/payment/init`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ items: [{ optionId: opt1.id, quantity: 1 }] });
+    expect(init1.status).toBe(201);
+
+    // confirm 안 함 → payment PENDING 그대로. 재init → 409
+    const init2 = await request(app)
+      .post(`/api/guest/move-in/requests/${c.id}/payment/init`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ items: [{ optionId: opt1.id, quantity: 1 }] });
+    expect(init2.status).toBe(409);
+    expect(init2.body.code).toBe(4793);
+  });
+
   test('init — 같은 옵션 중복 줄 합산', async () => {
     const c4 = await freshCase({ checkInDate: '2028-06-15', checkOutDate: '2028-06-20' });
     const token = generateToken(guest);

@@ -46,6 +46,8 @@ const {
   validateGuestStock,
   createPendingOrder,
   findExistingPendingOrder,
+  hasActivePendingPayment,
+  reusePendingOrder,
   findPaidInitialOrder
 } = require('../services/moveInGuestOrderService');
 const {
@@ -149,25 +151,45 @@ async function runInit(req, res, orderType) {
       return error(res, ErrorCodes.MOVE_IN_GUEST_STOCK_INSUFFICIENT, 400, stock.unavailable);
     }
 
-    // 3. 동일 케이스 PENDING 주문 1건만
+    // 3. 동일 케이스 PENDING 주문 처리
+    //    - 활성(PENDING) 결제가 살아있으면 = 실제 결제 진행 중 → 409 차단
+    //    - 결제가 전부 FAILED 면 = 재결제 → 기존 주문 재사용 (라인 교체 + 새 payment)
     const existingPending = await findExistingPendingOrder(caseRow.id, transaction);
-    if (existingPending) {
-      await transaction.rollback();
-      return error(res, ErrorCodes.MOVE_IN_GUEST_PENDING_ORDER_EXISTS, 409, {
-        pendingOrderId: existingPending.id,
-        pendingOrderNumber: existingPending.orderId
-      });
-    }
+    let order, payment;
 
-    // 4. 주문 생성
-    const { order, payment } = await createPendingOrder({
-      caseId: caseRow.id,
-      guestUserId: req.user.id,
-      checkInDate: caseRow.checkInDate,
-      orderType,
-      lines: calc.lines,
-      totalAmount: calc.totalAmount
-    }, transaction);
+    if (existingPending) {
+      const stillActive = await hasActivePendingPayment(existingPending.id, transaction);
+      const sameType = existingPending.orderType === orderType;
+
+      if (stillActive || !sameType) {
+        // 결제 진행 중이거나, orderType 이 다른 PENDING 주문이 있으면 차단
+        await transaction.rollback();
+        return error(res, ErrorCodes.MOVE_IN_GUEST_PENDING_ORDER_EXISTS, 409, {
+          pendingOrderId: existingPending.id,
+          pendingOrderNumber: existingPending.orderId
+        });
+      }
+
+      // 결제 실패한 PENDING 주문 재사용 (옵션 변경 허용)
+      ({ order, payment } = await reusePendingOrder({
+        order: existingPending,
+        caseId: caseRow.id,
+        guestUserId: req.user.id,
+        checkInDate: caseRow.checkInDate,
+        lines: calc.lines,
+        totalAmount: calc.totalAmount
+      }, transaction));
+    } else {
+      // 4. 신규 주문 생성
+      ({ order, payment } = await createPendingOrder({
+        caseId: caseRow.id,
+        guestUserId: req.user.id,
+        checkInDate: caseRow.checkInDate,
+        orderType,
+        lines: calc.lines,
+        totalAmount: calc.totalAmount
+      }, transaction));
+    }
 
     await transaction.commit();
 

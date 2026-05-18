@@ -241,6 +241,95 @@ async function findExistingPendingOrder(caseId, transaction = null) {
 }
 
 /**
+ * 해당 주문에 아직 살아있는(PENDING) 결제가 있는지.
+ * - PENDING payment 가 있으면 = 실제 결제 진행 중 → 재결제 차단(409)
+ * - 전부 FAILED 면 = 재결제 가능 (reusePendingOrder 대상)
+ *
+ * @returns {Promise<boolean>}
+ */
+async function hasActivePendingPayment(guestOrderId, transaction = null) {
+  const opts = transaction ? { transaction } : {};
+  const cnt = await MoveInGuestPayment.count({
+    where: { guestOrderId, status: 'PENDING' },
+    ...opts
+  });
+  return cnt > 0;
+}
+
+/**
+ * 결제 실패한 기존 PENDING 주문 재사용.
+ * - 기존 라인 전부 삭제 후 새 요청 라인으로 교체 (옵션 변경 허용)
+ * - itemsSnapshot / totalAmount / modifiableUntil 갱신
+ * - 새 PENDING payment 발급 (기존 FAILED payment 는 이력으로 보존)
+ *
+ * 호출 전제: order.status='PENDING' 이고 활성 PENDING payment 가 없어야 함
+ * (호출처에서 hasActivePendingPayment 로 가드).
+ *
+ * @returns {Promise<{ order, payment, items }>}
+ */
+async function reusePendingOrder({
+  order,
+  caseId,
+  guestUserId,
+  checkInDate,
+  lines,
+  totalAmount
+}, transaction) {
+  // 기존 라인 제거 후 새 라인으로 교체
+  await MoveInGuestOrderItem.destroy({
+    where: { guestOrderId: order.id },
+    transaction
+  });
+
+  const items = await Promise.all(lines.map(l =>
+    MoveInGuestOrderItem.create({
+      guestOrderId: order.id,
+      optionId: l.optionId,
+      quantity: l.quantity,
+      pricePerItem: l.pricePerItem,
+      totalPrice: l.totalPrice,
+      status: 'ACTIVE'
+    }, { transaction })
+  ));
+
+  await order.update({
+    totalAmount,
+    modifiableUntil: calculatePaymentDeadline(checkInDate),
+    itemsSnapshot: lines.map(l => ({
+      optionId: l.optionId,
+      name: l.name,
+      quantity: l.quantity,
+      pricePerItem: l.pricePerItem,
+      totalPrice: l.totalPrice,
+      optionType: l.optionType,
+      category: l.category
+    }))
+  }, { transaction });
+
+  const payment = await MoveInGuestPayment.create({
+    guestOrderId: order.id,
+    caseId,
+    guestUserId,
+    orderId: order.orderId,
+    amount: totalAmount,
+    status: 'PENDING'
+  }, { transaction });
+
+  await MoveInGuestOrderLog.createLog({
+    guestOrderId: order.id,
+    caseId,
+    actor: 'GUEST',
+    actorId: guestUserId,
+    action: 'ORDER_RETRIED',
+    amountChange: totalAmount,
+    balanceAfter: 0,
+    metadata: { lineCount: lines.length, reusedOrderId: order.orderId }
+  }, transaction);
+
+  return { order, payment, items };
+}
+
+/**
  * 케이스에 결제 완료된 INITIAL 주문이 있는지 확인.
  * - ADDITIONAL 결제 진입 가드용 (정책 #4: 추가 결제는 INITIAL 완료 후에만)
  *
@@ -384,6 +473,8 @@ module.exports = {
   validateGuestStock,
   createPendingOrder,
   findExistingPendingOrder,
+  hasActivePendingPayment,
+  reusePendingOrder,
   findPaidInitialOrder,
   expireStalePendingOrders
 };
