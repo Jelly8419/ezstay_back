@@ -365,10 +365,22 @@ const confirmCleaningPayment = async (req, res) => {
           expectedAmount: payment.amount
         });
       } catch (pgErr) {
+        const pgCode = pgErr.paytagErrorCode || 'UNKNOWN';
+        const pgMsg = pgErr.paytagErrorMessage || pgErr.message;
+        const reasonWithCode = `[${pgCode}] ${pgMsg}`;
+
+        console.error('[moveInCleaning.confirm] PayTag 승인 실패:', {
+          orderId: payment.orderId,
+          paymentId: payment.id,
+          resultcode: pgCode,
+          errmsg: pgMsg,
+          paytagResponse: pgErr.paytagResponse || null
+        });
+
         await payment.update({
           status: 'FAILED',
           failedAt: now,
-          failureReason: pgErr.paytagErrorMessage || pgErr.message,
+          failureReason: reasonWithCode.slice(0, 255),
           pgProvider
         }, { transaction });
         await transaction.commit();
@@ -376,7 +388,7 @@ const confirmCleaningPayment = async (req, res) => {
           res,
           ErrorCodes.PAYMENT_CONFIRMATION_FAILED,
           400,
-          pgErr.paytagErrorMessage || pgErr.message
+          { resultcode: pgCode, message: pgMsg }
         );
       }
 

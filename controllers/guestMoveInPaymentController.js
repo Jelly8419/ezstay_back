@@ -330,10 +330,23 @@ const confirmPayment = async (req, res) => {
         pgTid = pgResponse.tran_key || pgResponse.recv_orderno || null;
         pgMethod = paytagClient.mapPaymentMethod(payType);
       } catch (pgErr) {
+        // 진단 보강: resultcode 접두 + PG 응답 원문 로깅
+        const pgCode = pgErr.paytagErrorCode || 'UNKNOWN';
+        const pgMsg = pgErr.paytagErrorMessage || pgErr.message;
+        const reasonWithCode = `[${pgCode}] ${pgMsg}`;
+
+        console.error('[guestMoveInPayment.confirm] PayTag 승인 실패:', {
+          orderId: order.orderId,
+          paymentId: payment.id,
+          resultcode: pgCode,
+          errmsg: pgMsg,
+          paytagResponse: pgErr.paytagResponse || null
+        });
+
         await payment.update({
           status: 'FAILED',
           failedAt: now,
-          failureReason: pgErr.paytagErrorMessage || pgErr.message,
+          failureReason: reasonWithCode.slice(0, 255),
           pgProvider
         }, { transaction });
         await MoveInGuestOrderLog.createLog({
@@ -344,7 +357,12 @@ const confirmPayment = async (req, res) => {
           action: 'PAYMENT_FAILED',
           amountChange: 0,
           balanceAfter: 0,
-          description: pgErr.paytagErrorMessage || pgErr.message,
+          metadata: {
+            resultcode: pgCode,
+            errmsg: pgMsg,
+            paytagResponse: pgErr.paytagResponse || null
+          },
+          description: reasonWithCode,
           req
         }, transaction);
         await transaction.commit();
@@ -352,7 +370,7 @@ const confirmPayment = async (req, res) => {
           res,
           ErrorCodes.PAYMENT_CONFIRMATION_FAILED,
           400,
-          pgErr.paytagErrorMessage || pgErr.message
+          { resultcode: pgCode, message: pgMsg }
         );
       }
     }
