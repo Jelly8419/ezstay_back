@@ -226,6 +226,71 @@ describe('입주 준비 환불', () => {
     });
   });
 
+  // ── 관리자 반품 요청 조회 (목록/단건/케이스 상세 동봉) ──────────
+  describe('관리자 반품 요청 조회', () => {
+    let caseId, orderId, reqId;
+
+    beforeAll(async () => {
+      const checkIn = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const checkOut = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const { c, order } = await makeCaseWithPaidOrder({
+        checkInDate: checkIn, checkOutDate: checkOut, deliveryStatus: 'DELIVERED'
+      });
+      caseId = c.id;
+      orderId = order.id;
+      const r = await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/return`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ reason: '조회테스트' });
+      reqId = r.body.data.refundRequestId;
+    });
+
+    test('GET /refund-requests — 목록 (PENDING 필터)', async () => {
+      const res = await request(app)
+        .get('/api/admin/move-in/refund-requests?status=PENDING')
+        .set('Authorization', `Bearer ${adminToken}`);
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body.data.items)).toBe(true);
+      const row = res.body.data.items.find(it => it.id === reqId);
+      expect(row).toBeTruthy();
+      expect(row.status).toBe('PENDING');
+      expect(row.order.orderDbId).toBe(orderId);
+      expect(row.case.guestName).toBe('환불테스트');
+      // 청소 필드 비노출
+      expect(JSON.stringify(row)).not.toMatch(/cleaningStatus/);
+    });
+
+    test('GET /refund-requests/:id — 단건 + 주문 라인', async () => {
+      const res = await request(app)
+        .get(`/api/admin/move-in/refund-requests/${reqId}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.id).toBe(reqId);
+      expect(Array.isArray(res.body.data.items)).toBe(true);
+      expect(res.body.data.items.length).toBeGreaterThanOrEqual(1);
+    });
+
+    test('GET /refund-requests/:id — 없는 ID → 4811', async () => {
+      const res = await request(app)
+        .get('/api/admin/move-in/refund-requests/9999999')
+        .set('Authorization', `Bearer ${adminToken}`);
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe(4811);
+    });
+
+    test('케이스 상세에 refundRequests[] 동봉', async () => {
+      const res = await request(app)
+        .get(`/api/admin/move-in/cases/${caseId}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body.data.refundRequests)).toBe(true);
+      const rr = res.body.data.refundRequests.find(x => x.id === reqId);
+      expect(rr).toBeTruthy();
+      expect(rr.status).toBe('PENDING');
+      expect(rr.returnReason).toBe('조회테스트');
+    });
+  });
+
   // ── 임대인 청소 환불 ──────────────────────────────────────────
   describe('POST /cases/:caseId/cleaning/refund — 임대인 청소 환불', () => {
     async function paidCleaningCase({ checkInDate, checkOutDate, cleaningDate, cleaningTime }) {

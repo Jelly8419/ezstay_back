@@ -28,6 +28,7 @@ const {
   MoveInGuestOrder,
   MoveInGuestOrderItem,
   MoveInGuestPayment,
+  MoveInGuestRefundRequest,
   MoveInOption,
   User,
   Admin
@@ -331,6 +332,26 @@ function serializeCaseDetail(c) {
       resendCount: c.paymentRequest.resendCount,
       expiresAt: toKSTString(c.paymentRequest.expiresAt)
     } : null,
+    // 임차인 반품 요청 (관리자 승인/거절 대상). 최신순.
+    refundRequests: (c.guestRefundRequests || [])
+      .slice()
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .map(r => ({
+        id: r.id,
+        guestOrderId: r.guestOrderId,
+        status: r.status,
+        statusLabel: MoveInGuestRefundRequest.STATUS_LABELS?.[r.status] || r.status,
+        returnReason: r.returnReason,
+        rejectReason: r.rejectReason,
+        deliveryStatusSnapshot: r.deliveryStatusSnapshot,
+        itemTotalAmount: r.itemTotalAmount,
+        shippingDeduction: r.shippingDeduction,
+        finalRefundAmount: r.finalRefundAmount,
+        requesterName: r.requester?.name || null,
+        adminName: r.processedByAdmin?.name || null,
+        processedAt: toKSTString(r.processedAt),
+        createdAt: toKSTString(r.createdAt)
+      })),
     createdAt: toKSTString(c.createdAt),
     updatedAt: toKSTString(c.updatedAt)
   };
@@ -469,6 +490,15 @@ async function loadCaseDetail(caseId, transaction = null) {
             include: [{ model: MoveInOption, as: 'option', attributes: ['id', 'name', 'category'] }]
           },
           { model: MoveInGuestPayment, as: 'payments' }
+        ]
+      },
+      {
+        model: MoveInGuestRefundRequest,
+        as: 'guestRefundRequests',
+        required: false,
+        include: [
+          { model: User, as: 'requester', attributes: ['id', 'name'] },
+          { model: Admin, as: 'processedByAdmin', attributes: ['id', 'name'] }
         ]
       }
     ],

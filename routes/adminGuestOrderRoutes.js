@@ -14,6 +14,8 @@ const {
   listGuestOrders,
   getGuestOrder,
   updateDeliveryStatus,
+  listRefundRequests,
+  getRefundRequest,
   approveReturn,
   rejectReturn
 } = require('../controllers/adminGuestOrderController');
@@ -36,6 +38,18 @@ router.get('/guest-orders/:orderId', authenticateAdmin, getGuestOrder);
  * @body  { deliveryStatus, note? }
  */
 router.patch('/guest-orders/:orderId/delivery', authenticateAdmin, updateDeliveryStatus);
+
+/**
+ * @route GET /api/admin/move-in/refund-requests
+ * @desc  반품 요청 목록 (status/caseId 필터 + 페이지네이션)
+ */
+router.get('/refund-requests', authenticateAdmin, listRefundRequests);
+
+/**
+ * @route GET /api/admin/move-in/refund-requests/:requestId
+ * @desc  반품 요청 단건 상세 (주문 라인 포함)
+ */
+router.get('/refund-requests/:requestId', authenticateAdmin, getRefundRequest);
 
 /**
  * @route PATCH /api/admin/move-in/refund-requests/:requestId/approve

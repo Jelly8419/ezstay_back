@@ -27,7 +27,8 @@ const {
   MoveInGuestPayment,
   MoveInGuestOrderLog,
   MoveInGuestRefundRequest,
-  User
+  User,
+  Admin
 } = require('../models');
 const {
   ErrorCodes,
@@ -387,6 +388,161 @@ const updateDeliveryStatus = async (req, res) => {
 };
 
 /**
+ * 반품 요청 직렬화 (목록/단건 공용).
+ * include alias: order / case / requester / processedByAdmin
+ */
+function serializeRefundRequest(r, { detail = false } = {}) {
+  const o = typeof r.get === 'function' ? r.get({ plain: true }) : r;
+  const order = o.order || null;
+  const caseRow = o.case || null;
+  const requester = o.requester || null;
+  const admin = o.processedByAdmin || null;
+
+  const base = {
+    id: o.id,
+    status: o.status,
+    statusLabel: MoveInGuestRefundRequest.STATUS_LABELS?.[o.status] || o.status,
+    guestOrderId: o.guestOrderId,
+    caseId: o.caseId,
+    returnReason: o.returnReason,
+    rejectReason: o.rejectReason,
+    deliveryStatusSnapshot: o.deliveryStatusSnapshot,
+    itemTotalAmount: o.itemTotalAmount,
+    shippingDeduction: o.shippingDeduction,
+    finalRefundAmount: o.finalRefundAmount,
+    requestedBy: o.requestedBy,
+    requesterName: requester?.name || null,
+    adminId: o.adminId,
+    adminName: admin?.name || null,
+    processedAt: toKSTString(o.processedAt),
+    createdAt: toKSTString(o.createdAt),
+    updatedAt: toKSTString(o.updatedAt),
+    order: order ? {
+      orderDbId: order.id,
+      orderId: order.orderId,
+      orderType: order.orderType,
+      status: order.status,
+      totalAmount: order.totalAmount,
+      deliveryStatus: order.deliveryStatus
+    } : null,
+    case: caseRow ? {
+      caseId: caseRow.id,
+      guestName: caseRow.guestName,
+      guestPhone: caseRow.guestPhone,
+      checkInDate: caseRow.checkInDate,
+      checkOutDate: caseRow.checkOutDate
+      // ⚠️ 청소 필드 의도적 제외 (PRD 14.7-8)
+    } : null
+  };
+
+  if (detail && order?.items) {
+    base.items = order.items.map(it => ({
+      id: it.id,
+      optionId: it.optionId,
+      optionName: it.option?.name || null,
+      quantity: it.quantity,
+      totalPrice: it.totalPrice,
+      status: it.status
+    }));
+  }
+  return base;
+}
+
+/**
+ * GET /api/admin/move-in/refund-requests
+ * Query: status(PENDING|APPROVED|REJECTED), caseId, page, limit
+ */
+const listRefundRequests = async (req, res) => {
+  try {
+    const { status, caseId, page = 1, limit = 20 } = req.query;
+    const where = {};
+
+    if (status) {
+      if (!['PENDING', 'APPROVED', 'REJECTED'].includes(status)) {
+        return error(res, ErrorCodes.VALIDATION_ERROR, 400, 'status는 PENDING|APPROVED|REJECTED 중 하나여야 합니다.');
+      }
+      where.status = status;
+    }
+    if (caseId) {
+      const cid = parseInt(caseId, 10);
+      if (!Number.isInteger(cid) || cid <= 0) {
+        return error(res, ErrorCodes.VALIDATION_ERROR, 400, 'caseId는 정수여야 합니다.');
+      }
+      where.caseId = cid;
+    }
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const offset = (pageNum - 1) * limitNum;
+
+    const { rows, count } = await MoveInGuestRefundRequest.findAndCountAll({
+      where,
+      include: [
+        { model: MoveInGuestOrder, as: 'order', attributes: ['id', 'orderId', 'orderType', 'status', 'totalAmount', 'deliveryStatus'] },
+        { model: MoveInCase, as: 'case', attributes: ['id', 'guestName', 'guestPhone', 'checkInDate', 'checkOutDate'] },
+        { model: User, as: 'requester', attributes: ['id', 'name'] },
+        { model: Admin, as: 'processedByAdmin', attributes: ['id', 'name'] }
+      ],
+      order: [['createdAt', 'DESC']],
+      limit: limitNum,
+      offset,
+      distinct: true
+    });
+
+    return success(res, {
+      items: rows.map(r => serializeRefundRequest(r)),
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: count,
+        totalPages: Math.ceil(count / limitNum)
+      }
+    }, '반품 요청 목록을 조회했습니다.');
+  } catch (err) {
+    console.error('[adminGuestOrder.listRefundRequests] error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
+ * GET /api/admin/move-in/refund-requests/:requestId
+ * 단건 상세 (주문 라인 포함)
+ */
+const getRefundRequest = async (req, res) => {
+  try {
+    const requestId = parseInt(req.params.requestId, 10);
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, 'requestId는 정수여야 합니다.');
+    }
+
+    const reqRow = await MoveInGuestRefundRequest.findByPk(requestId, {
+      include: [
+        {
+          model: MoveInGuestOrder,
+          as: 'order',
+          include: [{
+            model: MoveInGuestOrderItem,
+            as: 'items',
+            include: [{ model: MoveInOption, as: 'option', attributes: ['id', 'name'] }]
+          }]
+        },
+        { model: MoveInCase, as: 'case', attributes: ['id', 'guestName', 'guestPhone', 'checkInDate', 'checkOutDate'] },
+        { model: User, as: 'requester', attributes: ['id', 'name'] },
+        { model: Admin, as: 'processedByAdmin', attributes: ['id', 'name'] }
+      ]
+    });
+    if (!reqRow) {
+      return error(res, ErrorCodes.MOVE_IN_REFUND_REQUEST_NOT_FOUND, 404);
+    }
+
+    return success(res, serializeRefundRequest(reqRow, { detail: true }), '반품 요청 상세를 조회했습니다.');
+  } catch (err) {
+    console.error('[adminGuestOrder.getRefundRequest] error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
  * MoveInGuestPayment → PayTag cancelPayment 파라미터.
  * (게스트 컨트롤러 buildGuestCancelParams 와 동일 — paymentResponse 없는 도메인)
  */
@@ -618,6 +774,8 @@ module.exports = {
   listGuestOrders,
   getGuestOrder,
   updateDeliveryStatus,
+  listRefundRequests,
+  getRefundRequest,
   approveReturn,
   rejectReturn
 };
