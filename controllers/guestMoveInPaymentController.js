@@ -53,7 +53,8 @@ const {
 const {
   evaluateGuestCancel,
   evaluateGuestReturn,
-  calcPartialRefund
+  calcPartialRefund,
+  checkRemainingAmount
 } = require('../utils/moveInRefundPolicy');
 
 const USE_MOCK = process.env.PAYMENT_USE_MOCK === 'true';
@@ -726,6 +727,21 @@ const cancelPaidOrder = async (req, res) => {
     const { refundAmount: partialRefund, lineUpdates } =
       calcPartialRefund(activeItems.filter(it => qtyMap.has(it.id)), qtyMap);
     const orderTotalAmount = partialRefund;
+
+    // 부분 취소 잔액 가드 — 취소 후 남는 ACTIVE 합계가 1~9,999원이면 거부.
+    // (전량 취소로 잔액 0 이면 통과 / 부분 취소 시에만 검증)
+    if (isPartial) {
+      const activeTotal = activeItems.reduce((s, it) => s + Number(it.totalPrice), 0);
+      const remainingAfterCancel = activeTotal - partialRefund;
+      const remainCheck = checkRemainingAmount(remainingAfterCancel);
+      if (!remainCheck.ok) {
+        await preTx.rollback();
+        return error(res, ErrorCodes.MOVE_IN_GUEST_CANCEL_REMAINING_INVALID, 400, {
+          reason: remainCheck.reason,
+          remainingAfterCancel
+        });
+      }
+    }
 
     const verdict = evaluateGuestCancel({
       checkInDate: caseRow.checkInDate,

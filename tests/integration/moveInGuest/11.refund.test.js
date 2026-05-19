@@ -227,6 +227,66 @@ describe('입주 준비 환불', () => {
       expect(res.body.code).toBe(4814);
     });
 
+    test('잔액 가드: 부분 취소 후 1~9,999원 남으면 → 4815 거부', async () => {
+      // 13,000 옵션 1개 + 5,000 옵션 1개 = 18,000. 13,000 라인 취소 → 5,000 남음 (거부)
+      const o13 = await createMoveInOption({ name: '잔액가드13k', category: 'AMENITY_KIT', price: 13000 });
+      const o5 = await createMoveInOption({ name: '잔액가드5k', category: 'AMENITY_KIT', price: 5000 });
+      optionIds.push(o13.id, o5.id);
+      const { order, items } = await makeCaseWithPaidOrder({
+        checkInDate: '2030-08-10', checkOutDate: '2030-08-15',
+        options: [{ option: o13, quantity: 1 }, { option: o5, quantity: 1 }]
+      });
+      const line13 = items.find(i => i.optionId === o13.id);
+
+      const res = await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/cancel`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ items: [{ itemId: line13.id, cancelQuantity: 1 }] });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe(4815);
+
+      // 주문/라인 변동 없어야 함 (거부 = 롤백)
+      const fresh = await MoveInGuestOrder.findByPk(order.id);
+      expect(fresh.status).toBe('PAID');
+      const l = await MoveInGuestOrderItem.findByPk(line13.id);
+      expect(l.status).toBe('ACTIVE');
+      expect(l.quantity).toBe(1);
+    });
+
+    test('잔액 가드: 전량 취소(잔액 0) 는 통과', async () => {
+      const o3 = await createMoveInOption({ name: '잔액가드3k', category: 'AMENITY_KIT', price: 3000 });
+      optionIds.push(o3.id);
+      const { order, items } = await makeCaseWithPaidOrder({
+        checkInDate: '2030-08-20', checkOutDate: '2030-08-25',
+        options: [{ option: o3, quantity: 1 }]   // 3,000원 — 1~9999 구간이지만 전량이라 잔액 0
+      });
+      const res = await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/cancel`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ items: [{ itemId: items[0].id, cancelQuantity: 1 }] });
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('FULLY_REFUNDED');
+    });
+
+    test('잔액 가드: 취소 후 10,000원 이상 남으면 통과', async () => {
+      const o15 = await createMoveInOption({ name: '잔액가드15k', category: 'AMENITY_KIT', price: 15000 });
+      const o8 = await createMoveInOption({ name: '잔액가드8k', category: 'AMENITY_KIT', price: 8000 });
+      optionIds.push(o15.id, o8.id);
+      const { order, items } = await makeCaseWithPaidOrder({
+        checkInDate: '2030-08-28', checkOutDate: '2030-08-30',
+        options: [{ option: o15, quantity: 1 }, { option: o8, quantity: 1 }] // 23,000
+      });
+      const line8 = items.find(i => i.optionId === o8.id);
+      // 8,000 취소 → 15,000 남음 (>= 10,000, 통과)
+      const res = await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/cancel`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ items: [{ itemId: line8.id, cancelQuantity: 1 }] });
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('PARTIAL_REFUND');
+      expect(res.body.data.refundAmount).toBe(8000);
+    });
+
     test('PARTIAL_REFUND 주문 재취소 가능 → 남은 수량 추가 취소', async () => {
       const { order, items } = await makeCaseWithPaidOrder({
         checkInDate: '2030-06-10', checkOutDate: '2030-06-15',

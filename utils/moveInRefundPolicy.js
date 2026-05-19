@@ -32,6 +32,26 @@ const { RENTAL_ROUND_TRIP_SHIPPING_COST } = require('./rentalOrderHelper');
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// 부분 취소 후 남는 주문 최소 금액 (게스트 계약 옵션 정책과 동일 값).
+// 잔액 0(전량 취소)은 예외 허용, 1~9,999원만 남기는 부분 취소는 거부.
+const MIN_REMAINING_AMOUNT = 10000;
+
+/**
+ * 부분 취소 후 잔액 가드.
+ * @param {number} remainingAfterCancel  취소 후 남는 ACTIVE 라인 합계
+ * @returns {{ ok: boolean, reason?: string }}
+ */
+function checkRemainingAmount(remainingAfterCancel) {
+  if (remainingAfterCancel > 0 && remainingAfterCancel < MIN_REMAINING_AMOUNT) {
+    return {
+      ok: false,
+      reason: `취소 후 남은 옵션 금액이 ${MIN_REMAINING_AMOUNT.toLocaleString()}원 미만입니다. `
+        + '전체 취소하거나 10,000원 이상 남도록 선택해주세요.'
+    };
+  }
+  return { ok: true };
+}
+
 // 임대인 청소 환불 — 희망일 D-1~당일 구간 차감액
 const CLEANING_LATE_CANCEL_DEDUCTION = 10000;
 
@@ -277,11 +297,13 @@ function evaluateCleaningRefund({ cleaningDate, cleaningTime, paidAmount, now = 
 module.exports = {
   RENTAL_ROUND_TRIP_SHIPPING_COST,
   CLEANING_LATE_CANCEL_DEDUCTION,
+  MIN_REMAINING_AMOUNT,
   toKstMidnight,
   endOfKstDay,
   evaluateGuestCancel,
   evaluateGuestReturn,
   calcReturnRefund,
   calcPartialRefund,
+  checkRemainingAmount,
   evaluateCleaningRefund
 };
