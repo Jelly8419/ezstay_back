@@ -327,7 +327,9 @@ const confirmPayment = async (req, res) => {
           expectedOrderId: order.orderId,
           expectedAmount: payment.amount
         });
-        pgTid = pgResponse.tran_key || pgResponse.recv_orderno || null;
+        // PG 거래번호 — 취소(CARDCANCEL) 시 orderno 로 필요.
+        // PAYSTDMPI 카드결제 응답은 거래번호를 orderno 로 줌 (tran_key/recv_orderno 없음).
+        pgTid = pgResponse.tran_key || pgResponse.recv_orderno || pgResponse.orderno || null;
         pgMethod = paytagClient.mapPaymentMethod(payType);
       } catch (pgErr) {
         // 진단 보강: resultcode 접두 + PG 응답 원문 로깅
@@ -611,20 +613,28 @@ const getPaymentResult = async (req, res) => {
 
 /**
  * MoveInGuestPayment → PayTag cancelPayment 파라미터.
- * MoveInGuestPayment 에는 paymentResponse 가 없어 직접 구성.
- *   - orderno    = 우리 주문번호 (order.orderId)
+ *   - orderno    = PG 거래번호 (payment.pgTid) — CARDCANCEL 은 PG 거래번호 필요.
+ *                  가맹점 주문번호(order.orderId)를 넘기면 PG 가 거래를 못 찾고
+ *                  certval 서명도 불일치하여 취소 실패함.
  *   - orgpaydate = 결제 완료일 YYYYMMDD (KST)
  *   - orgtranamt = 원결제 금액
  *   - loginid    = env 폴백 (paytagClient 내부에서 PAYTAG_LOGIN_ID 사용)
+ *
+ * @throws pgTid 가 없으면 (구버전 데이터) 자동 취소 불가 — 호출처에서 처리.
  */
 function buildGuestCancelParams(order, payment) {
+  if (!payment.pgTid) {
+    const e = new Error('PG 거래번호(pgTid)가 없어 자동 취소가 불가합니다. 관리자 수동 취소가 필요합니다.');
+    e.code = 'MISSING_PG_TID';
+    throw e;
+  }
   const paidAt = payment.paidAt ? new Date(payment.paidAt) : new Date();
   // KST 기준 YYYYMMDD (process.env.TZ=Asia/Seoul 전제)
   const y = paidAt.getFullYear();
   const m = String(paidAt.getMonth() + 1).padStart(2, '0');
   const d = String(paidAt.getDate()).padStart(2, '0');
   return {
-    orderno: order.orderId,
+    orderno: payment.pgTid,
     orgpaydate: `${y}${m}${d}`,
     orgtranamt: payment.amount
   };
@@ -709,12 +719,21 @@ const cancelPaidOrder = async (req, res) => {
     await preTx.rollback();
 
     if (!isMock) {
-      const { orderno, orgpaydate, orgtranamt } = buildGuestCancelParams(order, payment);
+      let cancelParams;
+      try {
+        cancelParams = buildGuestCancelParams(order, payment);
+      } catch (e) {
+        if (e.code === 'MISSING_PG_TID') {
+          console.error('[guestMoveInPayment.cancelPaid] pgTid 누락 — 수동 취소 필요:', {
+            orderId: order.orderId, paymentId: payment.id
+          });
+          return error(res, { code: 4903, message: e.message }, 409);
+        }
+        throw e;
+      }
       try {
         await paytagClient.cancelPayment({
-          orderno,
-          orgpaydate,
-          orgtranamt,
+          ...cancelParams,
           cancelamt: verdict.refundAmount,
           canceltype: '0'
         });

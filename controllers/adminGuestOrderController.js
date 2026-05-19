@@ -547,12 +547,17 @@ const getRefundRequest = async (req, res) => {
  * (게스트 컨트롤러 buildGuestCancelParams 와 동일 — paymentResponse 없는 도메인)
  */
 function buildCancelParams(order, payment) {
+  if (!payment.pgTid) {
+    const e = new Error('PG 거래번호(pgTid)가 없어 자동 취소가 불가합니다. 관리자 수동 취소가 필요합니다.');
+    e.code = 'MISSING_PG_TID';
+    throw e;
+  }
   const paidAt = payment.paidAt ? new Date(payment.paidAt) : new Date();
   const y = paidAt.getFullYear();
   const m = String(paidAt.getMonth() + 1).padStart(2, '0');
   const d = String(paidAt.getDate()).padStart(2, '0');
   return {
-    orderno: order.orderId,
+    orderno: payment.pgTid,  // PG 거래번호 (가맹점 주문번호 아님)
     orgpaydate: `${y}${m}${d}`,
     orgtranamt: payment.amount
   };
@@ -630,10 +635,21 @@ const approveReturn = async (req, res) => {
     await preTx.rollback();
 
     if (!isMock) {
-      const { orderno, orgpaydate, orgtranamt } = buildCancelParams(order, payment);
+      let cancelParams;
+      try {
+        cancelParams = buildCancelParams(order, payment);
+      } catch (e) {
+        if (e.code === 'MISSING_PG_TID') {
+          console.error('[adminGuestOrder.approveReturn] pgTid 누락 — 수동 취소 필요:', {
+            orderId: order.orderId, paymentId: payment.id
+          });
+          return error(res, { code: 4903, message: e.message }, 409);
+        }
+        throw e;
+      }
       try {
         await paytagClient.cancelPayment({
-          orderno, orgpaydate, orgtranamt,
+          ...cancelParams,
           cancelamt: finalRefundAmount,
           canceltype: '0'
         });

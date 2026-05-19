@@ -392,7 +392,9 @@ const confirmCleaningPayment = async (req, res) => {
         );
       }
 
-      pgTid = pgResponse.tran_key || pgResponse.recv_orderno || null;
+      // PG 거래번호 — 취소(CARDCANCEL) 시 orderno 로 필요.
+      // PAYSTDMPI 카드결제 응답은 거래번호를 orderno 로 줌.
+      pgTid = pgResponse.tran_key || pgResponse.recv_orderno || pgResponse.orderno || null;
       pgMethod = paytagClient.mapPaymentMethod(payType);
     }
 
@@ -430,15 +432,21 @@ const confirmCleaningPayment = async (req, res) => {
 
 /**
  * MoveInPayment → PayTag cancelPayment 파라미터.
- * (paymentResponse 없는 도메인 — 직접 구성)
+ *   - orderno = PG 거래번호 (payment.pgTid). 가맹점 주문번호(payment.orderId) 아님.
+ * @throws pgTid 없으면 MISSING_PG_TID — 호출처에서 수동 취소 안내.
  */
 function buildCleaningCancelParams(payment) {
+  if (!payment.pgTid) {
+    const e = new Error('PG 거래번호(pgTid)가 없어 자동 취소가 불가합니다. 관리자 수동 취소가 필요합니다.');
+    e.code = 'MISSING_PG_TID';
+    throw e;
+  }
   const paidAt = payment.paidAt ? new Date(payment.paidAt) : new Date();
   const y = paidAt.getFullYear();
   const m = String(paidAt.getMonth() + 1).padStart(2, '0');
   const d = String(paidAt.getDate()).padStart(2, '0');
   return {
-    orderno: payment.orderId,
+    orderno: payment.pgTid,
     orgpaydate: `${y}${m}${d}`,
     orgtranamt: payment.amount
   };
@@ -502,10 +510,21 @@ const refundCleaningPayment = async (req, res) => {
     await preTx.rollback();
 
     if (!isMock) {
-      const { orderno, orgpaydate, orgtranamt } = buildCleaningCancelParams(payment);
+      let cancelParams;
+      try {
+        cancelParams = buildCleaningCancelParams(payment);
+      } catch (e) {
+        if (e.code === 'MISSING_PG_TID') {
+          console.error('[moveInCleaning.refund] pgTid 누락 — 수동 취소 필요:', {
+            orderId: payment.orderId, paymentId: payment.id
+          });
+          return error(res, { code: 4903, message: e.message }, 409);
+        }
+        throw e;
+      }
       try {
         await paytagClient.cancelPayment({
-          orderno, orgpaydate, orgtranamt,
+          ...cancelParams,
           cancelamt: verdict.refundAmount,
           canceltype: '0'
         });
