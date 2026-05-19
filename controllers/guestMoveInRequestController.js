@@ -22,7 +22,8 @@ const {
   MoveInOption,
   MoveInGuestOrder,
   MoveInGuestOrderItem,
-  MoveInGuestPayment
+  MoveInGuestPayment,
+  MoveInGuestRefundRequest
 } = require('../models');
 const {
   ErrorCodes,
@@ -63,6 +64,15 @@ async function findOwnCase(userId, caseId, { includeOrders = false } = {}) {
           model: MoveInGuestPayment,
           as: 'payments',
           required: false
+        },
+        {
+          // 진행 중(PENDING) 반품요청만 — 라인 status 안 바뀌므로 진행상태 추적용.
+          // separate:true 로 별도 쿼리 → where 가 메인 주문 결과를 필터링하지 않음.
+          model: MoveInGuestRefundRequest,
+          as: 'refundRequests',
+          required: false,
+          separate: true,
+          where: { status: 'PENDING' }
         }
       ],
       order: [['createdAt', 'ASC']]

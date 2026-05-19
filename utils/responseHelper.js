@@ -157,6 +157,7 @@ const ErrorCodes = {
   MOVE_IN_REFUND_REQUEST_NOT_FOUND:      { code: 4811, message: '반품 요청을 찾을 수 없습니다.' },
   MOVE_IN_REFUND_REQUEST_NOT_PENDING:    { code: 4812, message: '이미 처리된 반품 요청입니다.' },
   MOVE_IN_CLEANING_REFUND_NOT_ALLOWED:   { code: 4813, message: '현재 청소 환불이 불가한 상태입니다.' },
+  MOVE_IN_GUEST_CANCEL_QTY_INVALID:      { code: 4814, message: '취소/반품 수량이 올바르지 않습니다.' },
 
   // 알림 관련 (48xx)
   NOTIFICATION_NOT_FOUND: { code: 4801, message: '알림을 찾을 수 없습니다.' },

@@ -349,6 +349,7 @@ function serializeCaseDetail(c) {
         finalRefundAmount: r.finalRefundAmount,
         requesterName: r.requester?.name || null,
         adminName: r.processedByAdmin?.name || null,
+        targetItems: r.targetItems || null,
         processedAt: toKSTString(r.processedAt),
         createdAt: toKSTString(r.createdAt)
       })),

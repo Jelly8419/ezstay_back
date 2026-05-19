@@ -104,6 +104,27 @@ module.exports = (sequelize) => {
       allowNull: true,
       field: 'processed_at',
       comment: '승인/거절 처리 시점'
+    },
+
+    // 부분 반품 대상 라인·수량 스냅샷.
+    // MariaDB JSON 컬럼 이슈 회피 위해 TEXT + 명시 직렬화 (roomSnapshot 패턴, CLAUDE.md).
+    // null = 전체 반품 (기존 로직 폴백). 형식: [{itemId,quantity,pricePerItem,optionName}]
+    targetItems: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'target_items',
+      comment: '부분 반품 대상 라인·수량 스냅샷 JSON',
+      get() {
+        const raw = this.getDataValue('targetItems');
+        if (raw == null) return null;
+        if (typeof raw === 'object') return raw;
+        try { return JSON.parse(raw); } catch { return null; }
+      },
+      set(val) {
+        if (val == null) this.setDataValue('targetItems', null);
+        else if (typeof val === 'string') this.setDataValue('targetItems', val);
+        else this.setDataValue('targetItems', JSON.stringify(val));
+      }
     }
   }, {
     tableName: 'move_in_guest_refund_requests',

@@ -414,6 +414,8 @@ function serializeRefundRequest(r, { detail = false } = {}) {
     requesterName: requester?.name || null,
     adminId: o.adminId,
     adminName: admin?.name || null,
+    // 부분 반품 대상 스냅샷 (null = 전체 반품)
+    targetItems: o.targetItems || null,
     processedAt: toKSTString(o.processedAt),
     createdAt: toKSTString(o.createdAt),
     updatedAt: toKSTString(o.updatedAt),
@@ -604,17 +606,51 @@ const approveReturn = async (req, res) => {
       return error(res, ErrorCodes.MOVE_IN_GUEST_ORDER_NOT_FOUND, 404);
     }
 
-    const returnItems = await MoveInGuestOrderItem.findAll({
-      where: { guestOrderId: order.id, status: 'RETURN_REQUESTED' },
+    // 반품 대상 = targetItems 스냅샷 (없으면 = 구버전 전체 반품 폴백: ACTIVE 라인 전부)
+    const snapshot = reqRow.targetItems; // [{itemId,optionId,quantity,pricePerItem}]
+    let targetLines;
+    if (Array.isArray(snapshot) && snapshot.length > 0) {
+      const ids = snapshot.map(s => s.itemId);
+      const items = await MoveInGuestOrderItem.findAll({
+        where: { id: ids, guestOrderId: order.id },
+        transaction: preTx
+      });
+      const byId = new Map(items.map(it => [it.id, it]));
+      targetLines = [];
+      for (const s of snapshot) {
+        const it = byId.get(s.itemId);
+        if (!it || it.status !== 'ACTIVE') {
+          await preTx.rollback();
+          return error(res, ErrorCodes.VALIDATION_ERROR, 400,
+            `반품 대상 라인(${s.itemId})이 더 이상 유효하지 않습니다.`);
+        }
+        const qty = Math.min(s.quantity, it.quantity);
+        targetLines.push({ item: it, quantity: qty, pricePerItem: Number(it.pricePerItem) });
+      }
+    } else {
+      const items = await MoveInGuestOrderItem.findAll({
+        where: { guestOrderId: order.id, status: 'ACTIVE' },
+        transaction: preTx
+      });
+      if (items.length === 0) {
+        await preTx.rollback();
+        return error(res, ErrorCodes.VALIDATION_ERROR, 400, '반품 대상 라인이 없습니다.');
+      }
+      targetLines = items.map(it => ({ item: it, quantity: it.quantity, pricePerItem: Number(it.pricePerItem) }));
+    }
+
+    const itemTotalAmount = targetLines.reduce((s, l) => s + l.pricePerItem * l.quantity, 0);
+
+    // 배송비 면제: 같은 케이스에 이미 APPROVED 된(=수거 진행 중) 반품요청이 있으면 면제
+    const priorApproved = await MoveInGuestRefundRequest.count({
+      where: {
+        caseId: reqRow.caseId,
+        id: { [Op.ne]: reqRow.id },
+        status: 'APPROVED'
+      },
       transaction: preTx
     });
-    if (returnItems.length === 0) {
-      await preTx.rollback();
-      return error(res, ErrorCodes.VALIDATION_ERROR, 400, '반품 요청 상태인 라인이 없습니다.');
-    }
-    const itemTotalAmount = returnItems.reduce((s, it) => s + Number(it.totalPrice), 0);
-
-    const { shippingDeduction, finalRefundAmount } = calcReturnRefund(itemTotalAmount);
+    const { shippingDeduction, finalRefundAmount } = calcReturnRefund(itemTotalAmount, priorApproved > 0);
     if (finalRefundAmount <= 0) {
       await preTx.rollback();
       return error(res, ErrorCodes.VALIDATION_ERROR, 400,
@@ -647,11 +683,14 @@ const approveReturn = async (req, res) => {
         }
         throw e;
       }
+      // 환불 후 결제 잔액 0 이면 전체취소('0'), 남으면 부분취소('1')
+      const balanceBefore = Number(payment.amount) - Number(order.refundedAmount || 0);
+      const canceltype = (finalRefundAmount >= balanceBefore) ? '0' : '1';
       try {
         await paytagClient.cancelPayment({
           ...cancelParams,
           cancelamt: finalRefundAmount,
-          canceltype: '0'
+          canceltype
         });
       } catch (pgErr) {
         if (pgErr.paytagErrorCode === '1023') {
@@ -663,19 +702,47 @@ const approveReturn = async (req, res) => {
     }
 
     const tx = await sequelize.transaction();
+    let finalOrderStatus;
     try {
       const now = new Date();
-      await MoveInGuestOrderItem.update(
-        { status: 'CANCELLED', cancelledAt: now, refundAmount: sequelize.literal('total_price') },
-        { where: { guestOrderId: order.id, status: 'RETURN_REQUESTED' }, transaction: tx }
-      );
-      await payment.update({
-        status: 'CANCELLED',
-        failedAt: now,
-        failureReason: '반품 승인 환불'
-      }, { transaction: tx });
+
+      // 스냅샷 기준 라인별 처리 — full: CANCELLED / 부분: quantity 차감 (분할 X)
+      for (const tl of targetLines) {
+        const it = tl.item;
+        const isFull = tl.quantity === it.quantity;
+        if (isFull) {
+          await it.update({
+            status: 'CANCELLED',
+            cancelledAt: now,
+            cancelReason: '반품 승인 환불',
+            refundAmount: Number(it.refundAmount || 0) + tl.pricePerItem * tl.quantity
+          }, { transaction: tx });
+        } else {
+          const remainQty = it.quantity - tl.quantity;
+          await it.update({
+            quantity: remainQty,
+            totalPrice: tl.pricePerItem * remainQty,
+            cancelReason: '반품 승인 부분 환불',
+            refundAmount: Number(it.refundAmount || 0) + tl.pricePerItem * tl.quantity
+          }, { transaction: tx });
+        }
+      }
+
+      const remainingActive = await MoveInGuestOrderItem.count({
+        where: { guestOrderId: order.id, status: 'ACTIVE' },
+        transaction: tx
+      });
+      finalOrderStatus = remainingActive === 0 ? 'FULLY_REFUNDED' : 'PARTIAL_REFUND';
+
+      if (finalOrderStatus === 'FULLY_REFUNDED') {
+        await payment.update({
+          status: 'CANCELLED',
+          failedAt: now,
+          failureReason: '반품 승인 환불'
+        }, { transaction: tx });
+      }
       await order.update({
-        status: 'FULLY_REFUNDED',
+        status: finalOrderStatus,
         refundedAmount: Number(order.refundedAmount || 0) + finalRefundAmount
       }, { transaction: tx });
       await reqRow.update({
@@ -694,7 +761,11 @@ const approveReturn = async (req, res) => {
         action: 'RETURN_APPROVED',
         amountChange: -finalRefundAmount,
         balanceAfter: 0,
-        metadata: { refundRequestId: reqRow.id, itemTotalAmount, shippingDeduction, finalRefundAmount, mock: isMock },
+        metadata: {
+          refundRequestId: reqRow.id, itemTotalAmount, shippingDeduction, finalRefundAmount,
+          lines: targetLines.map(tl => ({ itemId: tl.item.id, quantity: tl.quantity })),
+          mock: isMock
+        },
         req
       }, tx);
 
@@ -710,6 +781,7 @@ const approveReturn = async (req, res) => {
       orderDbId: order.id,
       orderId: order.orderId,
       status: 'APPROVED',
+      orderStatus: finalOrderStatus,
       itemTotalAmount,
       shippingDeduction,
       finalRefundAmount
@@ -749,6 +821,8 @@ const rejectReturn = async (req, res) => {
     }
 
     const now = new Date();
+    // 정책(나안): 반품 요청 시 라인 status 를 변경하지 않으므로 원복 불필요.
+    // 구버전(라인이 RETURN_REQUESTED 로 바뀐) 데이터 호환을 위해 방어적 원복만 유지.
     await MoveInGuestOrderItem.update(
       { status: 'ACTIVE' },
       { where: { guestOrderId: reqRow.guestOrderId, status: 'RETURN_REQUESTED' }, transaction }

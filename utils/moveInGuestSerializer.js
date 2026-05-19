@@ -122,6 +122,22 @@ function serializeGuestOrder(orderRow) {
   if (!orderRow) return null;
   const o = typeof orderRow.get === 'function' ? orderRow.get({ plain: true }) : orderRow;
 
+  // 진행 중(PENDING) 반품요청만 동봉. (refundRequests 가 include 됐을 때)
+  const pendingRequests = (o.refundRequests || []).filter(r => r.status === 'PENDING');
+
+  // 라인별 "반품 요청 중 수량" 집계 — targetItems 스냅샷 기준.
+  // targetItems 가 모델 getter 로 파싱돼 배열(or JSON 문자열)로 올 수 있어 양쪽 처리.
+  const pendingQtyByItem = new Map();
+  for (const r of pendingRequests) {
+    let ti = r.targetItems;
+    if (typeof ti === 'string') { try { ti = JSON.parse(ti); } catch { ti = null; } }
+    if (Array.isArray(ti)) {
+      for (const t of ti) {
+        pendingQtyByItem.set(t.itemId, (pendingQtyByItem.get(t.itemId) || 0) + Number(t.quantity || 0));
+      }
+    }
+  }
+
   return {
     orderDbId: o.id,
     orderId: o.orderId ?? o.order_id,
@@ -141,8 +157,27 @@ function serializeGuestOrder(orderRow) {
       quantity: it.quantity,
       pricePerItem: it.pricePerItem ?? it.price_per_item,
       totalPrice: it.totalPrice ?? it.total_price,
-      status: it.status
-    }))
+      status: it.status,
+      refundAmount: it.refundAmount ?? it.refund_amount ?? null,
+      cancelledAt: toKSTString(it.cancelledAt ?? it.cancelled_at),
+      // 라인별 반품 요청 중(미승인) 수량 — 부분 반품 남은수량 가드용
+      pendingReturnQuantity: pendingQtyByItem.get(it.id) || 0
+    })),
+    // 진행 중 반품요청 (PENDING 만). refundRequests 미include 시 빈 배열.
+    refundRequests: pendingRequests.map(r => {
+      let ti = r.targetItems;
+      if (typeof ti === 'string') { try { ti = JSON.parse(ti); } catch { ti = null; } }
+      return {
+        id: r.id,
+        status: r.status,
+        itemTotalAmount: r.itemTotalAmount ?? r.item_total_amount,
+        returnReason: r.returnReason ?? r.return_reason ?? null,
+        targetItems: Array.isArray(ti)
+          ? ti.map(t => ({ itemId: t.itemId, quantity: t.quantity }))
+          : null,
+        createdAt: toKSTString(r.createdAt ?? r.created_at)
+      };
+    })
   };
 }
 

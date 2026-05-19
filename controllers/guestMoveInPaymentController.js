@@ -52,7 +52,8 @@ const {
 } = require('../services/moveInGuestOrderService');
 const {
   evaluateGuestCancel,
-  evaluateGuestReturn
+  evaluateGuestReturn,
+  calcPartialRefund
 } = require('../utils/moveInRefundPolicy');
 
 const USE_MOCK = process.env.PAYMENT_USE_MOCK === 'true';
@@ -579,6 +580,15 @@ const getPaymentResult = async (req, res) => {
     const order = payment.order;
     const caseRow = order?.case;
 
+    // 진행 중(PENDING) 반품요청 별도 조회 후 주입 (중첩 include 에서 separate 불가).
+    // serializeGuestOrder 가 o.refundRequests 를 읽어 동봉 + items.pendingReturnQuantity 집계.
+    if (order) {
+      const pendingReturns = await MoveInGuestRefundRequest.findAll({
+        where: { guestOrderId: order.id, status: 'PENDING' }
+      });
+      order.setDataValue('refundRequests', pendingReturns);
+    }
+
     if (!order || !caseRow) {
       return error(res, ErrorCodes.MOVE_IN_GUEST_PAYMENT_NOT_FOUND, 404);
     }
@@ -656,7 +666,7 @@ const cancelPaidOrder = async (req, res) => {
   try {
     const userId = req.user.id;
     const { orderId } = req.params;
-    const { reason } = req.body || {};
+    const { reason, items: cancelItems } = req.body || {};
 
     const orderDbId = parseInt(orderId, 10);
     if (!Number.isInteger(orderDbId) || orderDbId <= 0) {
@@ -690,7 +700,32 @@ const cancelPaidOrder = async (req, res) => {
         reason: '취소할 활성 라인이 없습니다.'
       });
     }
-    const orderTotalAmount = activeItems.reduce((s, it) => s + Number(it.totalPrice), 0);
+
+    // 부분 취소 대상 결정 — items 미지정이면 전체(하위호환), 지정이면 수량 단위
+    const isPartial = Array.isArray(cancelItems) && cancelItems.length > 0;
+    let qtyMap;
+    if (isPartial) {
+      qtyMap = new Map();
+      const activeById = new Map(activeItems.map(it => [it.id, it]));
+      for (const ci of cancelItems) {
+        const itemId = parseInt(ci?.itemId, 10);
+        const qty = parseInt(ci?.cancelQuantity, 10);
+        const it = activeById.get(itemId);
+        if (!it || !Number.isInteger(qty) || qty < 1 || qty > it.quantity) {
+          await preTx.rollback();
+          return error(res, ErrorCodes.MOVE_IN_GUEST_CANCEL_QTY_INVALID, 400, {
+            itemId, cancelQuantity: ci?.cancelQuantity
+          });
+        }
+        qtyMap.set(itemId, qty);
+      }
+    } else {
+      qtyMap = new Map(activeItems.map(it => [it.id, it.quantity]));
+    }
+
+    const { refundAmount: partialRefund, lineUpdates } =
+      calcPartialRefund(activeItems.filter(it => qtyMap.has(it.id)), qtyMap);
+    const orderTotalAmount = partialRefund;
 
     const verdict = evaluateGuestCancel({
       checkInDate: caseRow.checkInDate,
@@ -731,11 +766,14 @@ const cancelPaidOrder = async (req, res) => {
         }
         throw e;
       }
+      // 결제 잔액이 이번 취소로 0이 되면 전체취소('0'), 남으면 부분취소('1')
+      const balanceBefore = Number(payment.amount) - Number(order.refundedAmount || 0);
+      const canceltype = (partialRefund >= balanceBefore) ? '0' : '1';
       try {
         await paytagClient.cancelPayment({
           ...cancelParams,
-          cancelamt: verdict.refundAmount,
-          canceltype: '0'
+          cancelamt: partialRefund,
+          canceltype
         });
       } catch (pgErr) {
         if (pgErr.paytagErrorCode === '1023') {
@@ -748,20 +786,47 @@ const cancelPaidOrder = async (req, res) => {
 
     // PG 성공 → DB 반영
     const tx = await sequelize.transaction();
+    let finalOrderStatus;
     try {
       const now = new Date();
-      await MoveInGuestOrderItem.update(
-        { status: 'CANCELLED', cancelledAt: now, cancelReason: reason || '임차인 옵션 취소', refundAmount: sequelize.literal('total_price') },
-        { where: { guestOrderId: order.id, status: 'ACTIVE' }, transaction: tx }
-      );
-      await payment.update({
-        status: 'CANCELLED',
-        failedAt: now,
-        failureReason: '임차인 옵션 취소 환불'
-      }, { transaction: tx });
+
+      // 라인별 처리 — full: CANCELLED / 부분: quantity 차감 + refundAmount 누적 (분할 X)
+      for (const lu of lineUpdates) {
+        if (lu.isFull) {
+          await lu.item.update({
+            status: 'CANCELLED',
+            cancelledAt: now,
+            cancelReason: reason || '임차인 옵션 취소',
+            refundAmount: Number(lu.item.refundAmount || 0) + lu.itemRefund
+          }, { transaction: tx });
+        } else {
+          await lu.item.update({
+            quantity: lu.remainQty,
+            totalPrice: Number(lu.item.pricePerItem) * lu.remainQty,
+            cancelReason: reason || '임차인 옵션 부분 취소',
+            refundAmount: Number(lu.item.refundAmount || 0) + lu.itemRefund
+          }, { transaction: tx });
+        }
+      }
+
+      const remainingActive = await MoveInGuestOrderItem.count({
+        where: { guestOrderId: order.id, status: 'ACTIVE' },
+        transaction: tx
+      });
+      finalOrderStatus = remainingActive === 0 ? 'FULLY_REFUNDED' : 'PARTIAL_REFUND';
+
+      // 결제: 전액 환불 시에만 CANCELLED, 부분이면 PAID 유지 (refundedAmount 로 추적)
+      if (finalOrderStatus === 'FULLY_REFUNDED') {
+        await payment.update({
+          status: 'CANCELLED',
+          failedAt: now,
+          failureReason: '임차인 옵션 취소 환불'
+        }, { transaction: tx });
+      }
+
       await order.update({
-        status: 'FULLY_REFUNDED',
-        refundedAmount: Number(order.refundedAmount || 0) + verdict.refundAmount
+        status: finalOrderStatus,
+        refundedAmount: Number(order.refundedAmount || 0) + partialRefund
       }, { transaction: tx });
 
       await MoveInGuestOrderLog.createLog({
@@ -770,14 +835,15 @@ const cancelPaidOrder = async (req, res) => {
         actor: 'GUEST',
         actorId: userId,
         action: 'ORDER_REFUNDED',
-        amountChange: -verdict.refundAmount,
+        amountChange: -partialRefund,
         balanceAfter: 0,
         metadata: {
-          refundAmount: verdict.refundAmount,
-          shippingDeduction: verdict.shippingDeduction,
+          refundAmount: partialRefund,
+          partial: isPartial,
+          lines: lineUpdates.map(lu => ({ itemId: lu.item.id, cancelQty: lu.cancelQty, isFull: lu.isFull })),
           mock: isMock
         },
-        description: reason || '임차인 옵션 취소',
+        description: reason || (isPartial ? '임차인 옵션 부분 취소' : '임차인 옵션 취소'),
         req
       }, tx);
 
@@ -791,10 +857,11 @@ const cancelPaidOrder = async (req, res) => {
     return success(res, {
       orderDbId: order.id,
       orderId: order.orderId,
-      status: 'FULLY_REFUNDED',
-      refundAmount: verdict.refundAmount,
-      shippingDeduction: verdict.shippingDeduction
-    }, '옵션 주문이 취소되어 환불 처리되었습니다.');
+      status: finalOrderStatus,
+      refundAmount: partialRefund,
+      shippingDeduction: 0,   // 취소는 배송비 차감 없음 (반품과 구분)
+      partial: isPartial
+    }, isPartial ? '선택한 옵션이 부분 취소되어 환불 처리되었습니다.' : '옵션 주문이 취소되어 환불 처리되었습니다.');
   } catch (err) {
     if (!preTx.finished) await preTx.rollback();
     console.error('[guestMoveInPayment.cancelPaid] error:', err);
@@ -816,7 +883,7 @@ const requestReturn = async (req, res) => {
   try {
     const userId = req.user.id;
     const { orderId } = req.params;
-    const { reason } = req.body || {};
+    const { reason, items: returnItems } = req.body || {};
 
     const orderDbId = parseInt(orderId, 10);
     if (!Number.isInteger(orderDbId) || orderDbId <= 0) {
@@ -873,13 +940,39 @@ const requestReturn = async (req, res) => {
         reason: '반품할 활성 라인이 없습니다.'
       });
     }
-    const itemTotalAmount = activeItems.reduce((s, it) => s + Number(it.totalPrice), 0);
 
-    // 활성 라인 → RETURN_REQUESTED
-    await MoveInGuestOrderItem.update(
-      { status: 'RETURN_REQUESTED', cancelReason: reason || '임차인 반품 요청' },
-      { where: { guestOrderId: order.id, status: 'ACTIVE' }, transaction }
-    );
+    // 부분 반품 대상 결정 — items 미지정이면 전체(하위호환), 지정이면 수량 단위
+    const isPartial = Array.isArray(returnItems) && returnItems.length > 0;
+    let qtyMap;
+    if (isPartial) {
+      qtyMap = new Map();
+      const activeById = new Map(activeItems.map(it => [it.id, it]));
+      for (const ri of returnItems) {
+        const itemId = parseInt(ri?.itemId, 10);
+        const qty = parseInt(ri?.returnQuantity, 10);
+        const it = activeById.get(itemId);
+        if (!it || !Number.isInteger(qty) || qty < 1 || qty > it.quantity) {
+          await transaction.rollback();
+          return error(res, ErrorCodes.MOVE_IN_GUEST_CANCEL_QTY_INVALID, 400, {
+            itemId, returnQuantity: ri?.returnQuantity
+          });
+        }
+        qtyMap.set(itemId, qty);
+      }
+    } else {
+      qtyMap = new Map(activeItems.map(it => [it.id, it.quantity]));
+    }
+
+    // 대상 라인·수량 스냅샷 + 합계 (라인 status 는 승인 확정 시에만 변경 — 나안)
+    const targetLines = activeItems
+      .filter(it => qtyMap.has(it.id))
+      .map(it => ({
+        itemId: it.id,
+        optionId: it.optionId,
+        quantity: qtyMap.get(it.id),
+        pricePerItem: Number(it.pricePerItem)
+      }));
+    const itemTotalAmount = targetLines.reduce((s, l) => s + l.pricePerItem * l.quantity, 0);
 
     const refundRequest = await MoveInGuestRefundRequest.create({
       guestOrderId: order.id,
@@ -888,7 +981,8 @@ const requestReturn = async (req, res) => {
       status: 'PENDING',
       returnReason: reason || '임차인 반품 요청',
       deliveryStatusSnapshot: order.deliveryStatus,
-      itemTotalAmount
+      itemTotalAmount,
+      targetItems: targetLines
     }, { transaction });
 
     await MoveInGuestOrderLog.createLog({
@@ -899,8 +993,8 @@ const requestReturn = async (req, res) => {
       action: 'RETURN_REQUESTED',
       amountChange: 0,
       balanceAfter: 0,
-      metadata: { refundRequestId: refundRequest.id, itemTotalAmount },
-      description: reason || '임차인 반품 요청',
+      metadata: { refundRequestId: refundRequest.id, itemTotalAmount, partial: isPartial, targetLines },
+      description: reason || (isPartial ? '임차인 부분 반품 요청' : '임차인 반품 요청'),
       req
     }, transaction);
 
@@ -911,7 +1005,8 @@ const requestReturn = async (req, res) => {
       orderDbId: order.id,
       orderId: order.orderId,
       status: 'PENDING',
-      itemTotalAmount
+      itemTotalAmount,
+      partial: isPartial
     }, '반품 요청이 접수되었습니다. 관리자 승인 후 환불 처리됩니다.');
   } catch (err) {
     if (!transaction.finished) await transaction.rollback();

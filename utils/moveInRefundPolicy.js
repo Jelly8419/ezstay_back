@@ -170,11 +170,45 @@ function evaluateGuestReturn({
 /**
  * 반품 승인 시 수거비 차감 후 환불 금액 산정.
  * 왕복배송비는 렌탈과 동일 상수 사용.
+ *
+ * @param {number} itemTotalAmount  반품 대상 합계
+ * @param {boolean} [waiveShipping=false]  같은 케이스에 이미 수거 진행 중(APPROVED) 건이
+ *                                         있어 기사 방문이 예정된 경우 배송비 면제
  */
-function calcReturnRefund(itemTotalAmount) {
-  const shippingDeduction = RENTAL_ROUND_TRIP_SHIPPING_COST;
+function calcReturnRefund(itemTotalAmount, waiveShipping = false) {
+  const shippingDeduction = waiveShipping ? 0 : RENTAL_ROUND_TRIP_SHIPPING_COST;
   const finalRefundAmount = itemTotalAmount - shippingDeduction;
   return { shippingDeduction, finalRefundAmount };
+}
+
+/**
+ * 부분 취소/환불 금액 산정 (수량 단위).
+ * 라인 분할 없이: full(cancelQty===quantity)이면 라인 CANCELLED,
+ * 부분이면 quantity 차감 + refundAmount 누적.
+ *
+ * @param {Array} items  MoveInGuestOrderItem 인스턴스/plain (id,quantity,pricePerItem,totalPrice,refundAmount,status)
+ * @param {Map<number,number>} qtyMap  itemId → 취소/반품 수량
+ * @returns {{ refundAmount:number, lineUpdates:Array<{item,isFull,cancelQty,itemRefund,remainQty}> }}
+ */
+function calcPartialRefund(items, qtyMap) {
+  let refundAmount = 0;
+  const lineUpdates = [];
+  for (const item of items) {
+    const cancelQty = qtyMap.get(item.id);
+    if (cancelQty == null) continue;
+    const pricePerItem = Number(item.pricePerItem);
+    const itemRefund = pricePerItem * cancelQty;
+    const isFull = cancelQty === item.quantity;
+    refundAmount += itemRefund;
+    lineUpdates.push({
+      item,
+      isFull,
+      cancelQty,
+      itemRefund,
+      remainQty: item.quantity - cancelQty
+    });
+  }
+  return { refundAmount, lineUpdates };
 }
 
 // ===================================================================
@@ -248,5 +282,6 @@ module.exports = {
   evaluateGuestCancel,
   evaluateGuestReturn,
   calcReturnRefund,
+  calcPartialRefund,
   evaluateCleaningRefund
 };

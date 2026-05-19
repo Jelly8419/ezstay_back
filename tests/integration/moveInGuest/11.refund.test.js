@@ -31,7 +31,7 @@ const {
 } = require('../../setup/factories/moveInGuestFactory');
 
 describe('입주 준비 환불', () => {
-  let host, guest, guestToken, admin, adminToken, room, opt;
+  let host, guest, guestToken, admin, adminToken, room, opt, opt2;
   const optionIds = [];
   const caseIds = [];
   const userIds = [];
@@ -45,7 +45,8 @@ describe('입주 준비 환불', () => {
 
     room = await createMoveInRoom(host.id, { areaPyeong: 18 });
     opt = await createMoveInOption({ name: '환불테스트옵션', category: 'AMENITY_KIT', price: 30000 });
-    optionIds.push(opt.id);
+    opt2 = await createMoveInOption({ name: '환불테스트옵션2', category: 'BEDDING_SET', price: 20000 });
+    optionIds.push(opt.id, opt2.id);
   });
 
   afterAll(async () => {
@@ -68,7 +69,7 @@ describe('입주 준비 환불', () => {
     await cleanupAdmins([admin.id]);
   });
 
-  async function makeCaseWithPaidOrder({ checkInDate, checkOutDate, deliveryStatus = 'PENDING' }) {
+  async function makeCaseWithPaidOrder({ checkInDate, checkOutDate, deliveryStatus = 'PENDING', options }) {
     const c = await createMoveInCase({
       hostId: host.id,
       moveInRoomId: room.id,
@@ -82,13 +83,16 @@ describe('입주 준비 환불', () => {
     const { order } = await createPaidGuestOrder({
       caseId: c.id,
       guestUserId: guest.id,
-      options: [{ option: opt, quantity: 1 }],
+      options: options || [{ option: opt, quantity: 1 }],
       checkInDate
     });
     if (deliveryStatus !== 'PENDING') {
       await order.update({ deliveryStatus });
     }
-    return { c, order };
+    const items = await MoveInGuestOrderItem.findAll({
+      where: { guestOrderId: order.id }, order: [['id', 'ASC']]
+    });
+    return { c, order, items };
   }
 
   // ── 임차인 취소 (즉시) ─────────────────────────────────────────
@@ -145,6 +149,217 @@ describe('입주 준비 환불', () => {
     });
   });
 
+  // ── 부분 환불 (수량 단위) ──────────────────────────────────────
+  describe('부분 취소/반품 (수량 단위)', () => {
+    test('취소: 어메니티 2개 중 1개만 → PARTIAL_REFUND', async () => {
+      const { order, items } = await makeCaseWithPaidOrder({
+        checkInDate: '2030-02-10', checkOutDate: '2030-02-15',
+        options: [{ option: opt, quantity: 2 }]   // 30000 x 2 = 60000
+      });
+      const itemId = items[0].id;
+
+      const res = await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/cancel`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ items: [{ itemId, cancelQuantity: 1 }], reason: '1개 변심' });
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('PARTIAL_REFUND');
+      expect(res.body.data.refundAmount).toBe(30000);  // 1개분
+
+      const it = await MoveInGuestOrderItem.findByPk(itemId);
+      expect(it.status).toBe('ACTIVE');       // 라인 살아있음
+      expect(it.quantity).toBe(1);            // 2 → 1
+      expect(Number(it.totalPrice)).toBe(30000);
+      expect(Number(it.refundAmount)).toBe(30000);
+
+      const fresh = await MoveInGuestOrder.findByPk(order.id);
+      expect(fresh.status).toBe('PARTIAL_REFUND');
+      expect(Number(fresh.refundedAmount)).toBe(30000);
+    });
+
+    test('취소: 2라인 중 1라인 전량 → 남은 라인 ACTIVE, PARTIAL_REFUND', async () => {
+      const { order, items } = await makeCaseWithPaidOrder({
+        checkInDate: '2030-03-10', checkOutDate: '2030-03-15',
+        options: [{ option: opt, quantity: 1 }, { option: opt2, quantity: 1 }]
+      });
+      const target = items.find(i => i.optionId === opt.id);
+      const keep = items.find(i => i.optionId === opt2.id);
+
+      const res = await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/cancel`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ items: [{ itemId: target.id, cancelQuantity: 1 }] });
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('PARTIAL_REFUND');
+      expect(res.body.data.refundAmount).toBe(30000);
+
+      const cancelled = await MoveInGuestOrderItem.findByPk(target.id);
+      expect(cancelled.status).toBe('CANCELLED');
+      const alive = await MoveInGuestOrderItem.findByPk(keep.id);
+      expect(alive.status).toBe('ACTIVE');
+    });
+
+    test('취소: 전 수량 부분지정 → FULLY_REFUNDED + 결제 CANCELLED', async () => {
+      const { order, items } = await makeCaseWithPaidOrder({
+        checkInDate: '2030-04-10', checkOutDate: '2030-04-15',
+        options: [{ option: opt, quantity: 2 }]
+      });
+      const res = await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/cancel`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ items: [{ itemId: items[0].id, cancelQuantity: 2 }] });
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('FULLY_REFUNDED');
+      const pay = await MoveInGuestPayment.findOne({ where: { guestOrderId: order.id } });
+      expect(pay.status).toBe('CANCELLED');
+    });
+
+    test('취소: cancelQuantity 초과 → 4814', async () => {
+      const { order, items } = await makeCaseWithPaidOrder({
+        checkInDate: '2030-05-10', checkOutDate: '2030-05-15',
+        options: [{ option: opt, quantity: 1 }]
+      });
+      const res = await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/cancel`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ items: [{ itemId: items[0].id, cancelQuantity: 5 }] });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe(4814);
+    });
+
+    test('PARTIAL_REFUND 주문 재취소 가능 → 남은 수량 추가 취소', async () => {
+      const { order, items } = await makeCaseWithPaidOrder({
+        checkInDate: '2030-06-10', checkOutDate: '2030-06-15',
+        options: [{ option: opt, quantity: 3 }]
+      });
+      const itemId = items[0].id;
+      // 1차: 1개 부분취소
+      await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/cancel`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ items: [{ itemId, cancelQuantity: 1 }] });
+      // 2차: 남은 2개 중 1개 또 취소
+      const res2 = await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/cancel`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ items: [{ itemId, cancelQuantity: 1 }] });
+      expect(res2.status).toBe(200);
+      expect(res2.body.data.status).toBe('PARTIAL_REFUND');
+
+      const it = await MoveInGuestOrderItem.findByPk(itemId);
+      expect(it.quantity).toBe(1);                 // 3 → 2 → 1
+      expect(Number(it.refundAmount)).toBe(60000); // 누적 30000 x 2
+    });
+
+    test('반품: 부분 수량 요청 → 스냅샷 저장, 승인 시 부분 환불 + 배송비', async () => {
+      const { order, items } = await makeCaseWithPaidOrder({
+        checkInDate: new Date(Date.now() - 24*60*60*1000).toISOString().slice(0,10),
+        checkOutDate: new Date(Date.now() + 5*24*60*60*1000).toISOString().slice(0,10),
+        deliveryStatus: 'DELIVERED',
+        options: [{ option: opt, quantity: 2 }]   // 30000 x 2
+      });
+      const itemId = items[0].id;
+
+      const reqRes = await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/return`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ items: [{ itemId, returnQuantity: 1 }], reason: '1개 파손' });
+      expect(reqRes.status).toBe(200);
+      const reqId = reqRes.body.data.refundRequestId;
+
+      const rr = await MoveInGuestRefundRequest.findByPk(reqId);
+      expect(rr.targetItems.length).toBe(1);
+      expect(rr.targetItems[0].quantity).toBe(1);
+      expect(Number(rr.itemTotalAmount)).toBe(30000);
+
+      const approve = await request(app)
+        .patch(`/api/admin/move-in/refund-requests/${reqId}/approve`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({});
+      expect(approve.status).toBe(200);
+      expect(approve.body.data.shippingDeduction).toBe(7000);
+      expect(approve.body.data.finalRefundAmount).toBe(23000); // 30000 - 7000
+      expect(approve.body.data.orderStatus).toBe('PARTIAL_REFUND');
+
+      const it = await MoveInGuestOrderItem.findByPk(itemId);
+      expect(it.status).toBe('ACTIVE');
+      expect(it.quantity).toBe(1);   // 2 → 1
+    });
+
+    test('반품 배송비 면제: 같은 케이스 이미 APPROVED 반품 존재 시 0원', async () => {
+      const checkIn = new Date(Date.now() - 24*60*60*1000).toISOString().slice(0,10);
+      const checkOut = new Date(Date.now() + 5*24*60*60*1000).toISOString().slice(0,10);
+      const c = await createMoveInCase({
+        hostId: host.id, moveInRoomId: room.id, guestUserId: guest.id,
+        guestName: '환불테스트', guestPhone: '01066667777',
+        checkInDate: checkIn, checkOutDate: checkOut
+      });
+      caseIds.push(c.id);
+      // 같은 케이스에 INITIAL PAID 주문 + 이미 APPROVED 된 반품요청 1건 사전 생성
+      const { order: o1 } = await createPaidGuestOrder({
+        caseId: c.id, guestUserId: guest.id, options: [{ option: opt, quantity: 1 }], checkInDate: checkIn
+      });
+      await o1.update({ deliveryStatus: 'DELIVERED' });
+      await MoveInGuestRefundRequest.create({
+        guestOrderId: o1.id, caseId: c.id, requestedBy: guest.id,
+        status: 'APPROVED', deliveryStatusSnapshot: 'DELIVERED',
+        itemTotalAmount: 30000, shippingDeduction: 7000, finalRefundAmount: 23000
+      });
+      // 두 번째 주문 반품 요청 → 승인 시 배송비 면제(0)
+      const { order: o2 } = await createPaidGuestOrder({
+        caseId: c.id, guestUserId: guest.id, orderType: 'ADDITIONAL',
+        options: [{ option: opt2, quantity: 1 }], checkInDate: checkIn
+      });
+      await o2.update({ deliveryStatus: 'DELIVERED' });
+      const reqRes = await request(app)
+        .post(`/api/guest/move-in/orders/${o2.id}/return`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ reason: '면제테스트' });
+      const reqId = reqRes.body.data.refundRequestId;
+      const approve = await request(app)
+        .patch(`/api/admin/move-in/refund-requests/${reqId}/approve`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({});
+      expect(approve.status).toBe(200);
+      expect(approve.body.data.shippingDeduction).toBe(0);   // 면제
+      expect(approve.body.data.finalRefundAmount).toBe(20000); // 전액
+    });
+
+    test('주문 상세에 진행 중 반품요청 동봉 + items.pendingReturnQuantity', async () => {
+      const { c, order, items } = await makeCaseWithPaidOrder({
+        checkInDate: new Date(Date.now() - 24*60*60*1000).toISOString().slice(0,10),
+        checkOutDate: new Date(Date.now() + 5*24*60*60*1000).toISOString().slice(0,10),
+        deliveryStatus: 'DELIVERED',
+        options: [{ option: opt, quantity: 2 }]
+      });
+      const itemId = items[0].id;
+
+      const reqRes = await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/return`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ items: [{ itemId, returnQuantity: 1 }], reason: '동봉테스트' });
+      const reqId = reqRes.body.data.refundRequestId;
+
+      // 주문 상세 (GET /requests/:caseId)
+      const detail = await request(app)
+        .get(`/api/guest/move-in/requests/${c.id}`)
+        .set('Authorization', `Bearer ${guestToken}`);
+      expect(detail.status).toBe(200);
+      const ord = detail.body.data.orders.find(o => o.orderDbId === order.id);
+      expect(ord).toBeTruthy();
+      // 진행 중 반품요청 동봉
+      expect(Array.isArray(ord.refundRequests)).toBe(true);
+      const rr = ord.refundRequests.find(r => r.id === reqId);
+      expect(rr).toBeTruthy();
+      expect(rr.status).toBe('PENDING');
+      expect(rr.targetItems).toEqual([{ itemId, quantity: 1 }]);
+      // 라인별 반품 요청 중 수량
+      const line = ord.items.find(i => i.itemId === itemId);
+      expect(line.status).toBe('ACTIVE');           // 라인 status 불변
+      expect(line.pendingReturnQuantity).toBe(1);   // 2개 중 1개 요청 중
+    });
+  });
+
   // ── 임차인 반품 요청 + 관리자 승인/거절 ───────────────────────
   describe('반품 요청 → 관리자 승인/거절', () => {
     test('입주일~퇴실일 + 배송완료: 반품 요청 접수', async () => {
@@ -162,8 +377,11 @@ describe('입주 준비 환불', () => {
       expect(res.body.data.status).toBe('PENDING');
       const reqId = res.body.data.refundRequestId;
 
+      // 정책(나안): 반품 요청 시 라인 status 는 ACTIVE 유지, refundRequest 스냅샷으로 추적
       const item = await MoveInGuestOrderItem.findOne({ where: { guestOrderId: order.id } });
-      expect(item.status).toBe('RETURN_REQUESTED');
+      expect(item.status).toBe('ACTIVE');
+      const rr = await MoveInGuestRefundRequest.findByPk(reqId);
+      expect(rr.targetItems.length).toBeGreaterThanOrEqual(1);
 
       // 중복 요청 차단
       const dup = await request(app)
