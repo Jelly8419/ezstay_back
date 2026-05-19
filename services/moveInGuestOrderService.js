@@ -163,21 +163,24 @@ async function validatePerOptionQuantity(caseId, lines, transaction = null, { ex
   const opts = transaction ? { transaction } : {};
   const exceeded = [];
 
-  // 재결제 재사용 시 기존 PENDING 주문 라인은 곧 교체되므로 누적에서 제외.
+  // 누적 기준: PAID / PARTIAL_REFUND 주문의 ACTIVE 라인만.
+  //   - PENDING 주문은 결제 미완 상태이므로 제외 → "내가 산 것" 사용자 직관과 일치
+  //   - 다중 PENDING 우회는 케이스당 PENDING 1건 제한(4793)이 차단
+  //   - excludeOrderId 는 호환용 (PAID 만 카운트하므로 PENDING 재사용 케이스엔 영향 없음)
   const itemWhere = { status: 'ACTIVE' };
   if (excludeOrderId != null) {
     itemWhere.guestOrderId = { [Op.ne]: excludeOrderId };
   }
 
   for (const line of lines) {
-    // 이 케이스의 해당 옵션 기존 ACTIVE 누적 수량 (excludeOrderId 제외)
+    // 이 케이스의 해당 옵션 누적 수량 — PAID/PARTIAL_REFUND 주문 ACTIVE 라인만 합산
     const used = (await MoveInGuestOrderItem.sum('quantity', {
       where: { ...itemWhere, optionId: line.optionId },
       include: [{
         model: MoveInGuestOrder,
         as: 'order',
         attributes: [],
-        where: { caseId },
+        where: { caseId, status: { [Op.in]: ['PAID', 'PARTIAL_REFUND'] } },
         required: true
       }],
       ...opts
@@ -196,6 +199,40 @@ async function validatePerOptionQuantity(caseId, lines, transaction = null, { ex
   }
 
   return { ok: exceeded.length === 0, exceeded };
+}
+
+/**
+ * 케이스별 옵션 누적 보유 수량 집계 — 추가 결제 화면 노출용.
+ * 가드와 동일 기준 (PAID/PARTIAL_REFUND 주문의 ACTIVE 라인 합산).
+ *
+ * @param {number} caseId
+ * @param {Transaction} [transaction]
+ * @returns {Promise<Map<number, number>>}  optionId → ownedQuantity
+ */
+async function getCaseOwnedQuantities(caseId, transaction = null) {
+  const opts = transaction ? { transaction } : {};
+  const rows = await MoveInGuestOrderItem.findAll({
+    attributes: [
+      'optionId',
+      [sequelize.fn('SUM', sequelize.col('MoveInGuestOrderItem.quantity')), 'owned']
+    ],
+    where: { status: 'ACTIVE' },
+    include: [{
+      model: MoveInGuestOrder,
+      as: 'order',
+      attributes: [],
+      where: { caseId, status: { [Op.in]: ['PAID', 'PARTIAL_REFUND'] } },
+      required: true
+    }],
+    group: ['MoveInGuestOrderItem.option_id'],
+    raw: true,
+    ...opts
+  });
+  const map = new Map();
+  for (const r of rows) {
+    map.set(Number(r.optionId), Number(r.owned) || 0);
+  }
+  return map;
 }
 
 /**
@@ -526,6 +563,7 @@ module.exports = {
   calculateOrderTotal,
   validateGuestStock,
   validatePerOptionQuantity,
+  getCaseOwnedQuantities,
   createPendingOrder,
   findExistingPendingOrder,
   hasActivePendingPayment,

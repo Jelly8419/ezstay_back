@@ -384,4 +384,54 @@ describe('MoveIn Guest — INITIAL Payment (Mock)', () => {
       .send({ items: [{ optionId: opt1.id, quantity: 2 }] });
     expect(add2.status).toBe(201);
   });
+
+  test('옵션 카탈로그 응답에 보유/잔여 수량 동봉 (PAID 만 카운트)', async () => {
+    const cq = await freshCase({ checkInDate: '2028-11-15', checkOutDate: '2028-11-20' });
+    const token = generateToken(guest);
+
+    // 1) 결제 전 — 보유 0 / 잔여 5
+    const r1 = await request(app)
+      .get(`/api/guest/move-in/requests/${cq.id}/options`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(r1.status).toBe(200);
+    const opt1Row1 = r1.body.data.options.find(o => o.optionId === opt1.id);
+    expect(opt1Row1.ownedQuantity).toBe(0);
+    expect(opt1Row1.remainingQuantity).toBe(5);
+    expect(opt1Row1.maxPerOption).toBe(5);
+
+    // 2) INITIAL 2개 init 만 (PENDING) → 여전히 보유 0 (PAID 아님)
+    const init = await request(app)
+      .post(`/api/guest/move-in/requests/${cq.id}/payment/init`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ items: [{ optionId: opt1.id, quantity: 2 }] });
+    expect(init.status).toBe(201);
+
+    const r2 = await request(app)
+      .get(`/api/guest/move-in/requests/${cq.id}/options`)
+      .set('Authorization', `Bearer ${token}`);
+    const opt1Row2 = r2.body.data.options.find(o => o.optionId === opt1.id);
+    expect(opt1Row2.ownedQuantity).toBe(0);     // PENDING 은 미포함
+    expect(opt1Row2.remainingQuantity).toBe(5);
+
+    // 3) confirm → PAID 후엔 보유 2 / 잔여 3
+    await request(app)
+      .post(`/api/guest/move-in/requests/${cq.id}/payment/confirm`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ paymentId: init.body.data.paymentId });
+
+    const r3 = await request(app)
+      .get(`/api/guest/move-in/requests/${cq.id}/options`)
+      .set('Authorization', `Bearer ${token}`);
+    const opt1Row3 = r3.body.data.options.find(o => o.optionId === opt1.id);
+    expect(opt1Row3.ownedQuantity).toBe(2);
+    expect(opt1Row3.remainingQuantity).toBe(3);
+
+    // 4) 상세 응답(GET /requests/:caseId) 도 동일 동봉
+    const r4 = await request(app)
+      .get(`/api/guest/move-in/requests/${cq.id}`)
+      .set('Authorization', `Bearer ${token}`);
+    const opt1Row4 = r4.body.data.options.find(o => o.optionId === opt1.id);
+    expect(opt1Row4.ownedQuantity).toBe(2);
+    expect(opt1Row4.remainingQuantity).toBe(3);
+  });
 });

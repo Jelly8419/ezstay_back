@@ -41,6 +41,29 @@ const {
   calculatePaymentDeadline,
   isPayable
 } = require('../utils/moveInGuestPaymentGuard');
+const {
+  getCaseOwnedQuantities,
+  MAX_QTY_PER_OPTION
+} = require('../services/moveInGuestOrderService');
+
+/**
+ * 옵션 카탈로그에 케이스별 보유/잔여 수량 동봉.
+ * 가드(validatePerOptionQuantity)와 동일 기준 — PAID/PARTIAL_REFUND 주문의 ACTIVE 라인만.
+ */
+async function decorateOptionsWithQuota(caseId, optionPlainArr) {
+  const ownedMap = await getCaseOwnedQuantities(caseId);
+  return optionPlainArr.map(o => {
+    // serializeOption 결과는 키가 optionId (모델 id 매핑)
+    const optId = o.id ?? o.optionId;
+    const owned = ownedMap.get(optId) || 0;
+    return {
+      ...o,
+      ownedQuantity: owned,
+      remainingQuantity: Math.max(0, MAX_QTY_PER_OPTION - owned),
+      maxPerOption: MAX_QTY_PER_OPTION
+    };
+  });
+}
 const { toKSTString } = require('../utils/dateHelper');
 
 /**
@@ -179,17 +202,21 @@ const getRequestDetail = async (req, res) => {
       deliveryStatus: o.deliveryStatus
     }));
 
-    // 활성 옵션 카탈로그 (결제 화면용)
+    // 활성 옵션 카탈로그 + 케이스별 보유/잔여 수량 (가드와 동일 기준)
     const activeOptions = await MoveInOption.findAll({
       where: { isActive: true },
       order: [['displayOrder', 'ASC'], ['id', 'ASC']]
     });
+    const optionsWithQuota = await decorateOptionsWithQuota(
+      caseRow.id,
+      activeOptions.map(serializeOption)
+    );
 
     return success(res, {
       ...serializeGuestCase(caseRow, { includeSensitive: true, guestOrders: ordersForStatus }),
       canPay: isPayable(caseRow.checkInDate),
       paymentDeadline: toKSTString(calculatePaymentDeadline(caseRow.checkInDate)),
-      options: activeOptions.map(serializeOption),
+      options: optionsWithQuota,
       orders
     }, '입주 준비 요청 상세를 조회했습니다.');
   } catch (err) {
@@ -219,6 +246,10 @@ const getOptions = async (req, res) => {
       where: { isActive: true },
       order: [['displayOrder', 'ASC'], ['id', 'ASC']]
     });
+    const optionsWithQuota = await decorateOptionsWithQuota(
+      caseRow.id,
+      activeOptions.map(serializeOption)
+    );
 
     return success(res, {
       caseId: caseRow.id,
@@ -226,7 +257,7 @@ const getOptions = async (req, res) => {
       checkOutDate: toKSTString(caseRow.checkOutDate),
       paymentDeadline: toKSTString(calculatePaymentDeadline(caseRow.checkInDate)),
       canPay: isPayable(caseRow.checkInDate),
-      options: activeOptions.map(serializeOption)
+      options: optionsWithQuota
     }, '옵션 카탈로그를 조회했습니다.');
   } catch (err) {
     console.error('[guestMoveInRequest.options] error:', err);
