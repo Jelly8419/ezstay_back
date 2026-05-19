@@ -159,6 +159,7 @@ const ErrorCodes = {
   MOVE_IN_CLEANING_REFUND_NOT_ALLOWED:   { code: 4813, message: '현재 청소 환불이 불가한 상태입니다.' },
   MOVE_IN_GUEST_CANCEL_QTY_INVALID:      { code: 4814, message: '취소/반품 수량이 올바르지 않습니다.' },
   MOVE_IN_GUEST_CANCEL_REMAINING_INVALID:{ code: 4815, message: '취소 후 남은 옵션 금액이 10,000원 미만입니다. 전체 취소하거나 10,000원 이상 남도록 선택해주세요.' },
+  MOVE_IN_GUEST_OPTION_QTY_EXCEEDED:     { code: 4816, message: '품목당 5개를 초과할 수 없습니다.' },
 
   // 알림 관련 (48xx)
   NOTIFICATION_NOT_FOUND: { code: 4801, message: '알림을 찾을 수 없습니다.' },

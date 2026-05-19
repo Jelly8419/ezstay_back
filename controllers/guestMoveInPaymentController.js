@@ -44,6 +44,7 @@ const paytagClient = require('../utils/paytagClient');
 const {
   calculateOrderTotal,
   validateGuestStock,
+  validatePerOptionQuantity,
   createPendingOrder,
   findExistingPendingOrder,
   hasActivePendingPayment,
@@ -172,6 +173,15 @@ async function runInit(req, res, orderType) {
         });
       }
 
+      // 품목당 케이스 누적 5개 가드 (재사용될 PENDING 주문 라인은 제외)
+      const qtyCheck = await validatePerOptionQuantity(
+        caseRow.id, calc.lines, transaction, { excludeOrderId: existingPending.id }
+      );
+      if (!qtyCheck.ok) {
+        await transaction.rollback();
+        return error(res, ErrorCodes.MOVE_IN_GUEST_OPTION_QTY_EXCEEDED, 400, qtyCheck.exceeded);
+      }
+
       // 결제 실패한 PENDING 주문 재사용 (옵션 변경 허용)
       ({ order, payment } = await reusePendingOrder({
         order: existingPending,
@@ -182,6 +192,13 @@ async function runInit(req, res, orderType) {
         totalAmount: calc.totalAmount
       }, transaction));
     } else {
+      // 품목당 케이스 누적 5개 가드 (INITIAL/ADDITIONAL 통합)
+      const qtyCheck = await validatePerOptionQuantity(caseRow.id, calc.lines, transaction);
+      if (!qtyCheck.ok) {
+        await transaction.rollback();
+        return error(res, ErrorCodes.MOVE_IN_GUEST_OPTION_QTY_EXCEEDED, 400, qtyCheck.exceeded);
+      }
+
       // 4. 신규 주문 생성
       ({ order, payment } = await createPendingOrder({
         caseId: caseRow.id,

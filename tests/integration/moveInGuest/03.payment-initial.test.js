@@ -318,4 +318,70 @@ describe('MoveIn Guest — INITIAL Payment (Mock)', () => {
     expect(items.length).toBe(1); // merge 됨
     expect(items[0].quantity).toBe(3);
   });
+
+  test('init — 단일 요청 옵션당 6개 → 4816 거부', async () => {
+    const cq = await freshCase({ checkInDate: '2028-07-15', checkOutDate: '2028-07-20' });
+    const token = generateToken(guest);
+    const res = await request(app)
+      .post(`/api/guest/move-in/requests/${cq.id}/payment/init`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ items: [{ optionId: opt1.id, quantity: 6 }] });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe(4816);
+  });
+
+  test('init — 분할 줄 합산 6개 (3+3) → 4816 거부 (우회 차단)', async () => {
+    const cq = await freshCase({ checkInDate: '2028-08-15', checkOutDate: '2028-08-20' });
+    const token = generateToken(guest);
+    const res = await request(app)
+      .post(`/api/guest/move-in/requests/${cq.id}/payment/init`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ items: [
+        { optionId: opt1.id, quantity: 3 },
+        { optionId: opt1.id, quantity: 3 }
+      ] });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe(4816);
+  });
+
+  test('init — 옵션당 정확히 5개 → 통과', async () => {
+    const cq = await freshCase({ checkInDate: '2028-09-15', checkOutDate: '2028-09-20' });
+    const token = generateToken(guest);
+    const res = await request(app)
+      .post(`/api/guest/move-in/requests/${cq.id}/payment/init`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ items: [{ optionId: opt1.id, quantity: 5 }] });
+    expect(res.status).toBe(201);
+  });
+
+  test('ADDITIONAL — INITIAL 3개 + 추가 3개 = 누적 6개 → 4816 거부', async () => {
+    const cq = await freshCase({ checkInDate: '2028-10-15', checkOutDate: '2028-10-20' });
+    const token = generateToken(guest);
+
+    // INITIAL 3개 결제 완료
+    const init1 = await request(app)
+      .post(`/api/guest/move-in/requests/${cq.id}/payment/init`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ items: [{ optionId: opt1.id, quantity: 3 }] });
+    expect(init1.status).toBe(201);
+    await request(app)
+      .post(`/api/guest/move-in/requests/${cq.id}/payment/confirm`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ paymentId: init1.body.data.paymentId });
+
+    // ADDITIONAL 3개 → 누적 6개 초과 거부
+    const add = await request(app)
+      .post(`/api/guest/move-in/requests/${cq.id}/additional/init`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ items: [{ optionId: opt1.id, quantity: 3 }] });
+    expect(add.status).toBe(400);
+    expect(add.body.code).toBe(4816);
+
+    // ADDITIONAL 2개 → 누적 5개 통과
+    const add2 = await request(app)
+      .post(`/api/guest/move-in/requests/${cq.id}/additional/init`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ items: [{ optionId: opt1.id, quantity: 2 }] });
+    expect(add2.status).toBe(201);
+  });
 });

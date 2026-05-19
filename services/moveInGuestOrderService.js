@@ -145,6 +145,59 @@ async function validateGuestStock(lines, transaction = null) {
   return { ok: unavailable.length === 0, unavailable };
 }
 
+// 옵션(품목)당 케이스 누적 최대 구매 수량 (INITIAL+ADDITIONAL 통합)
+const MAX_QTY_PER_OPTION = 5;
+
+/**
+ * 옵션당 케이스 누적 수량 검증.
+ * - 같은 케이스의 기존 ACTIVE 라인 수량(옵션별) + 이번 요청 수량 합산이
+ *   MAX_QTY_PER_OPTION 초과면 거부 (INITIAL/ADDITIONAL 통합 누적).
+ * - 라인은 guestOrderId 만 가지므로 케이스 스코프는 order join 으로 한정.
+ *
+ * @param {number} caseId
+ * @param {Array<{optionId, quantity, name}>} lines  calculateOrderTotal 결과 (옵션별 합산됨)
+ * @param {Transaction} transaction
+ * @returns {Promise<{ ok: boolean, exceeded: Array }>}
+ */
+async function validatePerOptionQuantity(caseId, lines, transaction = null, { excludeOrderId = null } = {}) {
+  const opts = transaction ? { transaction } : {};
+  const exceeded = [];
+
+  // 재결제 재사용 시 기존 PENDING 주문 라인은 곧 교체되므로 누적에서 제외.
+  const itemWhere = { status: 'ACTIVE' };
+  if (excludeOrderId != null) {
+    itemWhere.guestOrderId = { [Op.ne]: excludeOrderId };
+  }
+
+  for (const line of lines) {
+    // 이 케이스의 해당 옵션 기존 ACTIVE 누적 수량 (excludeOrderId 제외)
+    const used = (await MoveInGuestOrderItem.sum('quantity', {
+      where: { ...itemWhere, optionId: line.optionId },
+      include: [{
+        model: MoveInGuestOrder,
+        as: 'order',
+        attributes: [],
+        where: { caseId },
+        required: true
+      }],
+      ...opts
+    })) || 0;
+
+    if (used + line.quantity > MAX_QTY_PER_OPTION) {
+      exceeded.push({
+        optionId: line.optionId,
+        name: line.name,
+        reason: 'QTY_EXCEEDED',
+        max: MAX_QTY_PER_OPTION,
+        alreadyOwned: used,
+        requested: line.quantity
+      });
+    }
+  }
+
+  return { ok: exceeded.length === 0, exceeded };
+}
+
 /**
  * PENDING 주문 + 라인 + 결제 생성.
  *
@@ -469,8 +522,10 @@ async function expireStalePendingOrders({
 
 module.exports = {
   RENTAL_BUFFER_DAYS,
+  MAX_QTY_PER_OPTION,
   calculateOrderTotal,
   validateGuestStock,
+  validatePerOptionQuantity,
   createPendingOrder,
   findExistingPendingOrder,
   hasActivePendingPayment,
