@@ -19,6 +19,7 @@ const {
   approveReturn,
   rejectReturn
 } = require('../controllers/adminGuestOrderController');
+const { listMoveInPayments } = require('../controllers/adminMoveInPaymentController');
 
 /**
  * @route GET /api/admin/move-in/guest-orders
@@ -38,6 +39,12 @@ router.get('/guest-orders/:orderId', authenticateAdmin, getGuestOrder);
  * @body  { deliveryStatus, note? }
  */
 router.patch('/guest-orders/:orderId/delivery', authenticateAdmin, updateDeliveryStatus);
+
+/**
+ * @route GET /api/admin/move-in/payments
+ * @desc  결제 통합 내역 (청소+옵션, type/status/기간/검색 필터 + 페이지네이션)
+ */
+router.get('/payments', authenticateAdmin, listMoveInPayments);
 
 /**
  * @route GET /api/admin/move-in/refund-requests
