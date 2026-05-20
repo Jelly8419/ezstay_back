@@ -307,6 +307,7 @@ const confirmPayment = async (req, res) => {
     let pgTid = null;
     const pgProvider = USE_MOCK ? 'mock' : 'paytag';
     let pgMethod = null;
+    let easyPayProvider = null;
 
     // ── Mock 모드 ──
     if (USE_MOCK) {
@@ -351,6 +352,7 @@ const confirmPayment = async (req, res) => {
         // PAYSTDMPI 카드결제 응답은 거래번호를 orderno 로 줌 (tran_key/recv_orderno 없음).
         pgTid = pgResponse.tran_key || pgResponse.recv_orderno || pgResponse.orderno || null;
         pgMethod = paytagClient.mapPaymentMethod(payType);
+        easyPayProvider = paytagClient.mapEasyPayProvider(payType);
       } catch (pgErr) {
         // 진단 보강: resultcode 접두 + PG 응답 원문 로깅
         const pgCode = pgErr.paytagErrorCode || 'UNKNOWN';
@@ -403,7 +405,8 @@ const confirmPayment = async (req, res) => {
       paidAt: now,
       pgProvider,
       pgTid,
-      pgMethod
+      pgMethod,
+      easyPayProvider
     }, { transaction });
 
     await order.update({
@@ -635,7 +638,7 @@ const getPaymentResult = async (req, res) => {
         failedAt: toKSTString(payment.failedAt),
         failureReason: payment.failureReason
       },
-      order: serializeGuestOrder(order),
+      order: serializeGuestOrder(order, { caseRow }),
       case: caseSummary
     }, '결제 정보를 조회했습니다.');
   } catch (err) {
@@ -853,18 +856,19 @@ const cancelPaidOrder = async (req, res) => {
       });
       finalOrderStatus = remainingActive === 0 ? 'FULLY_REFUNDED' : 'PARTIAL_REFUND';
 
-      // 결제: 전액 환불 시에만 CANCELLED, 부분이면 PAID 유지 (refundedAmount 로 추적)
+      // 결제: 전액 환불 시에만 REFUNDED, 부분이면 PAID 유지 (refundedAmount 로 추적)
       if (finalOrderStatus === 'FULLY_REFUNDED') {
         await payment.update({
-          status: 'CANCELLED',
-          failedAt: now,
-          failureReason: '임차인 옵션 취소 환불'
+          status: 'REFUNDED',
+          refundedAt: now,
+          refundReason: '임차인 옵션 취소 환불'
         }, { transaction: tx });
       }
 
       await order.update({
         status: finalOrderStatus,
-        refundedAmount: Number(order.refundedAmount || 0) + partialRefund
+        refundedAmount: Number(order.refundedAmount || 0) + partialRefund,
+        lastRefundedAt: now
       }, { transaction: tx });
 
       await MoveInGuestOrderLog.createLog({

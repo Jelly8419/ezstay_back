@@ -116,7 +116,9 @@ describe('입주 준비 환불', () => {
       const item = await MoveInGuestOrderItem.findOne({ where: { guestOrderId: order.id } });
       expect(item.status).toBe('CANCELLED');
       const pay = await MoveInGuestPayment.findOne({ where: { guestOrderId: order.id } });
-      expect(pay.status).toBe('CANCELLED');
+      expect(pay.status).toBe('REFUNDED');
+      expect(pay.refundedAt).toBeTruthy();
+      expect(fresh.lastRefundedAt).toBeTruthy();
     });
 
     test('입주일 이후: 취소 불가 (4799)', async () => {
@@ -199,7 +201,7 @@ describe('입주 준비 환불', () => {
       expect(alive.status).toBe('ACTIVE');
     });
 
-    test('취소: 전 수량 부분지정 → FULLY_REFUNDED + 결제 CANCELLED', async () => {
+    test('취소: 전 수량 부분지정 → FULLY_REFUNDED + 결제 REFUNDED', async () => {
       const { order, items } = await makeCaseWithPaidOrder({
         checkInDate: '2030-04-10', checkOutDate: '2030-04-15',
         options: [{ option: opt, quantity: 2 }]
@@ -211,7 +213,8 @@ describe('입주 준비 환불', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.status).toBe('FULLY_REFUNDED');
       const pay = await MoveInGuestPayment.findOne({ where: { guestOrderId: order.id } });
-      expect(pay.status).toBe('CANCELLED');
+      expect(pay.status).toBe('REFUNDED');
+      expect(pay.refundedAt).toBeTruthy();
     });
 
     test('취소: cancelQuantity 초과 → 4814', async () => {

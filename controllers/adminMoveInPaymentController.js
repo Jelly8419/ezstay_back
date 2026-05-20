@@ -10,7 +10,8 @@
  *   - 임차인 옵션 결제   : MoveInGuestPayment  (type=guest_option)
  *
  * 정책:
- *   - 환불은 별도 행 X — 결제 행의 status(CANCELLED/REFUNDED)로 표현
+ *   - 환불은 별도 행 X — 결제 행의 status=REFUNDED + refundedAt/refundReason 으로 표현
+ *   - status=CANCELLED 는 결제 전 취소(PENDING 자동만료/수동취소) 전용
  *   - paidAt DESC (null 이면 createdAt) 정렬, 두 도메인 concat 후 페이지네이션
  *   - 관리자 화면이므로 청소 결제 노출 OK (게스트 차단 정책은 게스트 응답 한정)
  */
@@ -22,19 +23,22 @@ const {
   MoveInPayment,
   MoveInGuestPayment,
   MoveInGuestOrder,
+  MoveInGuestOrderItem,
+  MoveInOption,
   MoveInCase,
   MoveInRoom,
   User
 } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 const { toKSTString } = require('../utils/dateHelper');
+const { buildBreakdown, productLabel } = require('../utils/moveInPaymentSerializer');
 
 const VALID_STATUSES = ['PENDING', 'PAID', 'FAILED', 'CANCELLED', 'REFUNDED'];
 const STATUS_LABELS = {
   PENDING:   '결제 대기',
   PAID:      '결제 완료',
   FAILED:    '결제 실패',
-  CANCELLED: '취소/환불',
+  CANCELLED: '결제 취소',
   REFUNDED:  '환불 완료'
 };
 
@@ -71,7 +75,10 @@ function serializeCleaningPayment(p) {
     pgProvider: o.pgProvider,
     pgMethod: o.pgMethod,
     pgTid: o.pgTid,
+    easyPayProvider: o.easyPayProvider || null,
     paidAt: toKSTString(o.paidAt),
+    refundedAt: toKSTString(o.refundedAt),
+    refundReason: o.refundReason || null,
     failedAt: toKSTString(o.failedAt),
     failureReason: o.failureReason,
     payer: host ? { role: 'host', name: host.name, phone: host.phoneNumber } : { role: 'host', name: null, phone: null },
@@ -84,6 +91,9 @@ function serializeCleaningPayment(p) {
 function serializeGuestPayment(p) {
   const o = p.get ? p.get({ plain: true }) : p;
   const guest = o.guest || null;
+  const order = o.order || null;
+  const items = order?.items || [];
+  const breakdown = buildBreakdown(items);
   return {
     type: 'guest_option',
     paymentId: o.id,
@@ -96,11 +106,23 @@ function serializeGuestPayment(p) {
     pgProvider: o.pgProvider,
     pgMethod: o.pgMethod,
     pgTid: o.pgTid,
+    easyPayProvider: o.easyPayProvider || null,
     paidAt: toKSTString(o.paidAt),
+    refundedAt: toKSTString(o.refundedAt),
+    refundReason: o.refundReason || null,
     failedAt: toKSTString(o.failedAt),
     failureReason: o.failureReason,
     payer: guest ? { role: 'guest', name: guest.name, phone: guest.phoneNumber } : { role: 'guest', name: null, phone: null },
     case: caseSummary(o.case),
+    productLabel: productLabel(breakdown),
+    breakdown,
+    order: order ? {
+      orderDbId: order.id,
+      orderStatus: order.status,
+      lastRefundedAt: toKSTString(order.lastRefundedAt),
+      paidAmount: order.paidAmount,
+      refundedAmount: order.refundedAmount
+    } : null,
     createdAt: toKSTString(o.createdAt),
     _ts: sortTs(o)
   };
@@ -128,6 +150,7 @@ const listMoveInPayments = async (req, res) => {
       paidFrom,
       paidTo,
       search,
+      category,        // BEDDING_SET 등 — 게스트 옵션 결제 필터 (혼합 주문 포함)
       page = 1,
       limit = 20
     } = req.query;
@@ -215,10 +238,24 @@ const listMoveInPayments = async (req, res) => {
             model: MoveInCase, as: 'case',
             include: [{ model: MoveInRoom, as: 'room', attributes: ['id', 'address', 'detailAddress'] }]
           },
-          { model: User, as: 'guest', attributes: ['id', 'name', 'phoneNumber'], required: false }
+          { model: User, as: 'guest', attributes: ['id', 'name', 'phoneNumber'], required: false },
+          {
+            model: MoveInGuestOrder, as: 'order',
+            required: false,
+            include: [{
+              model: MoveInGuestOrderItem, as: 'items',
+              required: false,
+              include: [{ model: MoveInOption, as: 'option', attributes: ['id', 'category'] }]
+            }]
+          }
         ]
       });
       guestRows = rows.map(serializeGuestPayment);
+
+      // 카테고리 필터 (메모리 단계 — 라인 합계 후 판정)
+      if (category) {
+        guestRows = guestRows.filter(r => (r.breakdown?.[category]?.amount ?? 0) > 0);
+      }
     }
 
     // ── 통합 정렬 + 페이지네이션 ──

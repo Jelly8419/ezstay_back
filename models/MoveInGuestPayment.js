@@ -78,11 +78,32 @@ module.exports = (sequelize) => {
       comment: '결제 수단 (CARD 등)'
     },
 
+    easyPayProvider: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      field: 'easy_pay_provider',
+      comment: '간편결제 제공사 (KAKAOPAY/NAVERPAY/PAYCO 등)'
+    },
+
     paidAt: {
       type: DataTypes.DATE,
       allowNull: true,
       field: 'paid_at',
       comment: '결제 완료 시각'
+    },
+
+    refundedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'refunded_at',
+      comment: '환불 완료 시각 (전액)'
+    },
+
+    refundReason: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      field: 'refund_reason',
+      comment: '환불 사유'
     },
 
     failedAt: {

@@ -1,9 +1,10 @@
-const { Payment, PaymentFailureLog, RentalPayment, RentalOrder, RentalOrderItem, RentalItem, Contract, User, Room, Refund, AdminRefund, RentalOrderLog, RentalOrderRefundRequest, RentalItemReservation, sequelize } = require('../models');
+const { Payment, PaymentFailureLog, RentalPayment, RentalOrder, RentalOrderItem, RentalItem, Contract, User, Room, Refund, AdminRefund, RentalOrderLog, RentalOrderRefundRequest, RentalItemReservation, MoveInPayment, MoveInGuestPayment, MoveInGuestOrder, MoveInGuestOrderItem, MoveInGuestOrderLog, MoveInOption, MoveInCase, MoveInRoom, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const paytagClient = require('../utils/paytagClient');
 const { success, error, ErrorCodes } = require('../utils/responseHelper');
 const { toKSTString } = require('../utils/dateHelper');
 const { partialRefundRentalOrder, logRentalAction } = require('../utils/rentalOrderHelper');
+const { buildBreakdown, productLabel, hasBedding } = require('../utils/moveInPaymentSerializer');
 
 function extractPgOrderNo(paymentResponse) {
   const resp = typeof paymentResponse === 'string'
@@ -948,8 +949,16 @@ exports.getPaymentLogs = async (req, res) => {
       endDate,
       transactionType = '',
       productType = '',
+      source = 'all',     // internal | move_in | all — 도메인 상위 필터
       sortOrder = 'DESC'
     } = req.query;
+
+    const VALID_SOURCES = ['all', 'internal', 'move_in'];
+    if (!VALID_SOURCES.includes(source)) {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, `source는 ${VALID_SOURCES.join('|')} 중 하나여야 합니다.`);
+    }
+    const includeInternal = source === 'all' || source === 'internal';
+    const includeMoveIn   = source === 'all' || source === 'move_in';
 
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
@@ -964,7 +973,13 @@ exports.getPaymentLogs = async (req, res) => {
       return { [field]: filter };
     };
 
-    // === 1) payments 테이블 결제 (CONTRACT + HOST_BURDEN) ===
+    // === 1) payments 테이블 결제 (CONTRACT + HOST_BURDEN) — internal 도메인 ===
+    let paymentLogs = [];
+    let refundLogs = [];
+    let rentalEventLogs = [];
+    let adminRefundLogs = [];
+
+    if (includeInternal) {
     const paymentWhere = { status: 'DONE' };
     if (startDate || endDate) Object.assign(paymentWhere, buildDateFilter('approvedAt'));
 
@@ -983,7 +998,7 @@ exports.getPaymentLogs = async (req, res) => {
       order: [['approvedAt', safeSortOrder]]
     });
 
-    const paymentLogs = contractPayments.map(p => {
+    paymentLogs = contractPayments.map(p => {
       const isHostBurden = p.paymentType === 'HOST_BURDEN';
       return {
         occurredAt: p.approvedAt || p.createdAt,
@@ -1020,7 +1035,7 @@ exports.getPaymentLogs = async (req, res) => {
       }]
     });
 
-    const refundLogs = refunds.map(r => {
+    refundLogs = refunds.map(r => {
       // 부분취소 vs 전체취소: 환불 후 잔액이 0이면 전체취소
       const payment = r.contract?.payment;
       const balanceAfterRefund = payment ? (payment.balanceAmount || 0) : null;
@@ -1087,7 +1102,7 @@ exports.getPaymentLogs = async (req, res) => {
       order: [['createdAt', safeSortOrder]]
     });
 
-    const rentalEventLogs = rentalLogs
+    rentalEventLogs = rentalLogs
       // INITIAL 주문의 결제는 계약 결제(Payment)에 포함되어 있으므로 중복 제외
       .filter(log => !(log.order?.orderType === 'INITIAL' && log.action === 'PAYMENT_COMPLETED'))
       .map(log => {
@@ -1151,7 +1166,7 @@ exports.getPaymentLogs = async (req, res) => {
       order: [['completedAt', safeSortOrder]]
     });
 
-    const adminRefundLogs = adminRefunds.map(ar => ({
+    adminRefundLogs = adminRefunds.map(ar => ({
       occurredAt: ar.completedAt,
       transactionType: ar.refundType === 'FULL' ? '전체취소' : '부분취소',
       paymentMethod: ar.contract?.payment?.method || null,
@@ -1164,9 +1179,128 @@ exports.getPaymentLogs = async (req, res) => {
       userType: '게스트',
       roomName: ar.contract?.room?.roomName || null
     }));
+    } // end if (includeInternal)
 
-    // === 5) 전체 합산 및 정렬 ===
-    let allLogs = [...paymentLogs, ...refundLogs, ...rentalEventLogs, ...adminRefundLogs];
+    // === 5) 입주 준비 청소 결제 (MoveInPayment) — move_in 도메인 ===
+    let cleaningPaymentLogs = [];
+    let cleaningRefundLogs = [];
+    let guestEventLogs = [];
+
+    if (includeMoveIn) {
+    // 결제 이벤트(paidAt) + 환불 이벤트(refundedAt) 각각 매핑
+    const cleaningInclude = [{
+      model: MoveInCase, as: 'case',
+      include: [
+        { model: User, as: 'host', attributes: ['id', 'name'] },
+        { model: MoveInRoom, as: 'room', attributes: ['id', 'address'] }
+      ]
+    }];
+
+    const paidCleaningWhere = { status: { [Op.in]: ['PAID', 'REFUNDED'] }, paidAt: { [Op.ne]: null } };
+    if (startDate || endDate) Object.assign(paidCleaningWhere, buildDateFilter('paidAt'));
+    const paidCleaning = await MoveInPayment.findAll({ where: paidCleaningWhere, include: cleaningInclude });
+
+    const refundedCleaningWhere = { status: 'REFUNDED', refundedAt: { [Op.ne]: null } };
+    if (startDate || endDate) Object.assign(refundedCleaningWhere, buildDateFilter('refundedAt'));
+    const refundedCleaning = await MoveInPayment.findAll({ where: refundedCleaningWhere, include: cleaningInclude });
+
+    cleaningPaymentLogs = paidCleaning.map(p => ({
+      occurredAt: p.paidAt,
+      transactionType: '결제완료',
+      paymentMethod: p.pgMethod,
+      easyPayProvider: p.easyPayProvider || null,
+      productType: '청소',
+      amount: p.amount,
+      orderId: p.orderId,
+      pgOrderNo: p.pgTid,
+      userName: p.case?.host?.name || null,
+      userType: '호스트',
+      roomName: p.case?.room?.address || null
+    }));
+
+    cleaningRefundLogs = refundedCleaning.map(p => ({
+      occurredAt: p.refundedAt,
+      transactionType: '전체취소',
+      paymentMethod: p.pgMethod,
+      easyPayProvider: p.easyPayProvider || null,
+      productType: '청소',
+      amount: -p.amount,
+      orderId: p.orderId,
+      pgOrderNo: p.pgTid,
+      userName: p.case?.host?.name || null,
+      userType: '호스트',
+      roomName: p.case?.room?.address || null
+    }));
+
+    // === 6) 입주 준비 게스트 옵션 (MoveInGuestOrderLog) ===
+    // 화이트리스트: PAYMENT_SUCCESS / ORDER_REFUNDED / RETURN_APPROVED
+    const guestLogWhere = {
+      action: { [Op.in]: ['PAYMENT_SUCCESS', 'ORDER_REFUNDED', 'RETURN_APPROVED'] }
+    };
+    if (startDate || endDate) Object.assign(guestLogWhere, buildDateFilter('createdAt'));
+
+    const guestLogs = await MoveInGuestOrderLog.findAll({
+      where: guestLogWhere,
+      include: [{
+        model: MoveInGuestOrder, as: 'order',
+        required: true,
+        include: [
+          { model: User, as: 'guest', attributes: ['id', 'name'] },
+          {
+            model: MoveInCase, as: 'case',
+            include: [{ model: MoveInRoom, as: 'room', attributes: ['id', 'address'] }]
+          },
+          { model: MoveInGuestPayment, as: 'payments', required: false },
+          {
+            model: MoveInGuestOrderItem, as: 'items', required: false,
+            include: [{ model: MoveInOption, as: 'option', attributes: ['id', 'category'] }]
+          }
+        ]
+      }],
+      order: [['createdAt', safeSortOrder]]
+    });
+
+    guestEventLogs = guestLogs.map(log => {
+      const isPayment = log.action === 'PAYMENT_SUCCESS';
+      const order = log.order;
+      const breakdown = buildBreakdown(order?.items || []);
+      const label = productLabel(breakdown);
+      // 결제수단: PAID 우선, 없으면 REFUNDED, 없으면 첫 결제 시도
+      const payments = order?.payments || [];
+      const refPayment = payments.find(p => p.status === 'PAID')
+                      || payments.find(p => p.status === 'REFUNDED')
+                      || payments[0]
+                      || null;
+
+      let transactionType;
+      if (isPayment) {
+        transactionType = '결제완료';
+      } else {
+        transactionType = (log.balanceAfter === 0) ? '전체취소' : '부분취소';
+      }
+
+      return {
+        occurredAt: log.createdAt,
+        transactionType,
+        paymentMethod: refPayment?.pgMethod || null,
+        easyPayProvider: refPayment?.easyPayProvider || null,
+        productType: label,
+        amount: isPayment ? Math.abs(log.amountChange || 0) : -Math.abs(log.amountChange || 0),
+        orderId: order?.orderId || null,
+        pgOrderNo: refPayment?.pgTid || null,
+        userName: order?.guest?.name || null,
+        userType: '게스트',
+        roomName: order?.case?.room?.address || null,
+        _breakdown: breakdown  // 침구류 필터 전용 (응답에서 제거)
+      };
+    });
+    } // end if (includeMoveIn)
+
+    // === 7) 전체 합산 및 정렬 ===
+    let allLogs = [
+      ...paymentLogs, ...refundLogs, ...rentalEventLogs, ...adminRefundLogs,
+      ...cleaningPaymentLogs, ...cleaningRefundLogs, ...guestEventLogs
+    ];
 
     // 검색 필터
     if (search) {
@@ -1188,10 +1322,17 @@ exports.getPaymentLogs = async (req, res) => {
       allLogs = allLogs.filter(log => log.transactionType === filterValue);
     }
 
-    // 상품 구분 필터
+    // 상품 구분 필터 — '침구류대여' 는 혼합 주문도 포함 (breakdown 기반)
     if (productType) {
-      allLogs = allLogs.filter(log => log.productType === productType);
+      if (productType === '침구류대여') {
+        allLogs = allLogs.filter(log => hasBedding(log._breakdown));
+      } else {
+        allLogs = allLogs.filter(log => log.productType === productType);
+      }
     }
+
+    // 응답 직전 내부 키 제거
+    allLogs = allLogs.map(({ _breakdown, ...rest }) => rest);
 
     // 정렬
     allLogs.sort((a, b) => {
@@ -1234,8 +1375,16 @@ exports.getPaymentSummary = async (req, res) => {
       startDate,
       endDate,
       productType = '',
+      source = 'all',     // internal | move_in | all — 도메인 상위 필터
       sortOrder = 'DESC'
     } = req.query;
+
+    const VALID_SOURCES = ['all', 'internal', 'move_in'];
+    if (!VALID_SOURCES.includes(source)) {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, `source는 ${VALID_SOURCES.join('|')} 중 하나여야 합니다.`);
+    }
+    const includeInternal = source === 'all' || source === 'internal';
+    const includeMoveIn   = source === 'all' || source === 'move_in';
 
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
@@ -1262,6 +1411,13 @@ exports.getPaymentSummary = async (req, res) => {
       return { [field]: filter };
     };
 
+    // 결과 변수 선언 (source 분기로 미실행 시 빈 배열 유지)
+    let contractRows = [];
+    let rentalRows = [];
+    let cleaningRows = [];
+    let guestRows = [];
+
+    if (includeInternal) {
     // ── 1) 계약 결제 행 ──
     const contractWhere = {
       status: { [Op.in]: ['PAYMENT_COMPLETED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED',
@@ -1322,7 +1478,7 @@ exports.getPaymentSummary = async (req, res) => {
       order: [['paidAt', safeSortOrder]]
     });
 
-    const contractRows = contracts.map(contract => {
+    contractRows = contracts.map(contract => {
       const paidAmount = parseFloat(contract.finalTotalAmount) || 0;
       const guestRefundTotal = (contract.refunds || [])
         .reduce((sum, r) => sum + (parseFloat(r.finalRefundAmount) || 0), 0);
@@ -1399,7 +1555,7 @@ exports.getPaymentSummary = async (req, res) => {
       }
     }
 
-    const rentalRows = rentalOrders.map(ro => {
+    rentalRows = rentalOrders.map(ro => {
       const paidAmount = parseFloat(ro.paidAmount) || 0;
       const refundedAmount = parseFloat(ro.refundedAmount) || 0;
 
@@ -1423,14 +1579,134 @@ exports.getPaymentSummary = async (req, res) => {
         contractStatusLabel: contractStatusLabels[ro.contract?.status] || ro.contract?.status || null
       };
     });
+    } // end if (includeInternal)
 
-    // ── 3) 합산, 필터, 정렬, 페이지네이션 ──
-    let allRows = [...contractRows, ...rentalRows];
+    if (includeMoveIn) {
+    // ── 3) 입주 준비 청소 결제 ──
+    const cleaningWhere = {
+      status: { [Op.in]: ['PAID', 'REFUNDED'] },
+      paidAt: { [Op.ne]: null },
+      ...buildDateRange('paidAt')
+    };
+    const cleaningPayments = await MoveInPayment.findAll({
+      where: cleaningWhere,
+      include: [{
+        model: MoveInCase, as: 'case',
+        include: [
+          { model: User, as: 'host', attributes: ['id', 'name'] },
+          { model: MoveInRoom, as: 'room', attributes: ['id', 'address'] }
+        ]
+      }],
+      order: [['paidAt', safeSortOrder]]
+    });
 
-    // 상품 구분 필터
+    cleaningRows = cleaningPayments
+      // 검색 — 주문번호 / 호스트명 매칭
+      .filter(p => {
+        if (!search) return true;
+        return p.orderId?.includes(search) || p.case?.host?.name?.includes(search);
+      })
+      .map(p => {
+        const paidAmount = Number(p.amount) || 0;
+        const refunded = p.status === 'REFUNDED' ? paidAmount : 0;
+        return {
+          rowType: 'MOVE_IN_CLEANING',
+          contractId: null,
+          rentalOrderId: null,
+          orderId: p.orderId,
+          paidAt: p.paidAt,
+          productType: '청소',
+          roomName: p.case?.room?.address || null,
+          userName: p.case?.host?.name || null,
+          userType: '호스트',
+          paymentMethod: p.pgMethod || null,
+          easyPayProvider: p.easyPayProvider || null,
+          pgOrderNo: p.pgTid || null,
+          paidAmount,
+          refundedAmount: refunded,
+          currentBalance: paidAmount - refunded,
+          paymentStatus: p.status,
+          contractStatus: null,
+          contractStatusLabel: null
+        };
+      });
+
+    // ── 4) 입주 준비 게스트 옵션 주문 ──
+    const guestOrderWhere = {
+      status: { [Op.in]: ['PAID', 'PARTIAL_REFUND', 'FULLY_REFUNDED'] },
+      paidAt: { [Op.ne]: null },
+      ...buildDateRange('paidAt')
+    };
+    const guestOrders = await MoveInGuestOrder.findAll({
+      where: guestOrderWhere,
+      include: [
+        { model: User, as: 'guest', attributes: ['id', 'name'] },
+        {
+          model: MoveInCase, as: 'case',
+          include: [{ model: MoveInRoom, as: 'room', attributes: ['id', 'address'] }]
+        },
+        { model: MoveInGuestPayment, as: 'payments', required: false },
+        {
+          model: MoveInGuestOrderItem, as: 'items', required: false,
+          include: [{ model: MoveInOption, as: 'option', attributes: ['id', 'category'] }]
+        }
+      ],
+      order: [['paidAt', safeSortOrder]]
+    });
+
+    guestRows = guestOrders
+      .filter(o => {
+        if (!search) return true;
+        return o.orderId?.includes(search) || o.guest?.name?.includes(search);
+      })
+      .map(o => {
+        const breakdown = buildBreakdown(o.items || []);
+        const label = productLabel(breakdown);
+        const payments = o.payments || [];
+        const refPayment = payments.find(p => p.status === 'PAID')
+                        || payments.find(p => p.status === 'REFUNDED')
+                        || payments[0]
+                        || null;
+        const paidAmount = Number(o.paidAmount) || 0;
+        const refunded = Number(o.refundedAmount) || 0;
+        return {
+          rowType: 'MOVE_IN_GUEST_ORDER',
+          contractId: null,
+          rentalOrderId: null,
+          orderId: o.orderId,
+          paidAt: o.paidAt,
+          productType: label,
+          roomName: o.case?.room?.address || null,
+          userName: o.guest?.name || null,
+          userType: '게스트',
+          paymentMethod: refPayment?.pgMethod || null,
+          easyPayProvider: refPayment?.easyPayProvider || null,
+          pgOrderNo: refPayment?.pgTid || null,
+          paidAmount,
+          refundedAmount: refunded,
+          currentBalance: paidAmount - refunded,
+          paymentStatus: refPayment?.status || null,
+          contractStatus: null,
+          contractStatusLabel: MoveInGuestOrder.STATUS_LABELS?.[o.status] || o.status,
+          _breakdown: breakdown
+        };
+      });
+    } // end if (includeMoveIn)
+
+    // ── 5) 합산, 필터, 정렬, 페이지네이션 ──
+    let allRows = [...contractRows, ...rentalRows, ...cleaningRows, ...guestRows];
+
+    // 상품 구분 필터 — '침구류대여' 는 혼합 주문도 포함
     if (productType) {
-      allRows = allRows.filter(r => r.productType === productType);
+      if (productType === '침구류대여') {
+        allRows = allRows.filter(r => hasBedding(r._breakdown));
+      } else {
+        allRows = allRows.filter(r => r.productType === productType);
+      }
     }
+
+    // 응답 직전 내부 키 제거
+    allRows = allRows.map(({ _breakdown, ...rest }) => rest);
 
     // paidAt 정렬
     allRows.sort((a, b) => {

@@ -737,14 +737,15 @@ const approveReturn = async (req, res) => {
 
       if (finalOrderStatus === 'FULLY_REFUNDED') {
         await payment.update({
-          status: 'CANCELLED',
-          failedAt: now,
-          failureReason: '반품 승인 환불'
+          status: 'REFUNDED',
+          refundedAt: now,
+          refundReason: '반품 승인 환불'
         }, { transaction: tx });
       }
       await order.update({
         status: finalOrderStatus,
-        refundedAmount: Number(order.refundedAmount || 0) + finalRefundAmount
+        refundedAmount: Number(order.refundedAmount || 0) + finalRefundAmount,
+        lastRefundedAt: now
       }, { transaction: tx });
       await reqRow.update({
         status: 'APPROVED',

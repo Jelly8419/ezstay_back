@@ -103,6 +103,13 @@ module.exports = (sequelize) => {
       comment: '결제 완료 시각'
     },
 
+    lastRefundedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'last_refunded_at',
+      comment: '마지막 환불 시각 (부분/전액 모두 누적 갱신)'
+    },
+
     modifiableUntil: {
       type: DataTypes.DATE,
       allowNull: false,

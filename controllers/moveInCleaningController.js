@@ -334,6 +334,7 @@ const confirmCleaningPayment = async (req, res) => {
     let pgTid = null;
     let pgProvider = USE_MOCK ? 'mock' : 'paytag';
     let pgMethod = null;
+    let easyPayProvider = null;
 
     // ── Mock 모드 ──
     if (USE_MOCK) {
@@ -396,6 +397,7 @@ const confirmCleaningPayment = async (req, res) => {
       // PAYSTDMPI 카드결제 응답은 거래번호를 orderno 로 줌.
       pgTid = pgResponse.tran_key || pgResponse.recv_orderno || pgResponse.orderno || null;
       pgMethod = paytagClient.mapPaymentMethod(payType);
+      easyPayProvider = paytagClient.mapEasyPayProvider(payType);
     }
 
     // ── 성공 처리 (트랜잭션 안에서 원자적) ──
@@ -404,7 +406,8 @@ const confirmCleaningPayment = async (req, res) => {
       paidAt: now,
       pgProvider,
       pgTid,
-      pgMethod
+      pgMethod,
+      easyPayProvider
     }, { transaction });
 
     await caseRow.update({
@@ -558,8 +561,8 @@ const refundCleaningPayment = async (req, res) => {
       const now = new Date();
       await payment.update({
         status: 'REFUNDED',
-        failedAt: now,
-        failureReason: reason || '임대인 청소 환불'
+        refundedAt: now,
+        refundReason: reason || '임대인 청소 환불'
       }, { transaction: tx });
       await caseRow.update({
         cleaningStatus: 'CANCELLED',
