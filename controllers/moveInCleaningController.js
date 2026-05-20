@@ -412,6 +412,22 @@ const confirmCleaningPayment = async (req, res) => {
       cleaningPaidAt: now
     }, { transaction });
 
+    // 2026-05-20: confirm 시점에 즉시 ServiceTask 생성 (D-7 게이트 제거).
+    // 케이스당 CLEANING task 1건 가드(코드 레벨) — 이미 있으면 재사용.
+    const existingCleaning = await MoveInServiceTask.findOne({
+      where: { caseId: caseRow.id, taskType: 'CLEANING' },
+      transaction
+    });
+    if (!existingCleaning) {
+      await MoveInServiceTask.create({
+        caseId: caseRow.id,
+        taskType: 'CLEANING',
+        referenceDate: caseRow.checkOutDate,
+        status: 'PENDING',
+        quantity: null
+      }, { transaction });
+    }
+
     await transaction.commit();
 
     return success(res, {

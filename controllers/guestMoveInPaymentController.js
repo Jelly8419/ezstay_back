@@ -49,7 +49,8 @@ const {
   findExistingPendingOrder,
   hasActivePendingPayment,
   reusePendingOrder,
-  findPaidInitialOrder
+  findPaidInitialOrder,
+  syncBeddingServiceTasks
 } = require('../services/moveInGuestOrderService');
 const {
   evaluateGuestCancel,
@@ -424,6 +425,10 @@ const confirmPayment = async (req, res) => {
       metadata: { pgProvider, pgMethod, mock: USE_MOCK },
       req
     }, transaction);
+
+    // 침구류(BEDDING_SET) 라인 포함 시 ServiceTask 동기화 (DELIVERY/RETRIEVAL).
+    // 케이스의 PAID/PARTIAL_REFUND 주문 ACTIVE 라인 합산 기준으로 수량 갱신.
+    await syncBeddingServiceTasks(caseRow.id, transaction);
 
     await transaction.commit();
 
@@ -879,6 +884,9 @@ const cancelPaidOrder = async (req, res) => {
         description: reason || (isPartial ? '임차인 옵션 부분 취소' : '임차인 옵션 취소'),
         req
       }, tx);
+
+      // 침구류 task 동기화 (취소된 라인이 BEDDING_SET 이면 수량 차감 / 0이면 CANCELLED)
+      await syncBeddingServiceTasks(order.caseId, tx);
 
       await tx.commit();
     } catch (dbErr) {

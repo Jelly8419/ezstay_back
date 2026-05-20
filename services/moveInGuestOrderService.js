@@ -18,11 +18,13 @@
 const { Op } = require('sequelize');
 const {
   sequelize,
+  MoveInCase,
   MoveInOption,
   MoveInGuestOrder,
   MoveInGuestOrderItem,
   MoveInGuestPayment,
-  MoveInGuestOrderLog
+  MoveInGuestOrderLog,
+  MoveInServiceTask
 } = require('../models');
 const { generateMoveInGuestOrderId } = require('../utils/orderIdGenerator');
 const { calculatePaymentDeadline } = require('../utils/moveInGuestPaymentGuard');
@@ -233,6 +235,92 @@ async function getCaseOwnedQuantities(caseId, transaction = null) {
     map.set(Number(r.optionId), Number(r.owned) || 0);
   }
   return map;
+}
+
+/**
+ * 침구류(BEDDING_SET) ServiceTask 동기화.
+ * 2026-05-20 정책:
+ *   - 케이스의 PAID/PARTIAL_REFUND 주문 ACTIVE 라인 중 BEDDING_SET 카테고리 합산 수량 N
+ *   - N>0  : DELIVERY(referenceDate=checkInDate) + RETRIEVAL(referenceDate=checkOutDate)
+ *            각각 1건 유지 (없으면 PENDING 생성, 있으면 quantity 갱신)
+ *   - N==0 : 기존 task 들을 CANCELLED 처리 (라인 전량 환불·취소 후 정리)
+ *
+ * 호출 위치: 옵션 결제 confirm 성공 / 부분취소·반품 확정 직후 / 관리자 반품 승인 직후.
+ *
+ * @param {number} caseId
+ * @param {Transaction} transaction
+ * @returns {Promise<{ deliveryTask?, retrievalTask?, quantity: number }>}
+ */
+async function syncBeddingServiceTasks(caseId, transaction) {
+  const opts = { transaction };
+
+  // 케이스의 BEDDING_SET 카테고리 ACTIVE 라인 합산 (PAID/PARTIAL_REFUND 주문만)
+  const total = (await MoveInGuestOrderItem.sum('quantity', {
+    where: { status: 'ACTIVE' },
+    include: [
+      {
+        model: MoveInGuestOrder,
+        as: 'order',
+        attributes: [],
+        where: { caseId, status: { [Op.in]: ['PAID', 'PARTIAL_REFUND'] } },
+        required: true
+      },
+      {
+        model: MoveInOption,
+        as: 'option',
+        attributes: [],
+        where: { category: 'BEDDING_SET' },
+        required: true
+      }
+    ],
+    ...opts
+  })) || 0;
+
+  const caseRow = await MoveInCase.findByPk(caseId, {
+    attributes: ['id', 'checkInDate', 'checkOutDate'],
+    ...opts
+  });
+  if (!caseRow) return { quantity: 0 };
+
+  // 침구류 라인이 한 번도 없었고 기존 task 도 없으면 노옵 (불필요한 task 생성 방지)
+  if (total === 0) {
+    const existing = await MoveInServiceTask.findAll({
+      where: { caseId, taskType: { [Op.in]: ['BEDDING_DELIVERY', 'BEDDING_RETRIEVAL'] } },
+      ...opts
+    });
+    if (existing.length === 0) return { quantity: 0 };
+  }
+
+  const [deliveryTask] = await MoveInServiceTask.findOrCreate({
+    where: { caseId, taskType: 'BEDDING_DELIVERY' },
+    defaults: { referenceDate: caseRow.checkInDate, status: 'PENDING', quantity: total },
+    ...opts
+  });
+  const [retrievalTask] = await MoveInServiceTask.findOrCreate({
+    where: { caseId, taskType: 'BEDDING_RETRIEVAL' },
+    defaults: { referenceDate: caseRow.checkOutDate, status: 'PENDING', quantity: total },
+    ...opts
+  });
+
+  if (total === 0) {
+    // 라인 전량 환불·취소 → task 도 CANCELLED 로 정리 (행은 이력 보존)
+    for (const t of [deliveryTask, retrievalTask]) {
+      if (t.status !== 'CANCELLED') {
+        await t.update({ status: 'CANCELLED', quantity: 0 }, { transaction });
+      }
+    }
+  } else {
+    // 수량 변동 반영 (status 는 운영자가 PENDING→RESERVED 등 진행 중인 경우 건드리지 않음)
+    for (const t of [deliveryTask, retrievalTask]) {
+      const patch = {};
+      if (Number(t.quantity) !== total) patch.quantity = total;
+      // CANCELLED 였다가 다시 결제된 케이스 — PENDING 으로 복귀
+      if (t.status === 'CANCELLED') patch.status = 'PENDING';
+      if (Object.keys(patch).length) await t.update(patch, { transaction });
+    }
+  }
+
+  return { deliveryTask, retrievalTask, quantity: total };
 }
 
 /**
@@ -564,6 +652,7 @@ module.exports = {
   validateGuestStock,
   validatePerOptionQuantity,
   getCaseOwnedQuantities,
+  syncBeddingServiceTasks,
   createPendingOrder,
   findExistingPendingOrder,
   hasActivePendingPayment,

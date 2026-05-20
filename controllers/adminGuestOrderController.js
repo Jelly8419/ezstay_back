@@ -39,6 +39,7 @@ const {
 const { toKSTString } = require('../utils/dateHelper');
 const paytagClient = require('../utils/paytagClient');
 const { calcReturnRefund } = require('../utils/moveInRefundPolicy');
+const { syncBeddingServiceTasks } = require('../services/moveInGuestOrderService');
 
 const VALID_ORDER_STATUSES   = ['PENDING', 'PAID', 'PARTIAL_REFUND', 'FULLY_REFUNDED', 'CANCELLED'];
 const VALID_DELIVERY_STATUSES = ['PENDING', 'IN_TRANSIT', 'DELIVERED'];
@@ -768,6 +769,9 @@ const approveReturn = async (req, res) => {
         },
         req
       }, tx);
+
+      // 침구류 task 동기화 (반품 승인으로 라인 차감 → 수량 갱신/CANCELLED)
+      await syncBeddingServiceTasks(reqRow.caseId, tx);
 
       await tx.commit();
     } catch (dbErr) {

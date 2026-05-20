@@ -19,6 +19,7 @@ const {
   MoveInGuestOrder,
   MoveInGuestOrderItem,
   MoveInGuestPayment,
+  MoveInServiceTask,
   Notification
 } = require('../../../models');
 const { createHost, createGuest, cleanupUsers, generateToken } = require('../../setup/factories/userFactory');
@@ -433,5 +434,141 @@ describe('MoveIn Guest — INITIAL Payment (Mock)', () => {
     const opt1Row4 = r4.body.data.options.find(o => o.optionId === opt1.id);
     expect(opt1Row4.ownedQuantity).toBe(2);
     expect(opt1Row4.remainingQuantity).toBe(3);
+  });
+
+  // ── 침구류(BEDDING_SET) 결제 시 ServiceTask 자동 생성/동기화 ─────────
+  describe('BEDDING_SET 결제 → ServiceTask 자동 생성', () => {
+    let beddingOpt;
+
+    beforeAll(async () => {
+      beddingOpt = await createMoveInOption({
+        name: '침구류 세트',
+        category: 'BEDDING_SET',
+        price: 20000,
+        totalStock: 100
+      });
+      optionIds.push(beddingOpt.id);
+    });
+
+    test('confirm 후 DELIVERY/RETRIEVAL task 2건 생성', async () => {
+      const cb = await freshCase({ checkInDate: '2029-01-10', checkOutDate: '2029-01-15' });
+      const token = generateToken(guest);
+
+      const init = await request(app)
+        .post(`/api/guest/move-in/requests/${cb.id}/payment/init`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ items: [{ optionId: beddingOpt.id, quantity: 2 }] });
+      expect(init.status).toBe(201);
+
+      const confirm = await request(app)
+        .post(`/api/guest/move-in/requests/${cb.id}/payment/confirm`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ paymentId: init.body.data.paymentId });
+      expect(confirm.status).toBe(200);
+
+      const tasks = await MoveInServiceTask.findAll({ where: { caseId: cb.id } });
+      const delivery = tasks.find(t => t.taskType === 'BEDDING_DELIVERY');
+      const retrieval = tasks.find(t => t.taskType === 'BEDDING_RETRIEVAL');
+
+      expect(delivery).toBeTruthy();
+      expect(delivery.status).toBe('PENDING');
+      expect(Number(delivery.quantity)).toBe(2);
+      const deliveryRef = (delivery.referenceDate instanceof Date)
+        ? delivery.referenceDate.toISOString().slice(0, 10)
+        : String(delivery.referenceDate).slice(0, 10);
+      expect(deliveryRef).toBe('2029-01-10');
+
+      expect(retrieval).toBeTruthy();
+      expect(retrieval.status).toBe('PENDING');
+      expect(Number(retrieval.quantity)).toBe(2);
+      const retrievalRef = (retrieval.referenceDate instanceof Date)
+        ? retrieval.referenceDate.toISOString().slice(0, 10)
+        : String(retrieval.referenceDate).slice(0, 10);
+      expect(retrievalRef).toBe('2029-01-15');
+    });
+
+    test('부분 취소(1개) → task quantity 차감 (2 → 1)', async () => {
+      const cb = await freshCase({ checkInDate: '2029-02-10', checkOutDate: '2029-02-15' });
+      const token = generateToken(guest);
+
+      const init = await request(app)
+        .post(`/api/guest/move-in/requests/${cb.id}/payment/init`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ items: [{ optionId: beddingOpt.id, quantity: 2 }] });
+      expect(init.status).toBe(201);
+      await request(app)
+        .post(`/api/guest/move-in/requests/${cb.id}/payment/confirm`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ paymentId: init.body.data.paymentId });
+
+      const orderDbId = init.body.data.orderDbId;
+      const item = await MoveInGuestOrderItem.findOne({ where: { guestOrderId: orderDbId } });
+
+      const cancel = await request(app)
+        .post(`/api/guest/move-in/orders/${orderDbId}/cancel`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ items: [{ itemId: item.id, cancelQuantity: 1 }] });
+      expect(cancel.status).toBe(200);
+
+      const tasks = await MoveInServiceTask.findAll({ where: { caseId: cb.id } });
+      const delivery = tasks.find(t => t.taskType === 'BEDDING_DELIVERY');
+      const retrieval = tasks.find(t => t.taskType === 'BEDDING_RETRIEVAL');
+      expect(Number(delivery.quantity)).toBe(1);
+      expect(delivery.status).toBe('PENDING');
+      expect(Number(retrieval.quantity)).toBe(1);
+      expect(retrieval.status).toBe('PENDING');
+    });
+
+    test('전량 취소 → task status=CANCELLED, quantity=0', async () => {
+      const cb = await freshCase({ checkInDate: '2029-03-10', checkOutDate: '2029-03-15' });
+      const token = generateToken(guest);
+
+      const init = await request(app)
+        .post(`/api/guest/move-in/requests/${cb.id}/payment/init`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ items: [{ optionId: beddingOpt.id, quantity: 1 }] });
+      expect(init.status).toBe(201);
+      await request(app)
+        .post(`/api/guest/move-in/requests/${cb.id}/payment/confirm`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ paymentId: init.body.data.paymentId });
+
+      const orderDbId = init.body.data.orderDbId;
+
+      // items 미지정 → 전량 취소
+      const cancel = await request(app)
+        .post(`/api/guest/move-in/orders/${orderDbId}/cancel`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({});
+      expect(cancel.status).toBe(200);
+
+      const tasks = await MoveInServiceTask.findAll({ where: { caseId: cb.id } });
+      const delivery = tasks.find(t => t.taskType === 'BEDDING_DELIVERY');
+      const retrieval = tasks.find(t => t.taskType === 'BEDDING_RETRIEVAL');
+      expect(delivery.status).toBe('CANCELLED');
+      expect(Number(delivery.quantity)).toBe(0);
+      expect(retrieval.status).toBe('CANCELLED');
+      expect(Number(retrieval.quantity)).toBe(0);
+    });
+
+    test('일반 옵션(AMENITY_KIT)은 task 생성하지 않음', async () => {
+      const cb = await freshCase({ checkInDate: '2029-04-10', checkOutDate: '2029-04-15' });
+      const token = generateToken(guest);
+
+      const init = await request(app)
+        .post(`/api/guest/move-in/requests/${cb.id}/payment/init`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ items: [{ optionId: opt1.id, quantity: 1 }] });
+      expect(init.status).toBe(201);
+      await request(app)
+        .post(`/api/guest/move-in/requests/${cb.id}/payment/confirm`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ paymentId: init.body.data.paymentId });
+
+      const tasks = await MoveInServiceTask.findAll({
+        where: { caseId: cb.id, taskType: ['BEDDING_DELIVERY', 'BEDDING_RETRIEVAL'] }
+      });
+      expect(tasks.length).toBe(0);
+    });
   });
 });

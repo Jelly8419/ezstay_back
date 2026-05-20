@@ -190,9 +190,10 @@ move_in_options            임차인용 옵션 카탈로그 (관리자 CRUD, Ren
 - ✅ `move_in_payment_request_guest` (UH_7964) — 임차인 결제 요청. `AlimtalkService.sendMoveInPaymentRequest` 로 발송. 버튼 "확인하기" → paymentLink (linkMo/linkPc override)
 - 🔴 **TODO**: 방 심사 알림톡 — 템플릿 등록 후 `NotificationService.notifyMoveInRoomReviewResult` 또는 `adminMoveInRoomController.approve/rejectMoveInRoom` 에서 `AlimtalkService.send` 호출 hook 추가 필요
 
-### 스케줄러 (`schedulers/moveInScheduler.js`)
+### 스케줄러 (`schedulers/moveInScheduler.js`) + ServiceTask 생성 정책 (2026-05-20)
 - 매 10분 실행 (기존 contractScheduler와 독립)
-- `cleaning_status=PAID` & 퇴실일 D-7 이내 케이스 → `MoveInServiceTask(CLEANING, PENDING)` 자동 생성
+- **청소 task (CLEANING)**: D-7 게이트 제거. `cleaning_status='PAID'` 케이스 전부에 대해 즉시 생성. 1차 생성은 청소 결제 confirm 시점(`moveInCleaningController.confirmCleaningPayment`)이며 스케줄러는 누락 보정 백업.
+- **침구류 task (BEDDING_DELIVERY/RETRIEVAL)**: 스케줄러 아님. 게스트 결제 confirm·즉시취소·반품승인 진입점에서 `services/moveInGuestOrderService.syncBeddingServiceTasks(caseId, tx)` 호출 — `category='BEDDING_SET'` ACTIVE 합계로 두 task `quantity` 갱신. 0이면 CANCELLED, 다시 양수면 PENDING 복귀. `(case_id, task_type)` UNIQUE 인덱스는 라인별 task 증설 여지로 제거됨.
 
 ### 관리자 화면 통합
 기존 `/api/admin/service-tasks`에 `?source=` 쿼리로 분기:

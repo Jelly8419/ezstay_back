@@ -33,20 +33,11 @@ const { nowKSTString } = require('../utils/dateHelper');
  */
 async function generateMoveInServiceTasks() {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const threshold = new Date(today);
-    threshold.setDate(threshold.getDate() + 7);
-
-    // DATEONLY 컬럼이므로 'YYYY-MM-DD' 문자열로 비교
-    const todayStr = formatDateOnly(today);
-    const thresholdStr = formatDateOnly(threshold);
-
+    // 2026-05-20: D-7 게이트 제거 — cleaning_status='PAID' 면 즉시 ServiceTask 생성.
+    //   - 실제 즉시 생성은 청소 결제 confirm 시점에서 처리 (moveInCleaningController).
+    //   - 본 스케줄러는 누락 보정용 백업 (매 10분).
     const cases = await MoveInCase.findAll({
-      where: {
-        cleaningStatus: 'PAID',
-        checkOutDate: { [Op.between]: [todayStr, thresholdStr] }
-      },
+      where: { cleaningStatus: 'PAID' },
       attributes: ['id', 'checkOutDate']
     });
 
