@@ -196,7 +196,7 @@ const getRequestDetail = async (req, res) => {
       return error(res, ErrorCodes.MOVE_IN_GUEST_PHONE_MISMATCH, 403);
     }
 
-    const orders = (caseRow.guestOrders || []).map(serializeGuestOrder);
+    const orders = (caseRow.guestOrders || []).map(o => serializeGuestOrder(o, { caseRow }));
     const ordersForStatus = (caseRow.guestOrders || []).map(o => ({
       status: o.status,
       deliveryStatus: o.deliveryStatus

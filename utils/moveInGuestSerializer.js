@@ -16,6 +16,7 @@
 
 const { toKSTString } = require('./dateHelper');
 const { calculatePaymentDeadline } = require('./moveInGuestPaymentGuard');
+const { evaluateGuestCancel, evaluateGuestReturn } = require('./moveInRefundPolicy');
 
 /**
  * 주소 마스킹.
@@ -116,9 +117,11 @@ function serializeOption(optionRow) {
  * 게스트 응답용 주문 직렬화.
  *
  * @param {object} orderRow - MoveInGuestOrder 인스턴스 (items include 권장)
+ * @param {object} [opts]
+ * @param {object} [opts.caseRow] - 정책 평가용 케이스 (checkInDate/checkOutDate). 미지정 시 order.case 를 사용.
  * @returns {object}
  */
-function serializeGuestOrder(orderRow) {
+function serializeGuestOrder(orderRow, { caseRow = null } = {}) {
   if (!orderRow) return null;
   const o = typeof orderRow.get === 'function' ? orderRow.get({ plain: true }) : orderRow;
 
@@ -138,12 +141,40 @@ function serializeGuestOrder(orderRow) {
     }
   }
 
+  // canCancel / canReturn — 서버 정책 평가 결과를 그대로 노출.
+  // (프론트가 "결제 취소" / "반품 신청" 탭 노출 여부를 결정하는 단일 근거)
+  // caseRow 가 없거나 케이스 날짜를 모르면 false 로 떨어뜨려 보수적으로 차단.
+  const c = caseRow ?? o.case ?? null;
+  const orderStatus = o.status;
+  const deliveryStatus = o.deliveryStatus ?? o.delivery_status;
+  // 활성 라인 합계(없으면 paidAmount - refundedAmount 로 폴백)
+  const activeTotal = (o.items || []).reduce(
+    (s, it) => s + (it.status === 'ACTIVE' ? Number(it.totalPrice ?? it.total_price ?? 0) : 0),
+    0
+  ) || Math.max(0, Number(o.paidAmount ?? o.paid_amount ?? 0) - Number(o.refundedAmount ?? o.refunded_amount ?? 0));
+
+  let canCancel = false;
+  let canReturn = false;
+  if (c) {
+    const checkInDate = c.checkInDate ?? c.check_in_date;
+    const checkOutDate = c.checkOutDate ?? c.check_out_date;
+    canCancel = activeTotal > 0 && evaluateGuestCancel({
+      checkInDate, checkOutDate, orderStatus, deliveryStatus,
+      orderTotalAmount: activeTotal
+    }).allowed;
+    canReturn = activeTotal > 0 && evaluateGuestReturn({
+      checkInDate, checkOutDate, orderStatus, deliveryStatus
+    }).allowed;
+  }
+
   return {
     orderDbId: o.id,
     orderId: o.orderId ?? o.order_id,
     orderType: o.orderType ?? o.order_type,
     status: o.status,
     deliveryStatus: o.deliveryStatus ?? o.delivery_status,
+    canCancel,
+    canReturn,
     totalAmount: o.totalAmount ?? o.total_amount,
     paidAmount: o.paidAmount ?? o.paid_amount,
     refundedAmount: o.refundedAmount ?? o.refunded_amount,

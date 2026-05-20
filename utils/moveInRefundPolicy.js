@@ -125,6 +125,11 @@ function evaluateGuestCancel({
     return deny('입주일 이후에는 옵션 취소가 불가합니다. (반품 요청을 이용하세요)');
   }
 
+  // 2026-05-20: 배송이 시작된 이후(IN_TRANSIT/DELIVERED) 는 결제 취소 불가 — 반품 신청 경로 사용.
+  if (deliveryStatus !== 'PENDING') {
+    return deny('배송이 시작된 이후에는 결제 취소가 불가합니다. (반품 요청을 이용하세요)');
+  }
+
   let shippingDeduction = 0;
   let refundAmount = orderTotalAmount;
 
@@ -132,11 +137,8 @@ function evaluateGuestCancel({
     // 결제완료 ~ D-5 전: 전액 취소 가능
     shippingDeduction = 0;
   } else {
-    // D-5 이후 ~ 입주일 전: 배송 전(PENDING)만 가능
-    if (deliveryStatus !== 'PENDING') {
-      return deny('입주 5일 전 이후에는 배송 시작 전 주문만 취소할 수 있습니다.');
-    }
-    shippingDeduction = 0; // 배송 전이므로 배송비 미발생
+    // D-5 이후 ~ 입주일 전: 배송 전(PENDING)만 가능 (위에서 이미 확정)
+    shippingDeduction = 0;
   }
 
   refundAmount = orderTotalAmount - shippingDeduction;

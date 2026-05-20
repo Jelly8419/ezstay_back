@@ -217,4 +217,77 @@ describe('serializeGuestOrder', () => {
     });
     expect(r.items).toEqual([]);
   });
+
+  // ── canCancel / canReturn 플래그 (배송 상태별) ───────────────────
+  describe('canCancel / canReturn (배송 상태별 정책 노출)', () => {
+    // 충분히 미래 케이스 — D-5 이전
+    const futureCase = {
+      checkInDate: '2030-01-20',
+      checkOutDate: '2030-01-25'
+    };
+    const baseOrder = {
+      orderId: '260520-G0003',
+      status: 'PAID',
+      totalAmount: 10000,
+      paidAmount: 10000,
+      refundedAmount: 0,
+      items: [{ id: 1, optionId: 10, quantity: 1, totalPrice: 10000, status: 'ACTIVE' }]
+    };
+
+    test('caseRow 미지정 → canCancel/canReturn=false (보수적 차단)', () => {
+      const r = serializeGuestOrder({ ...baseOrder, deliveryStatus: 'PENDING' });
+      expect(r.canCancel).toBe(false);
+      expect(r.canReturn).toBe(false);
+    });
+
+    test('배송 전(PENDING) + D-5 이전 → canCancel=true, canReturn=false', () => {
+      const r = serializeGuestOrder(
+        { ...baseOrder, deliveryStatus: 'PENDING' },
+        { caseRow: futureCase }
+      );
+      expect(r.canCancel).toBe(true);
+      expect(r.canReturn).toBe(false);
+    });
+
+    test('배송중(IN_TRANSIT) → canCancel=false, canReturn=false (입주 전이라 반품도 불가)', () => {
+      const r = serializeGuestOrder(
+        { ...baseOrder, deliveryStatus: 'IN_TRANSIT' },
+        { caseRow: futureCase }
+      );
+      expect(r.canCancel).toBe(false);
+      expect(r.canReturn).toBe(false);
+    });
+
+    test('배송완료(DELIVERED) + 입주 전 → canCancel=false, canReturn=false', () => {
+      const r = serializeGuestOrder(
+        { ...baseOrder, deliveryStatus: 'DELIVERED' },
+        { caseRow: futureCase }
+      );
+      expect(r.canCancel).toBe(false);
+      expect(r.canReturn).toBe(false);
+    });
+
+    test('배송완료(DELIVERED) + 입주 ~ 퇴실 기간 → canReturn=true', () => {
+      const today = new Date();
+      const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+      const plus5 = new Date(today.getTime() + 5 * 24 * 60 * 60 * 1000);
+      const fmt = d => d.toISOString().slice(0, 10);
+      const r = serializeGuestOrder(
+        { ...baseOrder, deliveryStatus: 'DELIVERED' },
+        { caseRow: { checkInDate: fmt(yesterday), checkOutDate: fmt(plus5) } }
+      );
+      expect(r.canCancel).toBe(false);
+      expect(r.canReturn).toBe(true);
+    });
+
+    test('전액 환불 종료(FULLY_REFUNDED) → canCancel/canReturn=false', () => {
+      const r = serializeGuestOrder(
+        { ...baseOrder, status: 'FULLY_REFUNDED', deliveryStatus: 'PENDING',
+          items: [{ id: 1, quantity: 1, totalPrice: 0, status: 'CANCELLED' }] },
+        { caseRow: futureCase }
+      );
+      expect(r.canCancel).toBe(false);
+      expect(r.canReturn).toBe(false);
+    });
+  });
 });
