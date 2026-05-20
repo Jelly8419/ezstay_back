@@ -1294,6 +1294,7 @@ exports.getPaymentLogs = async (req, res) => {
         userType: '게스트',
         roomName: order?.case?.room?.address || null,
         moveInCaseId: order?.caseId ?? log.caseId ?? null,
+        moveInGuestOrderId: order?.id ?? log.guestOrderId ?? null,
         _breakdown: breakdown  // 침구류 필터 전용 (응답에서 제거)
       };
     });
@@ -1678,6 +1679,7 @@ exports.getPaymentSummary = async (req, res) => {
           contractId: null,
           rentalOrderId: null,
           moveInCaseId: o.caseId,
+          moveInGuestOrderId: o.id,
           orderId: o.orderId,
           paidAt: o.paidAt,
           productType: label,
