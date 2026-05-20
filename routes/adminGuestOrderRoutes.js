@@ -19,7 +19,7 @@ const {
   approveReturn,
   rejectReturn
 } = require('../controllers/adminGuestOrderController');
-const { listMoveInPayments } = require('../controllers/adminMoveInPaymentController');
+const { listMoveInPayments, getCleaningPaymentDetail } = require('../controllers/adminMoveInPaymentController');
 
 /**
  * @route GET /api/admin/move-in/guest-orders
@@ -45,6 +45,12 @@ router.patch('/guest-orders/:orderId/delivery', authenticateAdmin, updateDeliver
  * @desc  결제 통합 내역 (청소+옵션, type/status/기간/검색 필터 + 페이지네이션)
  */
 router.get('/payments', authenticateAdmin, listMoveInPayments);
+
+/**
+ * @route GET /api/admin/move-in/cases/:caseId/cleaning-payment
+ * @desc  청소 결제 케이스 단위 상세 (모든 결제 시도 + 환불 정책 + ServiceTask)
+ */
+router.get('/cases/:caseId/cleaning-payment', authenticateAdmin, getCleaningPaymentDetail);
 
 /**
  * @route GET /api/admin/move-in/refund-requests

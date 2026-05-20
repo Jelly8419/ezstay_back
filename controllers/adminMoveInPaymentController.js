@@ -27,11 +27,14 @@ const {
   MoveInOption,
   MoveInCase,
   MoveInRoom,
+  MoveInServiceTask,
   User
 } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 const { toKSTString } = require('../utils/dateHelper');
 const { buildBreakdown, productLabel } = require('../utils/moveInPaymentSerializer');
+const { evaluateCleaningRefund } = require('../utils/moveInRefundPolicy');
+const cryptoHelper = require('../utils/cryptoHelper');
 
 const VALID_STATUSES = ['PENDING', 'PAID', 'FAILED', 'CANCELLED', 'REFUNDED'];
 const STATUS_LABELS = {
@@ -283,4 +286,126 @@ const listMoveInPayments = async (req, res) => {
   }
 };
 
-module.exports = { listMoveInPayments };
+/**
+ * GET /api/admin/move-in/cases/:caseId/cleaning-payment
+ *
+ * 청소 결제 케이스 단위 상세.
+ * - 한 케이스의 모든 MoveInPayment 시도(PAID/FAILED/REFUNDED/PENDING/CANCELLED 포함)
+ * - 청소 환불 정책 평가 결과(canRefund 등)
+ * - 청소용 ServiceTask (자동 생성 청소 작업) 동봉
+ * - room snapshot 의 도어락/공동현관 비밀번호 복호화 노출 (관리자 화면 한정)
+ */
+const getCleaningPaymentDetail = async (req, res) => {
+  try {
+    const caseId = parseInt(req.params.caseId, 10);
+    if (!Number.isInteger(caseId) || caseId <= 0) {
+      return error(res, ErrorCodes.VALIDATION_ERROR, 400, 'caseId는 정수여야 합니다.');
+    }
+
+    const caseRow = await MoveInCase.findByPk(caseId, {
+      include: [
+        { model: MoveInRoom, as: 'room', attributes: ['id', 'address', 'detailAddress'] },
+        { model: User, as: 'host', attributes: ['id', 'name', 'phoneNumber'], required: false },
+        { model: User, as: 'guest', attributes: ['id', 'name', 'phoneNumber'], required: false }
+      ]
+    });
+    if (!caseRow) {
+      return error(res, ErrorCodes.NOT_FOUND, 404, '케이스를 찾을 수 없습니다.');
+    }
+
+    // 모든 결제 시도 (실패/만료 포함, createdAt 오름차순)
+    const payments = await MoveInPayment.findAll({
+      where: { caseId },
+      order: [['createdAt', 'ASC']]
+    });
+
+    // 자동 생성된 청소 ServiceTask
+    const cleaningTasks = await MoveInServiceTask.findAll({
+      where: { caseId, taskType: 'CLEANING' },
+      order: [['referenceDate', 'ASC']]
+    });
+
+    // 환불 정책 평가 (PAID 결제가 있을 때만 의미)
+    const paidPayment = payments.find(p => p.status === 'PAID');
+    let cleaningRefund = { canRefund: false, refundAmount: 0, deduction: 0, reason: null };
+    if (paidPayment) {
+      const v = evaluateCleaningRefund({
+        cleaningDate: caseRow.cleaningDate,
+        cleaningTime: caseRow.cleaningTime,
+        paidAmount: Number(caseRow.cleaningFee) || 0
+      });
+      cleaningRefund = {
+        canRefund: v.allowed,
+        refundAmount: v.refundAmount,
+        deduction: v.deduction,
+        reason: v.allowed ? null : (v.reason || null)
+      };
+    }
+
+    // 방 스냅샷 비밀번호 복호화 (관리자 화면 정책 — CLAUDE.md 입주 준비 절)
+    let roomSnapshot = caseRow.roomSnapshot ? { ...caseRow.roomSnapshot } : null;
+    if (roomSnapshot) {
+      try {
+        roomSnapshot.commonEntrancePassword = cryptoHelper.decrypt(roomSnapshot.commonEntrancePassword);
+        roomSnapshot.doorLockPassword = cryptoHelper.decrypt(roomSnapshot.doorLockPassword);
+      } catch (_) { /* 미설정/이전 데이터 호환 */ }
+    }
+
+    return success(res, {
+      case: {
+        id: caseRow.id,
+        moveInRoomId: caseRow.moveInRoomId,
+        checkInDate: caseRow.checkInDate,
+        checkOutDate: caseRow.checkOutDate,
+        cleaningStatus: caseRow.cleaningStatus,
+        cleaningFee: caseRow.cleaningFee,
+        cleaningPaidAt: toKSTString(caseRow.cleaningPaidAt),
+        cleaningDate: caseRow.cleaningDate,
+        cleaningTime: caseRow.cleaningTime,
+        host: caseRow.host
+          ? { id: caseRow.host.id, name: caseRow.host.name, phone: caseRow.host.phoneNumber }
+          : null,
+        guest: caseRow.guest
+          ? { id: caseRow.guest.id, name: caseRow.guest.name, phone: caseRow.guest.phoneNumber }
+          : { id: null, name: caseRow.guestName, phone: caseRow.guestPhone },
+        room: caseRow.room
+          ? { id: caseRow.room.id, address: caseRow.room.address, detailAddress: caseRow.room.detailAddress }
+          : null,
+        roomSnapshot,
+        adminMemo: caseRow.adminMemo
+      },
+      payments: payments.map(p => ({
+        paymentId: p.id,
+        orderId: p.orderId,
+        amount: p.amount,
+        status: p.status,
+        statusLabel: STATUS_LABELS[p.status] || p.status,
+        pgProvider: p.pgProvider,
+        pgMethod: p.pgMethod,
+        pgTid: p.pgTid,
+        easyPayProvider: p.easyPayProvider || null,
+        paidAt: toKSTString(p.paidAt),
+        refundedAt: toKSTString(p.refundedAt),
+        refundReason: p.refundReason || null,
+        failedAt: toKSTString(p.failedAt),
+        failureReason: p.failureReason || null,
+        createdAt: toKSTString(p.createdAt)
+      })),
+      cleaningRefund,
+      serviceTasks: cleaningTasks.map(t => ({
+        id: t.id,
+        taskType: t.taskType,
+        status: t.status,
+        referenceDate: t.referenceDate,
+        quantity: t.quantity,
+        issueNote: t.issueNote,
+        createdAt: toKSTString(t.createdAt)
+      }))
+    }, '청소 결제 상세 조회 성공');
+  } catch (err) {
+    console.error('[adminMoveInPayment.getCleaningDetail] error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+module.exports = { listMoveInPayments, getCleaningPaymentDetail };
