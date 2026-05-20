@@ -249,19 +249,32 @@ describe('serializeGuestOrder', () => {
       expect(r.canReturn).toBe(false);
     });
 
-    test('배송중(IN_TRANSIT) → canCancel=false, canReturn=false (입주 전이라 반품도 불가)', () => {
+    test('배송중(IN_TRANSIT) + 입주 전 → canCancel=false, canReturn=true (2026-05-20 완화)', () => {
       const r = serializeGuestOrder(
         { ...baseOrder, deliveryStatus: 'IN_TRANSIT' },
         { caseRow: futureCase }
       );
       expect(r.canCancel).toBe(false);
-      expect(r.canReturn).toBe(false);
+      expect(r.canReturn).toBe(true);
     });
 
-    test('배송완료(DELIVERED) + 입주 전 → canCancel=false, canReturn=false', () => {
+    test('배송완료(DELIVERED) + 입주 전 → canCancel=false, canReturn=true (2026-05-20 완화)', () => {
       const r = serializeGuestOrder(
         { ...baseOrder, deliveryStatus: 'DELIVERED' },
         { caseRow: futureCase }
+      );
+      expect(r.canCancel).toBe(false);
+      expect(r.canReturn).toBe(true);
+    });
+
+    test('배송완료(DELIVERED) + 퇴실일 이후 → canReturn=false (시점 가드 유지)', () => {
+      const today = new Date();
+      const past2 = new Date(today.getTime() - 10 * 24 * 60 * 60 * 1000);
+      const past1 = new Date(today.getTime() - 3 * 24 * 60 * 60 * 1000);
+      const fmt = d => d.toISOString().slice(0, 10);
+      const r = serializeGuestOrder(
+        { ...baseOrder, deliveryStatus: 'DELIVERED' },
+        { caseRow: { checkInDate: fmt(past2), checkOutDate: fmt(past1) } }
       );
       expect(r.canCancel).toBe(false);
       expect(r.canReturn).toBe(false);

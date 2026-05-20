@@ -6,13 +6,16 @@
  * 출처: Notion "임대인, 임차인 환불 로직 추가 필요" (2026-05-16)
  *
  * ── 임차인 (옵션: 입주용품 구매 / 침구류 대여) ──
- *   | 시점                         | 취소        | 반품 |
- *   | 결제 전 (PENDING)             | 불가        | 불가 |
- *   | 결제완료 ~ 입주 D-5 전         | 가능(전액)   | 불가 |
- *   | 입주 D-5 이후 ~ 입주일         | 부분 가능*   | 불가 |
- *   | 입주일 ~ 퇴실일                | 불가        | 가능 |
- *   | 퇴실일 이후                    | 불가        | 불가 |
- *   * D-5 이후 취소는 deliveryStatus 가 PENDING(배송 전)일 때만 가능
+ *   배송 상태 / 시점                              | 취소        | 반품
+ *   PENDING + 결제완료 ~ D-5 전                   | 가능(전액)   | 불가
+ *   PENDING + D-5 이후 ~ 입주일 전                 | 가능(전액)   | 불가
+ *   PENDING + 입주일 ~ 퇴실일                      | 불가        | 불가
+ *   IN_TRANSIT (시점 무관, 퇴실일 전까지)            | 불가        | 가능 (2026-05-20)
+ *   DELIVERED + 입주일 전                          | 불가        | 가능 (2026-05-20)
+ *   DELIVERED + 입주일 ~ 퇴실일                     | 불가        | 가능
+ *   * + 퇴실일 이후                                 | 불가        | 불가
+ *   ─ 결제 취소(evaluateGuestCancel): 배송 전(PENDING) + 입주일 전에만 허용
+ *   ─ 반품(evaluateGuestReturn): 배송 시작(IN_TRANSIT) ~ 퇴실일까지 허용 (게스트 계약과 정합)
  *
  *   배송비 차감: 기존 렌탈과 동일 (왕복배송비 = RENTAL_ROUND_TRIP_SHIPPING_COST)
  *     - 취소: deliveryStatus IN_TRANSIT 이면 차감 (단 본 정책상 D-5 이후 취소는 PENDING 만 → 실무상 미차감)
@@ -171,17 +174,15 @@ function evaluateGuestReturn({
   if (!['PAID', 'PARTIAL_REFUND'].includes(orderStatus)) {
     return deny('결제 완료된 주문만 반품할 수 있습니다.');
   }
-  if (deliveryStatus !== 'DELIVERED') {
-    return deny('배송이 완료된 주문만 반품 요청할 수 있습니다.');
+  // 2026-05-20: 배송 시작 시점부터 반품 가능 (IN_TRANSIT + DELIVERED).
+  // 게스트 계약(rental)과 정합. 시점 조건은 퇴실일 이후 차단만 유지.
+  if (!['IN_TRANSIT', 'DELIVERED'].includes(deliveryStatus)) {
+    return deny('배송이 시작된 주문만 반품 요청할 수 있습니다.');
   }
 
-  const checkInKst = toKstMidnight(checkInDate);
   const checkOutEnd = endOfKstDay(toKstMidnight(checkOutDate));
   const t = now.getTime();
 
-  if (t < checkInKst.getTime()) {
-    return deny('입주일 이후부터 반품 요청이 가능합니다.');
-  }
   if (t > checkOutEnd.getTime()) {
     return deny('퇴실일 이후에는 반품 요청이 불가합니다.');
   }

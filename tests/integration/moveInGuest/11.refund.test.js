@@ -505,6 +505,46 @@ describe('입주 준비 환불', () => {
       expect(res.status).toBe(400);
       expect(res.body.code).toBe(4799);
     });
+
+    test('배송중(IN_TRANSIT) + 입주 전 → 반품 요청 접수 (2026-05-20 완화)', async () => {
+      const { order, items } = await makeCaseWithPaidOrder({
+        checkInDate: '2030-06-10', checkOutDate: '2030-06-15',
+        deliveryStatus: 'IN_TRANSIT'
+      });
+      const res = await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/return`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ items: [{ itemId: items[0].id, returnQuantity: 1 }] });
+      expect(res.status).toBe(200);
+      expect(res.body.data.refundRequestId).toBeTruthy();
+    });
+
+    test('배송완료(DELIVERED) + 입주 전 → 반품 요청 접수 (2026-05-20 완화)', async () => {
+      const { order, items } = await makeCaseWithPaidOrder({
+        checkInDate: '2030-07-10', checkOutDate: '2030-07-15',
+        deliveryStatus: 'DELIVERED'
+      });
+      const res = await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/return`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({ items: [{ itemId: items[0].id, returnQuantity: 1 }] });
+      expect(res.status).toBe(200);
+      expect(res.body.data.refundRequestId).toBeTruthy();
+    });
+
+    test('배송완료(DELIVERED) + 퇴실일 이후 → 반품 거절 (4799, 시점 가드)', async () => {
+      const past2 = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const past1 = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const { order } = await makeCaseWithPaidOrder({
+        checkInDate: past2, checkOutDate: past1, deliveryStatus: 'DELIVERED'
+      });
+      const res = await request(app)
+        .post(`/api/guest/move-in/orders/${order.id}/return`)
+        .set('Authorization', `Bearer ${guestToken}`)
+        .send({});
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe(4799);
+    });
   });
 
   // ── 관리자 반품 요청 조회 (목록/단건/케이스 상세 동봉) ──────────
