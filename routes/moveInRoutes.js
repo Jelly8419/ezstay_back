@@ -23,6 +23,7 @@ router.use(authenticateToken);
 router.get('/rooms', moveInRoomController.getRooms);
 router.post('/rooms', moveInRoomController.createRoom);
 router.get('/rooms/:roomId', moveInRoomController.getRoom);
+router.get('/rooms/:roomId/occupied-ranges', moveInRoomController.getOccupiedRanges);
 router.patch('/rooms/:roomId', moveInRoomController.updateRoom);
 router.delete('/rooms/:roomId', moveInRoomController.deleteRoom);
 

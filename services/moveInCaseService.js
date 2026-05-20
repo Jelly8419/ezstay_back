@@ -33,7 +33,8 @@ async function findOverlappingCase({ moveInRoomId, checkInDate, checkOutDate, ex
   }
   return MoveInCase.findOne({
     where,
-    transaction: transaction ?? undefined
+    transaction: transaction ?? undefined,
+    lock: transaction ? transaction.LOCK.UPDATE : undefined
   });
 }
 

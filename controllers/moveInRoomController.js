@@ -386,10 +386,56 @@ const deleteRoom = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/host/move-in/rooms/:roomId/occupied-ranges
+ * 캘린더 비활성화용 — 해당 방의 케이스 점유 구간 목록
+ *
+ * 정책: 케이스가 존재하면 곧 점유 (status 필드 없음, 삭제 API 없음)
+ * 쿼리: ?from=YYYY-MM-DD (선택) — 해당 날짜 이후로 끝나는 케이스만
+ */
+const getOccupiedRanges = async (req, res) => {
+  try {
+    const hostId = req.user.id;
+    const { roomId } = req.params;
+    const { from } = req.query;
+
+    const room = await MoveInRoom.findOne({ where: { id: roomId, hostId } });
+    if (!room) {
+      return error(res, ErrorCodes.ROOM_NOT_FOUND, 404);
+    }
+
+    const where = { moveInRoomId: room.id };
+    if (from) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+        return error(res, ErrorCodes.VALIDATION_ERROR, 400, 'from은 YYYY-MM-DD 형식이어야 합니다.');
+      }
+      where.checkOutDate = { [Op.gt]: from };
+    }
+
+    const cases = await MoveInCase.findAll({
+      where,
+      attributes: ['id', 'checkInDate', 'checkOutDate'],
+      order: [['checkInDate', 'ASC']]
+    });
+
+    const ranges = cases.map(c => ({
+      caseId: c.id,
+      checkInDate: c.checkInDate,
+      checkOutDate: c.checkOutDate
+    }));
+
+    return success(res, { moveInRoomId: room.id, ranges });
+  } catch (err) {
+    console.error('MoveInRoom occupied-ranges 조회 오류:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500);
+  }
+};
+
 module.exports = {
   getRooms,
   createRoom,
   getRoom,
   updateRoom,
-  deleteRoom
+  deleteRoom,
+  getOccupiedRanges
 };
