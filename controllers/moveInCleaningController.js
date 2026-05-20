@@ -472,6 +472,62 @@ function buildCleaningCancelParams(payment) {
 }
 
 /**
+ * GET /api/host/move-in/cases/:caseId/cleaning/refund/quote
+ * 청소 환불 견적 (DB 변경 X). 프론트 모달의 "환불 예상 금액" 표시용.
+ *
+ * 정책 평가 결과를 그대로 반환 (단일 진실 원천: evaluateCleaningRefund).
+ * cleaningStatus !== 'PAID' 이면 canRefund=false + reason.
+ */
+const getCleaningRefundQuote = async (req, res) => {
+  try {
+    const hostId = req.user.id;
+    const { caseId } = req.params;
+
+    const caseRow = await MoveInCase.findOne({
+      where: { id: caseId, hostId },
+      attributes: ['id', 'cleaningStatus', 'cleaningFee', 'cleaningDate', 'cleaningTime', 'cleaningPaidAt']
+    });
+    if (!caseRow) {
+      return error(res, ErrorCodes.NOT_FOUND, 404, '케이스를 찾을 수 없습니다.');
+    }
+
+    if (caseRow.cleaningStatus !== 'PAID') {
+      return success(res, {
+        caseId: caseRow.id,
+        cleaningStatus: caseRow.cleaningStatus,
+        canRefund: false,
+        refundAmount: 0,
+        deduction: 0,
+        reason: `결제 완료된 청소만 환불 가능합니다. (현재: ${caseRow.cleaningStatus})`,
+        cleaningDate: caseRow.cleaningDate,
+        cleaningTime: caseRow.cleaningTime
+      }, '청소 환불 견적');
+    }
+
+    const v = evaluateCleaningRefund({
+      cleaningDate: caseRow.cleaningDate,
+      cleaningTime: caseRow.cleaningTime,
+      paidAmount: Number(caseRow.cleaningFee) || 0
+    });
+
+    return success(res, {
+      caseId: caseRow.id,
+      cleaningStatus: caseRow.cleaningStatus,
+      canRefund: v.allowed,
+      refundAmount: v.refundAmount,
+      deduction: v.deduction,
+      reason: v.allowed ? null : (v.reason || null),
+      cleaningFee: Number(caseRow.cleaningFee) || 0,
+      cleaningDate: caseRow.cleaningDate,
+      cleaningTime: caseRow.cleaningTime
+    }, '청소 환불 견적');
+  } catch (err) {
+    console.error('[moveInCleaning.refundQuote] error:', err);
+    return error(res, ErrorCodes.INTERNAL_ERROR, 500, err.message);
+  }
+};
+
+/**
  * POST /api/host/move-in/cases/:caseId/cleaning/refund
  * 임대인 청소 결제 환불 (셀프 즉시, 관리자 승인 X)
  *
@@ -607,6 +663,7 @@ module.exports = {
   requestCleaning,
   cancelCleaning,
   refundCleaningPayment,
+  getCleaningRefundQuote,
   initCleaningPayment,
   confirmCleaningPayment
 };

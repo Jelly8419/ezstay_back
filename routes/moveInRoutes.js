@@ -43,6 +43,7 @@ router.delete('/cases/:caseId/cleaning/request', moveInCleaningController.cancel
 router.post('/cases/:caseId/cleaning/payment/init', moveInCleaningController.initCleaningPayment);
 router.post('/cases/:caseId/cleaning/payment/confirm', moveInCleaningController.confirmCleaningPayment);
 router.post('/cases/:caseId/cleaning/refund', moveInCleaningController.refundCleaningPayment);
+router.get('/cases/:caseId/cleaning/refund/quote', moveInCleaningController.getCleaningRefundQuote);
 
 // ============================================================================
 // 임차인 결제 요청 발송 (move_in_payment_requests)

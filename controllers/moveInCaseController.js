@@ -26,6 +26,7 @@ const {
 } = require('../utils/moveInCleaningSchedule');
 const { calculateCleaningPaymentDeadline } = require('../utils/moveInCleaningPaymentGuard');
 const { calculatePaymentDeadline: calculateOptionPaymentDeadline } = require('../utils/moveInGuestPaymentGuard');
+const { evaluateCleaningRefund } = require('../utils/moveInRefundPolicy');
 const { toKSTString } = require('../utils/dateHelper');
 const {
   _dispatchPaymentRequestNotification: dispatchPaymentRequestNotification
@@ -104,6 +105,23 @@ function serializeCase(caseRow) {
     }
   } catch (_) { /* checkInDate 비정상 시 null */ }
 
+  // 청소 환불 가능 여부 + 예상 환불액 (PAID 인 경우에만 평가).
+  // 프론트가 "환불 버튼 노출 / 환불 모달 안내" 에 사용. 단일 진실 원천: evaluateCleaningRefund.
+  let cleaningRefund = { canRefund: false, refundAmount: 0, deduction: 0, reason: null };
+  if (caseRow.cleaningStatus === 'PAID') {
+    const v = evaluateCleaningRefund({
+      cleaningDate: caseRow.cleaningDate,
+      cleaningTime: caseRow.cleaningTime,
+      paidAmount: Number(caseRow.cleaningFee) || 0
+    });
+    cleaningRefund = {
+      canRefund: v.allowed,
+      refundAmount: v.refundAmount,
+      deduction: v.deduction,
+      reason: v.allowed ? null : (v.reason || null)
+    };
+  }
+
   return {
     id: caseRow.id,
     moveInRoomId: caseRow.moveInRoomId,
@@ -120,6 +138,7 @@ function serializeCase(caseRow) {
     cleaningTime: caseRow.cleaningTime,
     cleaningPaymentDeadline,
     optionPaymentDeadline,
+    cleaningRefund,
     roomSnapshot: snapshot,
     paymentRequest: caseRow.paymentRequest
       ? {
