@@ -1215,7 +1215,8 @@ exports.getPaymentLogs = async (req, res) => {
       pgOrderNo: p.pgTid,
       userName: p.case?.host?.name || null,
       userType: '호스트',
-      roomName: p.case?.room?.address || null
+      roomName: p.case?.room?.address || null,
+      moveInCaseId: p.caseId
     }));
 
     cleaningRefundLogs = refundedCleaning.map(p => ({
@@ -1229,7 +1230,8 @@ exports.getPaymentLogs = async (req, res) => {
       pgOrderNo: p.pgTid,
       userName: p.case?.host?.name || null,
       userType: '호스트',
-      roomName: p.case?.room?.address || null
+      roomName: p.case?.room?.address || null,
+      moveInCaseId: p.caseId
     }));
 
     // === 6) 입주 준비 게스트 옵션 (MoveInGuestOrderLog) ===
@@ -1291,6 +1293,7 @@ exports.getPaymentLogs = async (req, res) => {
         userName: order?.guest?.name || null,
         userType: '게스트',
         roomName: order?.case?.room?.address || null,
+        moveInCaseId: order?.caseId ?? log.caseId ?? null,
         _breakdown: breakdown  // 침구류 필터 전용 (응답에서 제거)
       };
     });
@@ -1613,6 +1616,7 @@ exports.getPaymentSummary = async (req, res) => {
           rowType: 'MOVE_IN_CLEANING',
           contractId: null,
           rentalOrderId: null,
+          moveInCaseId: p.caseId,
           orderId: p.orderId,
           paidAt: p.paidAt,
           productType: '청소',
@@ -1673,6 +1677,7 @@ exports.getPaymentSummary = async (req, res) => {
           rowType: 'MOVE_IN_GUEST_ORDER',
           contractId: null,
           rentalOrderId: null,
+          moveInCaseId: o.caseId,
           orderId: o.orderId,
           paidAt: o.paidAt,
           productType: label,
