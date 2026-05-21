@@ -58,6 +58,7 @@ describe('입주 준비 방 심사 도입', () => {
           bathroomCount: 1,
           bedCount: 1,
           beds: [{ index: 1, size: 'QUEEN' }],
+          doorLockPassword: '0512*',
           cleaningSuppliesAvailable: false
         });
 

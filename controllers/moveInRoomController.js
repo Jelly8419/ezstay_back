@@ -57,9 +57,22 @@ function detectChangedTriggerFields(body, room) {
  * - bed_count와 beds.length 일치
  * - cleaning_supplies_available=true 시 location 필수
  * - bed size enum 검증
+ * - doorLockPassword 필수 (열쇠 사용 집은 청소 불가 → 도어락 필수)
+ * - commonEntrancePassword 선택 (공동현관 없는 집 존재)
  */
 function validateRoomPayload(body, { partial = false } = {}) {
   const errors = [];
+
+  // 도어락 비밀번호 필수 — 생성 시 항상, 수정 시 명시적으로 보냈을 때만
+  if (!partial || body.doorLockPassword !== undefined) {
+    if (
+      body.doorLockPassword === undefined ||
+      body.doorLockPassword === null ||
+      String(body.doorLockPassword).trim() === ''
+    ) {
+      errors.push('doorLockPassword는 필수입니다. (열쇠 사용 집은 청소 서비스 불가)');
+    }
+  }
 
   if (!partial || body.address !== undefined) {
     if (!body.address || typeof body.address !== 'string') errors.push('address는 필수 문자열입니다.');

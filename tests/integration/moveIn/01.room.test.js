@@ -59,6 +59,48 @@ describe('MoveIn /api/host/move-in/rooms', () => {
       expect(cryptoHelper.decrypt(stored.commonEntrancePassword)).toBe('2479#');
     });
 
+    test('도어락 비밀번호 없으면 → 400 (열쇠 사용 집은 청소 불가)', async () => {
+      const res = await request(app)
+        .post('/api/host/move-in/rooms')
+        .set('Authorization', `Bearer ${hostToken}`)
+        .send({
+          address: '서울 강남구',
+          detailAddress: '103호',
+          areaPyeong: 10,
+          livingRoomCount: 1,
+          roomCount: 1,
+          bathroomCount: 1,
+          bedCount: 1,
+          beds: [{ index: 1, size: 'QUEEN' }],
+          commonEntrancePassword: '2479#',
+          cleaningSuppliesAvailable: false
+          // doorLockPassword 누락
+        });
+      expect(res.status).toBe(400);
+    });
+
+    test('공동현관 비밀번호 없어도 도어락만 있으면 → 201 (공동현관은 선택)', async () => {
+      const res = await request(app)
+        .post('/api/host/move-in/rooms')
+        .set('Authorization', `Bearer ${hostToken}`)
+        .send({
+          address: '서울 강남구',
+          detailAddress: '104호',
+          areaPyeong: 10,
+          livingRoomCount: 1,
+          roomCount: 1,
+          bathroomCount: 1,
+          bedCount: 1,
+          beds: [{ index: 1, size: 'QUEEN' }],
+          doorLockPassword: '0512*',
+          cleaningSuppliesAvailable: false
+          // commonEntrancePassword 누락 — 단독주택 등 공동현관 없는 집
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.data.commonEntrancePassword).toBeNull();
+      expect(res.body.data.doorLockPassword).toBe('0512*');
+    });
+
     test('bedCount와 beds.length 불일치 → 400', async () => {
       const res = await request(app)
         .post('/api/host/move-in/rooms')
@@ -72,6 +114,7 @@ describe('MoveIn /api/host/move-in/rooms', () => {
           bathroomCount: 1,
           bedCount: 2,
           beds: [{ index: 1, size: 'QUEEN' }],
+          doorLockPassword: '0512*',
           cleaningSuppliesAvailable: false
         });
       expect(res.status).toBe(400);
@@ -90,6 +133,7 @@ describe('MoveIn /api/host/move-in/rooms', () => {
           bathroomCount: 1,
           bedCount: 1,
           beds: [{ index: 1, size: 'QUEEN' }],
+          doorLockPassword: '0512*',
           cleaningSuppliesAvailable: true
           // cleaningSuppliesLocation 누락
         });
