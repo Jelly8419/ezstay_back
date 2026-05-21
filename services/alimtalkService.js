@@ -398,15 +398,18 @@ class AlimtalkService {
   }
 
   /**
-   * 입주 준비 결제 요청 알림톡 — 임차인 수신 (UH_7964)
+   * 입주 준비 결제 요청 알림톡 — 임차인 수신 (UH_8852)
    *
+   * 템플릿 변수: #{임대인} / #{입주일} / #{마감기한} / #{url}
    * 알리고 콘솔에 등록된 버튼 URL 은 `http://#{url}` 형식이므로,
    * 발송 시 buttonOverride 로 실제 paymentLink 를 채워서 보낸다.
    *
-   * @param {Object} guest        - { phoneNumber } (가입돼있으면 id 도 포함 가능)
-   * @param {Object} payload      - { hostName, checkInDate, paymentLink }
+   * 마감기한: 입주일 -5일 (D-5 게이트, calculatePaymentDeadline 결과를 YYYY-MM-DD 로 포맷)
+   *
+   * @param {Object} guest    - { phoneNumber } (가입돼있으면 id 도 포함 가능)
+   * @param {Object} payload  - { hostName, checkInDate, paymentDeadline, paymentLink }
    */
-  static async sendMoveInPaymentRequest(guest, { hostName, checkInDate, paymentLink }) {
+  static async sendMoveInPaymentRequest(guest, { hostName, checkInDate, paymentDeadline, paymentLink }) {
     // paymentLink 에서 scheme 분리 — 템플릿이 "http://#{url}" 형식이므로 host+path 만 넘김
     const urlWithoutScheme = String(paymentLink || '').replace(/^https?:\/\//, '');
 
@@ -423,7 +426,7 @@ class AlimtalkService {
       {
         hostName: hostName || '임대인',
         checkInDate: this._formatDate(checkInDate),
-        // 본문 내 #{url} 변수가 만약 추가되면 여기서 채움 (현재 템플릿은 본문에 url 없음)
+        paymentDeadline: this._formatDate(paymentDeadline),
         url: urlWithoutScheme
       },
       {

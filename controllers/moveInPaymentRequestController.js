@@ -8,14 +8,15 @@
  *
  * PRD 10.1: 임대인에게 임차인 결제 완료 여부 비노출 → status는 NOT_SENT/SENT만
  *
- * 알림톡: UH_7964 (move_in_payment_request_guest)
- *  - 변수: 임대인이름, 입주일
+ * 알림톡: UH_8852 (move_in_payment_request_guest)
+ *  - 변수: 임대인, 입주일, 마감기한(=입주일-5일), url
  *  - 버튼: "확인하기" — paymentLink (모바일/PC 동일)
  */
 const { sequelize, MoveInCase, MoveInPaymentRequest, User } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 const moveInCaseService = require('../services/moveInCaseService');
 const AlimtalkService = require('../services/alimtalkService');
+const { calculatePaymentDeadline } = require('../utils/moveInGuestPaymentGuard');
 
 const GUEST_PAYMENT_PAGE_URL = process.env.GUEST_MOVE_IN_PAYMENT_URL
   || 'https://ezstay.kr/move-in/payment';
@@ -40,12 +41,13 @@ async function loadCaseWithRequest(caseId, hostId, transaction = null) {
 }
 
 /**
- * 알림톡 + 인앱 알림 발송 (UH_7964)
+ * 알림톡 + 인앱 알림 발송 (UH_8852)
  *
  * 동작:
  *  1. 임대인 정보 조회 (이름 변수용)
- *  2. AlimtalkService.sendMoveInPaymentRequest 호출 (fire-and-forget — 실패해도 발송 자체는 진행)
- *  3. 임차인이 EZstay 가입돼있으면 인앱 알림 생성 (best-effort)
+ *  2. 마감기한 계산 (입주일 -5일, KST)
+ *  3. AlimtalkService.sendMoveInPaymentRequest 호출 (fire-and-forget — 실패해도 발송 자체는 진행)
+ *  4. 임차인이 EZstay 가입돼있으면 인앱 알림 생성 (best-effort)
  *
  * mock 플래그:
  *  - 알림톡이 실제 발송됐으면 false
@@ -62,12 +64,14 @@ async function dispatchPaymentRequestNotification({ caseRow, token }) {
       attributes: ['id', 'name', 'nickname']
     });
     const hostName = host?.nickname || host?.name || '임대인';
+    const paymentDeadline = calculatePaymentDeadline(caseRow.checkInDate);
 
     const result = await AlimtalkService.sendMoveInPaymentRequest(
       { phoneNumber: caseRow.guestPhone },
       {
         hostName,
         checkInDate: caseRow.checkInDate,
+        paymentDeadline,
         paymentLink
       }
     );

@@ -485,21 +485,28 @@ const templates = {
   },
 
   // =====================================================
-  // 입주 준비 서비스 - 임차인 결제 요청 (UH_7964)
+  // 입주 준비 서비스 - 임차인 결제 요청 (UH_8852)
+  // 변수: 임대인 / 입주일 / 마감기한 / url
+  // 버튼 URL: http://#{url} — sendMoveInPaymentRequest 에서 buttonOverride 로 실제 paymentLink 주입
+  // 마감기한 = 입주일 -5일 KST 23:59:59 (utils/moveInGuestPaymentGuard.calculatePaymentDeadline)
   // =====================================================
   move_in_payment_request_guest: {
-    tplCode: 'UH_7964',
+    tplCode: 'UH_8852',
     targetRole: 'guest',
     eventLabel: '입주 준비 결제 요청_임차인',
-    varMap: { hostName: '임대인', checkInDate: '입주일' },
-    // 버튼 URL: http://#{url} — url 변수에 host 포함 없는 path (예: "ezstay.kr/move-in/payment/<token>")
+    varMap: {
+      hostName: '임대인',
+      checkInDate: '입주일',
+      paymentDeadline: '마감기한'
+    },
     fallbackContent:
       `[입주 준비 서비스 확인 요청]\n\n` +
-      `#{임대인}님이 입주 준비 서비스를 요청했습니다.\n` +
-      `입주일: #{입주일}\n\n` +
-      `아래 버튼을 통해 입주 용품, 침구류 대여 등 필요한 옵션을 선택하고 확인할 수 있습니다.`,
+      `#{임대인}님이 요청하신 입주 준비 서비스를 확인 요청드립니다.\n` +
+      `입주일: #{입주일}\n` +
+      `입주 준비 서비스 선택 마감 기한: #{마감기한}\n\n` +
+      `아래 버튼을 통해 입주 용품, 침구류 대여 등 필요한 옵션을 선택하고 확인할 수 있습니다. (마감 기한 후에는 입주 준비 서비스를 선택할 수 없습니다.)`,
     buildFallbackSMS: (data) =>
-      `[EZstay] ${data.hostName}님이 입주 준비 서비스를 요청했습니다. 입주일: ${data.checkInDate}. 앱에서 확인해주세요.`
+      `[EZstay] ${data.hostName}님의 입주 준비 서비스 확인 요청. 입주일: ${data.checkInDate} / 선택 마감: ${data.paymentDeadline}. 앱에서 확인해주세요.`
   },
 
   // =====================================================
