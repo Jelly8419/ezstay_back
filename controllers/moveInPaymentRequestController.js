@@ -22,6 +22,12 @@ const GUEST_PAYMENT_PAGE_URL = process.env.GUEST_MOVE_IN_PAYMENT_URL
   || 'https://ezstay.kr/move-in/payment';
 
 /**
+ * 케이스당 임차인 결제 요청 알림톡 1일(KST) 발송 한도.
+ * 최초 발송(send)·재발송(resend) 모두 합산되며, 케이스 생성 시 자동 발송은 제외.
+ */
+const DAILY_SEND_LIMIT = 10;
+
+/**
  * 토큰을 기반으로 임차인 결제 페이지 URL 빌드
  */
 function buildPaymentLink(token) {
@@ -53,9 +59,17 @@ async function loadCaseWithRequest(caseId, hostId, transaction = null) {
  *  - 알림톡이 실제 발송됐으면 false
  *  - 템플릿 미등록·전화번호 누락·발송 실패 등으로 skip 됐으면 true (UI 안내용)
  *
+ * countTowardDailyLimit:
+ *  - true  → AlimtalkLog 에 move_in_case_id 기록 → 일별 10회 제한에 합산 (수동 send/resend)
+ *  - false → move_in_case_id 미기록 → 카운트 제외 (케이스 생성 시 자동 발송)
+ *
+ * @param {Object}  params
+ * @param {Object}  params.caseRow              MoveInCase 인스턴스
+ * @param {string}  params.token                결제 요청 토큰
+ * @param {boolean} [params.countTowardDailyLimit=false] 일별 한도 카운트 포함 여부
  * @returns {Promise<{ success: boolean, mock: boolean }>}
  */
-async function dispatchPaymentRequestNotification({ caseRow, token }) {
+async function dispatchPaymentRequestNotification({ caseRow, token, countTowardDailyLimit = false }) {
   const paymentLink = buildPaymentLink(token);
   let alimtalkSent = false;
 
@@ -78,7 +92,9 @@ async function dispatchPaymentRequestNotification({ caseRow, token }) {
         checkInDate: caseRow.checkInDate,
         paymentDeadline,
         paymentLink
-      }
+      },
+      // 수동 발송만 moveInCaseId 기록 → 일별 10회 제한에 합산
+      { moveInCaseId: countTowardDailyLimit ? caseRow.id : null }
     );
     alimtalkSent = !!result?.sent;
   } catch (notifyErr) {
@@ -150,10 +166,21 @@ const sendPaymentRequest = async (req, res) => {
       );
     }
 
-    // 알림톡 발송 시도
+    // 일별 발송 한도 체크 (KST 당일 발송 시도 건수 기준)
+    const sentToday = await AlimtalkService.countMoveInSentToday(caseRow.id);
+    if (sentToday >= DAILY_SEND_LIMIT) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MOVE_IN_PAYMENT_REQUEST_DAILY_LIMIT, 400);
+    }
+
+    // 알림톡 발송 시도 (수동 발송 → 일별 한도 카운트 포함)
     let dispatched;
     try {
-      dispatched = await dispatchPaymentRequestNotification({ caseRow, token: request.token });
+      dispatched = await dispatchPaymentRequestNotification({
+        caseRow,
+        token: request.token,
+        countTowardDailyLimit: true
+      });
     } catch (notifyErr) {
       // 발송 실패 시 status 유지 (재시도 가능)
       await transaction.rollback();
@@ -217,9 +244,20 @@ const resendPaymentRequest = async (req, res) => {
       }, { transaction });
     }
 
+    // 일별 발송 한도 체크 (최초 발송 + 재발송 합산, KST 당일 기준)
+    const sentToday = await AlimtalkService.countMoveInSentToday(caseRow.id);
+    if (sentToday >= DAILY_SEND_LIMIT) {
+      await transaction.rollback();
+      return error(res, ErrorCodes.MOVE_IN_PAYMENT_REQUEST_DAILY_LIMIT, 400);
+    }
+
     let dispatched;
     try {
-      dispatched = await dispatchPaymentRequestNotification({ caseRow, token: request.token });
+      dispatched = await dispatchPaymentRequestNotification({
+        caseRow,
+        token: request.token,
+        countTowardDailyLimit: true
+      });
     } catch (notifyErr) {
       await transaction.rollback();
       console.error('알림톡 재발송 실패:', notifyErr);

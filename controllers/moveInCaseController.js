@@ -314,6 +314,8 @@ const createCase = async (req, res) => {
     let autoSendResult = null;
     if (sendGuestPaymentRequest) {
       try {
+        // 케이스 생성 시 자동 발송 → 일별 10회 한도에 합산하지 않음
+        // (countTowardDailyLimit 기본값 false)
         const dispatched = await dispatchPaymentRequestNotification({
           caseRow,
           token: paymentRequest.token

@@ -626,6 +626,8 @@ const resendPaymentRequest = async (req, res) => {
 
     let dispatched;
     try {
+      // 관리자 발송은 운영 대응 성격 → 임대인용 일별 10회 한도에 합산하지 않음
+      // (countTowardDailyLimit 기본값 false)
       dispatched = await dispatchPaymentRequestNotification({ caseRow, token: request.token });
     } catch (notifyErr) {
       await transaction.rollback();

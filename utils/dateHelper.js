@@ -60,4 +60,23 @@ function toKSTString(date) {
   return `${Y}-${M}-${D}T${h}:${m}:${s}+09:00`;
 }
 
-module.exports = { todayKST, toDateStrKST, nowKSTString, toKSTString };
+/**
+ * KST 기준 "오늘"의 시작/끝을 UTC Date 객체로 반환.
+ * DB가 UTC로 저장하므로 KST 당일 범위를 created_at 등에 필터링할 때 사용.
+ *   예) KST 2026-05-21 → start=2026-05-20T15:00:00.000Z, end=2026-05-21T14:59:59.999Z
+ * @param {Date} [now=new Date()] 기준 시각 (테스트용 주입 가능)
+ * @returns {{ start: Date, end: Date }}
+ */
+function kstDayRangeUtc(now = new Date()) {
+  const kst = new Date(now.getTime() + KST_OFFSET_MS);
+  // KST 자정(00:00:00.000) 의 UTC 환산값
+  const startUtcMs = Date.UTC(
+    kst.getUTCFullYear(), kst.getUTCMonth(), kst.getUTCDate(), 0, 0, 0, 0
+  ) - KST_OFFSET_MS;
+  return {
+    start: new Date(startUtcMs),
+    end: new Date(startUtcMs + 24 * 60 * 60 * 1000 - 1)
+  };
+}
+
+module.exports = { todayKST, toDateStrKST, nowKSTString, toKSTString, kstDayRangeUtc };

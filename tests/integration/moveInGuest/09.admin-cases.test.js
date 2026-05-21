@@ -20,8 +20,10 @@ const {
   MoveInPaymentRequest,
   MoveInGuestOrder,
   MoveInGuestOrderItem,
-  MoveInGuestPayment
+  MoveInGuestPayment,
+  AlimtalkLog
 } = require('../../../models');
+const { Op } = require('sequelize');
 const { createHost, createGuest, cleanupUsers } = require('../../setup/factories/userFactory');
 const { createAdmin, cleanupAdmins } = require('../../setup/factories/adminFactory');
 const { createMoveInRoom, cleanupMoveInByHost } = require('../../setup/factories/moveInFactory');
@@ -184,6 +186,10 @@ describe('Admin — Move-in Case CRUD (Notion 입주 준비 서비스 Admin)', (
   afterAll(async () => {
     await cleanupMoveInGuestByCases(caseIds);
     await MoveInPaymentRequest.destroy({ where: { caseId: caseIds } });
+    // 알림톡 발송 로그 정리 — receiver_id FK 가 users 를 참조하므로 user 삭제 전에 제거
+    await AlimtalkLog.destroy({
+      where: { [Op.or]: [{ moveInCaseId: caseIds }, { receiverId: userIds }] }
+    }).catch(() => {});
     await cleanupMoveInNotifications(userIds);
     await cleanupMoveInByHost(host.id);
     await cleanupMoveInOptions(optionIds);

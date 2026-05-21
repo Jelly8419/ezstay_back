@@ -40,6 +40,7 @@ class AlimtalkService {
    * @param {Object} [options] - 추가 옵션
    * @param {number} [options.contractId] - 관련 계약 ID
    * @param {number} [options.chatRoomId] - 관련 채팅방 ID
+   * @param {number} [options.moveInCaseId] - 관련 입주 준비 케이스 ID (일별 발송 제한 카운트용)
    * @param {boolean} [options.skipDedup=false] - 중복 체크 skip 여부
    * @param {Array} [options.buttonOverride] - 캐시된 버튼 대신 사용할 버튼 배열
    *   - 알리고 콘솔에 버튼 URL 을 `http://#{url}` 처럼 등록한 템플릿 발송 시
@@ -50,6 +51,7 @@ class AlimtalkService {
     const {
       contractId = null,
       chatRoomId = null,
+      moveInCaseId = null,
       skipDedup = false,
       receiverRole = null,
       buttonOverride = null
@@ -92,6 +94,7 @@ class AlimtalkService {
         eventName,
         contractId,
         chatRoomId,
+        moveInCaseId,
         receiverId: receiver.id ?? null,
         receiverPhone: receiver.phoneNumber,
         receiverRole,
@@ -164,6 +167,35 @@ class AlimtalkService {
     });
 
     return !!existing;
+  }
+
+  // =====================================================
+  // 입주 준비 케이스 일별 발송 횟수
+  // =====================================================
+
+  /**
+   * 특정 입주 준비 케이스에 대해 오늘(KST) 발송 시도된 알림톡 건수.
+   *
+   * - 카운트 대상: PENDING/SENT/FAILED/RETRIED/FALLBACK_SENT 등 status 무관 — 발송 "시도" 기준
+   *   (실패해도 임차인 단말로 SMS fallback 이 갈 수 있고, 재시도 어뷰징 방지)
+   * - 기준 시각: created_at, KST 당일 00:00:00 ~ 23:59:59
+   *
+   * @param {number} moveInCaseId
+   * @returns {Promise<number>}
+   */
+  static async countMoveInSentToday(moveInCaseId) {
+    if (!moveInCaseId) return 0;
+
+    const { AlimtalkLog } = this.getModels();
+    const { kstDayRangeUtc } = require('../utils/dateHelper');
+    const { start, end } = kstDayRangeUtc();
+
+    return AlimtalkLog.count({
+      where: {
+        moveInCaseId,
+        createdAt: { [Op.between]: [start, end] }
+      }
+    });
   }
 
   // =====================================================
@@ -409,8 +441,9 @@ class AlimtalkService {
    *
    * @param {Object} guest    - { phoneNumber } (가입돼있으면 id 도 포함 가능)
    * @param {Object} payload  - { hostName, checkInDate, paymentDeadline, paymentLink }
+   * @param {Object} [opts]   - { moveInCaseId } 일별 발송 제한 카운트용 케이스 ID
    */
-  static async sendMoveInPaymentRequest(guest, { hostName, checkInDate, paymentDeadline, paymentLink }) {
+  static async sendMoveInPaymentRequest(guest, { hostName, checkInDate, paymentDeadline, paymentLink }, opts = {}) {
     // paymentLink 에서 scheme 분리 — 템플릿 #{url} 변수는 host+path 만 받음
     const urlWithoutScheme = String(paymentLink || '').replace(/^https?:\/\//, '');
     // 검수본 버튼이 `https://#{url}` 이므로 발송 버튼도 https 로 고정
@@ -435,6 +468,7 @@ class AlimtalkService {
       {
         receiverRole: 'guest',
         skipDedup: true,        // 케이스 단위 재발송 허용 (resendCount 별도 추적)
+        moveInCaseId: opts.moveInCaseId ?? null, // 일별 10회 제한 카운트 기준
         buttonOverride
       }
     );
