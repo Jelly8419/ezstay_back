@@ -401,8 +401,9 @@ class AlimtalkService {
    * 입주 준비 결제 요청 알림톡 — 임차인 수신 (UH_8852)
    *
    * 템플릿 변수: #{임대인} / #{입주일} / #{마감기한} / #{url}
-   * 알리고 콘솔에 등록된 버튼 URL 은 `http://#{url}` 형식이므로,
-   * 발송 시 buttonOverride 로 실제 paymentLink 를 채워서 보낸다.
+   * 알리고 콘솔 검수 등록 버튼 URL 은 `https://#{url}` 형식 — 발송 버튼도 동일하게
+   * `https://` + (scheme 제거한 host+path) 로 맞춰야 검수본과 일치해 알림톡으로 발송됨.
+   * (스킴이 다르면 버튼 불일치로 알림톡 거부 → 대체문자 전환)
    *
    * 마감기한: 입주일 -5일 (D-5 게이트, calculatePaymentDeadline 결과를 YYYY-MM-DD 로 포맷)
    *
@@ -410,14 +411,16 @@ class AlimtalkService {
    * @param {Object} payload  - { hostName, checkInDate, paymentDeadline, paymentLink }
    */
   static async sendMoveInPaymentRequest(guest, { hostName, checkInDate, paymentDeadline, paymentLink }) {
-    // paymentLink 에서 scheme 분리 — 템플릿이 "http://#{url}" 형식이므로 host+path 만 넘김
+    // paymentLink 에서 scheme 분리 — 템플릿 #{url} 변수는 host+path 만 받음
     const urlWithoutScheme = String(paymentLink || '').replace(/^https?:\/\//, '');
+    // 검수본 버튼이 `https://#{url}` 이므로 발송 버튼도 https 로 고정
+    const buttonLink = `https://${urlWithoutScheme}`;
 
     const buttonOverride = [{
       name: '확인하기',
       linkType: 'WL',          // 웹링크
-      linkMo: paymentLink,     // 풀 URL 사용 (모바일)
-      linkPc: paymentLink      // 풀 URL 사용 (PC)
+      linkMo: buttonLink,
+      linkPc: buttonLink
     }];
 
     return this.send(
