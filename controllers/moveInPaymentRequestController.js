@@ -66,8 +66,13 @@ async function dispatchPaymentRequestNotification({ caseRow, token }) {
     const hostName = host?.nickname || host?.name || '임대인';
     const paymentDeadline = calculatePaymentDeadline(caseRow.checkInDate);
 
+    // 가입된 임차인이면 id 도 함께 넘김 (미가입자는 id 없이 phone 만)
+    const receiver = caseRow.guestUserId
+      ? { id: caseRow.guestUserId, phoneNumber: caseRow.guestPhone }
+      : { phoneNumber: caseRow.guestPhone };
+
     const result = await AlimtalkService.sendMoveInPaymentRequest(
-      { phoneNumber: caseRow.guestPhone },
+      receiver,
       {
         hostName,
         checkInDate: caseRow.checkInDate,

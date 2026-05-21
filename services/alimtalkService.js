@@ -92,7 +92,7 @@ class AlimtalkService {
         eventName,
         contractId,
         chatRoomId,
-        receiverId: receiver.id,
+        receiverId: receiver.id ?? null,
         receiverPhone: receiver.phoneNumber,
         receiverRole,
         tplCode: template.tplCode,

@@ -37,9 +37,9 @@ const AlimtalkLog = sequelize.define('AlimtalkLog', {
   // 수신자 정보
   receiverId: {
     type: DataTypes.INTEGER,
-    allowNull: false,
+    allowNull: true,
     field: 'receiver_id',
-    comment: '수신자 사용자 ID'
+    comment: '수신자 사용자 ID (미가입자 대상 발송 시 NULL — 예: 입주 준비 결제 요청 임차인)'
   },
   receiverPhone: {
     type: DataTypes.STRING(20),
