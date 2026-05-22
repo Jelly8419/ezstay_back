@@ -2,11 +2,15 @@
  * moveInScheduler.js
  * 입주 준비 서비스 자동화 스케줄러
  *
- * 단계:
+ * 단계 (매 10분):
  *  1. generateMoveInServiceTasks
  *     - cleaning_status='PAID' & 퇴실일 D-7 이내 케이스 → MoveInServiceTask(CLEANING, PENDING) 자동 생성
  *  2. cleanupExpiredPaymentRequests (선택)
  *     - 만료된 토큰 정리 (참조 무결성 유지를 위해 SENT 상태는 보존, NOT_SENT만 cleanup 검토)
+ *
+ * 별도 cron (매일 08:00 KST):
+ *  - sendBeddingReturnReminders
+ *    - check_out_date=오늘 & 침구류 대여 결제자 → 침구류 반납 안내 알림톡(UI_1355)
  *
  * cron: 매 10분 (기존 contractScheduler와 동일 주기)
  */
@@ -15,9 +19,11 @@ const { Op } = require('sequelize');
 const {
   MoveInCase,
   MoveInServiceTask,
-  MoveInPaymentRequest
+  MoveInPaymentRequest,
+  User
 } = require('../models');
-const { nowKSTString } = require('../utils/dateHelper');
+const { nowKSTString, todayKST } = require('../utils/dateHelper');
+const AlimtalkService = require('../services/alimtalkService');
 
 /**
  * 1. 청소 결제 완료 케이스 → MoveInServiceTask 자동 생성
@@ -91,6 +97,73 @@ async function reportExpiredPaymentRequests() {
 }
 
 /**
+ * 침구류 반납 안내 알림톡 발송 (UI_1355) — 매일 08:00 KST 실행.
+ *
+ * 대상:
+ *  - check_out_date = 오늘(KST) 인 케이스
+ *  - 침구류 대여 결제자: BEDDING_RETRIEVAL ServiceTask 가 quantity>0 & status!=CANCELLED
+ *    (syncBeddingServiceTasks 가 ACTIVE BEDDING_SET 라인 합계로 관리)
+ *
+ * 중복 발송 방지:
+ *  - AlimtalkService.send 가 move_in_case_id 로 AlimtalkLog 기록 → 같은 케이스 재발송 차단
+ *  - 1일 1회 실행이라 실무상 중복 위험 낮으나, 재시작 대비 케이스 단위 가드 적용
+ */
+async function sendBeddingReturnReminders() {
+  try {
+    const today = todayKST();
+
+    // 오늘 퇴실 + 침구류 수거 task 가 살아있는(quantity>0) 케이스
+    const tasks = await MoveInServiceTask.findAll({
+      where: {
+        taskType: 'BEDDING_RETRIEVAL',
+        quantity: { [Op.gt]: 0 },
+        status: { [Op.ne]: 'CANCELLED' }
+      },
+      include: [{
+        model: MoveInCase,
+        as: 'case',
+        where: { checkOutDate: today },
+        attributes: ['id', 'guestUserId', 'guestPhone', 'checkOutDate']
+      }]
+    });
+
+    if (tasks.length === 0) return 0;
+
+    const { AlimtalkLog } = require('../models');
+    let sent = 0;
+
+    for (const task of tasks) {
+      const caseRow = task.case;
+      if (!caseRow?.guestPhone) continue;
+
+      // 케이스 단위 중복 발송 가드 — 이미 발송된 로그가 있으면 skip
+      const already = await AlimtalkLog.findOne({
+        where: { moveInCaseId: caseRow.id, eventName: 'move_in_bedding_return_guest' }
+      });
+      if (already) continue;
+
+      // 가입 임차인이면 id 함께 (인앱 매칭용), 미가입자는 phone 만
+      const receiver = caseRow.guestUserId
+        ? { id: caseRow.guestUserId, phoneNumber: caseRow.guestPhone }
+        : { phoneNumber: caseRow.guestPhone };
+
+      const result = await AlimtalkService.sendMoveInBeddingReturn(receiver, {
+        moveInCaseId: caseRow.id
+      });
+      if (result?.sent) sent++;
+    }
+
+    if (sent > 0) {
+      console.log(`[MoveInScheduler] 침구류 반납 안내 ${sent}건 발송 (대상 케이스 ${tasks.length}건)`);
+    }
+    return sent;
+  } catch (err) {
+    console.error('[MoveInScheduler] 침구류 반납 안내 발송 오류:', err);
+    return 0;
+  }
+}
+
+/**
  * 입주 준비 서비스 통합 실행
  */
 async function runMoveInTasks() {
@@ -111,6 +184,13 @@ function startMoveInScheduler() {
   cron.schedule('*/10 * * * *', runMoveInTasks);
   console.log('[MoveInScheduler] 스케줄러 시작 (매 10분마다 실행)');
 
+  // 침구류 반납 안내 — 매일 08:00 KST (process.env.TZ=Asia/Seoul 전제)
+  cron.schedule('0 8 * * *', async () => {
+    console.log('[MoveInScheduler] 침구류 반납 안내 실행:', nowKSTString());
+    await sendBeddingReturnReminders();
+  });
+  console.log('[MoveInScheduler] 침구류 반납 안내 스케줄 등록 (매일 08:00)');
+
   // 서버 시작 시 즉시 1회 실행
   runMoveInTasks();
 }
@@ -127,5 +207,6 @@ module.exports = {
   startMoveInScheduler,
   runMoveInTasks,
   generateMoveInServiceTasks,
-  reportExpiredPaymentRequests
+  reportExpiredPaymentRequests,
+  sendBeddingReturnReminders
 };

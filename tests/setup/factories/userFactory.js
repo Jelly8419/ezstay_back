@@ -107,12 +107,16 @@ function generateToken(user) {
 
 /**
  * 테스트 데이터 정리
+ *
+ * 주의: alimtalk_logs.receiver_id 가 users 를 FK 참조하므로,
+ *       알림톡이 발송된 user 는 로그를 먼저 지워야 User.destroy 가 성공한다.
  */
 async function cleanupUsers(userIds) {
   if (!userIds || userIds.length === 0) return;
-  const { User, LocalUser, UserBankAccount } = require('../../../models');
+  const { User, LocalUser, UserBankAccount, AlimtalkLog } = require('../../../models');
   await LocalUser.destroy({ where: { userId: userIds } });
   await UserBankAccount.destroy({ where: { userId: userIds } }).catch(() => {});
+  await AlimtalkLog.destroy({ where: { receiverId: userIds } }).catch(() => {});
   await User.destroy({ where: { id: userIds } });
 }
 

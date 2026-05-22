@@ -475,6 +475,96 @@ class AlimtalkService {
     );
   }
 
+  /**
+   * 입주 준비 청소 결제 완료 알림톡 — 임대인 수신 (UI_1373)
+   *
+   * @param {Object} host  - { id, phoneNumber }
+   * @param {Object} data  - { address, cleaningDate, cleaningStartTime, totalAmount }
+   *   - address: 주소(상세주소 포함 전체)
+   *   - cleaningDate: 'YYYY-MM-DD'
+   *   - cleaningStartTime: 'HH:mm'
+   *   - totalAmount: 결제 총액 (숫자)
+   * @param {Object} [opts] - { moveInCaseId }
+   */
+  static async sendMoveInCleaningPaid(host, { address, cleaningDate, cleaningStartTime, totalAmount }, opts = {}) {
+    return this.send(
+      'move_in_payment_completed_host',
+      host,
+      {
+        address: address || '',
+        cleaningDate: cleaningDate || '',
+        cleaningStartTime: cleaningStartTime || '',
+        totalAmount: this._formatNumber(totalAmount)
+      },
+      { receiverRole: 'host', skipDedup: true, moveInCaseId: opts.moveInCaseId ?? null }
+    );
+  }
+
+  /**
+   * 입주 준비 옵션 결제 완료 알림톡 — 임차인 수신 (UI_1379)
+   *
+   * @param {Object} guest - { id, phoneNumber }
+   * @param {Object} data  - { address, checkInDate, optionLines, totalAmount }
+   *   - optionLines: [{ name, quantity }] — _formatMoveInOptionItems 로 가공
+   * @param {Object} [opts] - { moveInCaseId }
+   */
+  static async sendMoveInOptionPaid(guest, { address, checkInDate, optionLines, totalAmount }, opts = {}) {
+    return this.send(
+      'move_in_payment_completed_guest',
+      guest,
+      {
+        address: address || '',
+        checkInDate: this._formatDate(checkInDate),
+        optionItems: this._formatMoveInOptionItems(optionLines),
+        totalAmount: this._formatNumber(totalAmount)
+      },
+      { receiverRole: 'guest', skipDedup: true, moveInCaseId: opts.moveInCaseId ?? null }
+    );
+  }
+
+  /**
+   * 입주 준비 침구류 반납 안내 알림톡 — 임차인 수신 (UI_1355)
+   * 변수 없음. 퇴실 당일 침구류 대여 결제자에게 발송.
+   *
+   * @param {Object} guest - { id, phoneNumber }
+   * @param {Object} [opts] - { moveInCaseId } — skipDedup 미사용: 케이스 단위 1회만 발송
+   */
+  static async sendMoveInBeddingReturn(guest, opts = {}) {
+    return this.send(
+      'move_in_bedding_return_guest',
+      guest,
+      {},
+      { receiverRole: 'guest', moveInCaseId: opts.moveInCaseId ?? null }
+    );
+  }
+
+  /**
+   * 입주 준비 결제 취소 알림톡 — 공용 (UI_1391)
+   * 임차인 옵션 취소 → 임차인 수신 / 임대인 청소 환불 → 임대인 수신.
+   *
+   * @param {Object} receiver - { id, phoneNumber }
+   * @param {Object} data  - { address, checkInDate, checkOutDate, optionLines, cancelAmount }
+   * @param {Object} [opts] - { moveInCaseId, receiverRole: 'guest'|'host' }
+   */
+  static async sendMoveInPaymentCanceled(receiver, { address, checkInDate, checkOutDate, optionLines, cancelAmount }, opts = {}) {
+    return this.send(
+      'move_in_payment_canceled',
+      receiver,
+      {
+        address: address || '',
+        checkInDate: this._formatDate(checkInDate),
+        checkOutDate: this._formatDate(checkOutDate),
+        optionItems: this._formatMoveInOptionItems(optionLines),
+        cancelAmount: this._formatNumber(cancelAmount)
+      },
+      {
+        receiverRole: opts.receiverRole || null,
+        skipDedup: true,
+        moveInCaseId: opts.moveInCaseId ?? null
+      }
+    );
+  }
+
   /** 4-2. 계약 승인 알림톡 */
   static async sendContractApproved(contract, guest, room) {
     await this.send('contract_approved_guest', guest, {
@@ -667,6 +757,18 @@ class AlimtalkService {
   static _formatNumber(num) {
     if (num == null) return '0';
     return Number(num).toLocaleString('ko-KR');
+  }
+
+  /**
+   * 입주 준비 옵션 라인 목록 → '입주 용품 세트 1개, 헤어드라이기 1개' 형식 문자열.
+   * @param {Array} lines - [{ name, quantity }] (MoveInGuestOrderItem 또는 itemsSnapshot)
+   * @returns {string} 빈 배열이면 '없음'
+   */
+  static _formatMoveInOptionItems(lines) {
+    if (!Array.isArray(lines) || lines.length === 0) return '없음';
+    return lines
+      .map((l) => `${l.name || l.optionName || '옵션'} ${l.quantity ?? 1}개`)
+      .join(', ');
   }
 }
 

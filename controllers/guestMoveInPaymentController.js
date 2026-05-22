@@ -40,6 +40,7 @@ const { isPayable } = require('../utils/moveInGuestPaymentGuard');
 const { serializeGuestCase, serializeGuestOrder } = require('../utils/moveInGuestSerializer');
 const { toKSTString } = require('../utils/dateHelper');
 const NotificationService = require('../services/notificationService');
+const AlimtalkService = require('../services/alimtalkService');
 const paytagClient = require('../utils/paytagClient');
 const {
   calculateOrderTotal,
@@ -436,7 +437,6 @@ const confirmPayment = async (req, res) => {
     await transaction.commit();
 
     // 결제 완료 인앱 알림 (best-effort — 실패가 결제 성공을 막으면 안 됨)
-    // TODO: 알리고 알림톡 템플릿 등록 후 외부 발송 추가
     try {
       await NotificationService.create({
         userId: req.user.id,
@@ -455,6 +455,24 @@ const confirmPayment = async (req, res) => {
       });
     } catch (notifyErr) {
       console.error('[guestMoveInPayment.confirm] notification create failed:', notifyErr.message);
+    }
+
+    // 결제 완료 알림톡 — 임차인 수신 (UI_1379, best-effort)
+    try {
+      const snapshot = caseRow.roomSnapshot || {};
+      const address = [snapshot.address, snapshot.detailAddress].filter(Boolean).join(' ');
+      await AlimtalkService.sendMoveInOptionPaid(
+        { id: req.user.id, phoneNumber: req.user.phoneNumber },
+        {
+          address,
+          checkInDate: caseRow.checkInDate,
+          optionLines: order.itemsSnapshot || [],
+          totalAmount: order.totalAmount
+        },
+        { moveInCaseId: caseRow.id }
+      );
+    } catch (notifyErr) {
+      console.error('[guestMoveInPayment.confirm] 결제완료 알림톡 발송 실패:', notifyErr.message);
     }
 
     return success(res, {
@@ -897,6 +915,33 @@ const cancelPaidOrder = async (req, res) => {
       await tx.rollback();
       console.error('[guestMoveInPayment.cancelPaid] DB 반영 실패 (PG는 이미 취소됨):', dbErr);
       return error(res, ErrorCodes.INTERNAL_ERROR, 500, 'PG 취소는 완료됐으나 DB 반영에 실패했습니다. 관리자에게 문의하세요.');
+    }
+
+    // 결제 취소 알림톡 — 임차인 수신 (UI_1391, best-effort)
+    try {
+      const snapshot = caseRow.roomSnapshot || {};
+      const address = [snapshot.address, snapshot.detailAddress].filter(Boolean).join(' ');
+      // 취소된 라인 이름: itemsSnapshot(optionId→name) 매핑, cancelQty 만큼 표기
+      const nameByOptionId = new Map(
+        (order.itemsSnapshot || []).map((s) => [s.optionId, s.name])
+      );
+      const canceledLines = lineUpdates.map((lu) => ({
+        name: nameByOptionId.get(lu.item.optionId) || '옵션',
+        quantity: lu.cancelQty
+      }));
+      await AlimtalkService.sendMoveInPaymentCanceled(
+        { id: req.user.id, phoneNumber: req.user.phoneNumber },
+        {
+          address,
+          checkInDate: caseRow.checkInDate,
+          checkOutDate: caseRow.checkOutDate,
+          optionLines: canceledLines,
+          cancelAmount: partialRefund
+        },
+        { receiverRole: 'guest', moveInCaseId: caseRow.id }
+      );
+    } catch (notifyErr) {
+      console.error('[guestMoveInPayment.cancelPaid] 결제취소 알림톡 발송 실패:', notifyErr.message);
     }
 
     return success(res, {

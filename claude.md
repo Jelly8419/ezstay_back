@@ -187,7 +187,11 @@ move_in_options            임차인용 옵션 카탈로그 (관리자 CRUD, Ren
 - 방 심사 알림 deeplink target=`move-in-room` (프론트는 `/host/move-in/rooms/:id`)
 
 **알림톡 연동 상태**:
-- ✅ `move_in_payment_request_guest` (UI_0932) — 임차인 결제 요청. `AlimtalkService.sendMoveInPaymentRequest` 로 발송. 변수: 임대인 / 입주일 / 마감기한(=입주일-5일, `calculatePaymentDeadline`) / url. 버튼 "확인하기" → paymentLink (linkMo/linkPc override). **케이스당 1일(KST) 10회 발송 제한** — 수동 send/resend 만 카운트(자동·관리자 발송 제외), 초과 시 `4817 MOVE_IN_PAYMENT_REQUEST_DAILY_LIMIT`. 카운트 기준: `alimtalk_logs.move_in_case_id` 당일 row 수
+- ✅ `move_in_payment_request_guest` (UI_0932) — 임차인 결제 요청. `AlimtalkService.sendMoveInPaymentRequest` 로 발송. 변수: 임대인('입주할 방의 임대인' 고정) / 입주일 / 마감기한(=입주일-5일 KST 23:59, 시각 포함) / url. 버튼 "확인하기" → paymentLink (linkMo/linkPc override). **케이스당 1일(KST) 10회 발송 제한** — 수동 send/resend 만 카운트(자동·관리자 발송 제외), 초과 시 `4817 MOVE_IN_PAYMENT_REQUEST_DAILY_LIMIT`. 카운트 기준: `alimtalk_logs.move_in_case_id` 당일 row 수
+- ✅ `move_in_payment_completed_host` (UI_1373) — 청소 결제 완료, 임대인 수신. `confirmCleaningPayment` 성공 시 `sendMoveInCleaningPaid`. 변수: 주소 / 청소날짜 / 청소시작시간 / 결제총액
+- ✅ `move_in_payment_completed_guest` (UI_1379) — 옵션 결제 완료, 임차인 수신. `guestMoveInPayment.confirm` 성공 시 `sendMoveInOptionPaid`. 변수: 주소 / 입주일 / 옵션상품목록 / 결제총액
+- ✅ `move_in_payment_canceled` (UI_1391) — 결제 취소, 공용. 옵션 취소(`cancelPaid`→임차인) + 청소 환불(`refundCleaningPayment`→임대인) 둘 다 `sendMoveInPaymentCanceled`. 변수: 주소 / 입주일 / 퇴실일 / 옵션상품목록 / 취소금액
+- ✅ `move_in_bedding_return_guest` (UI_1355) — 침구류 반납 안내, 임차인 수신. `moveInScheduler` 매일 08:00 KST, `check_out_date=오늘` & 침구류 대여(`BEDDING_RETRIEVAL` task quantity>0) 케이스. 변수 없음, 케이스 단위 1회 발송 가드
 - 🔴 **TODO**: 방 심사 알림톡 — 템플릿 등록 후 `NotificationService.notifyMoveInRoomReviewResult` 또는 `adminMoveInRoomController.approve/rejectMoveInRoom` 에서 `AlimtalkService.send` 호출 hook 추가 필요
 
 ### 스케줄러 (`schedulers/moveInScheduler.js`) + ServiceTask 생성 정책 (2026-05-20)

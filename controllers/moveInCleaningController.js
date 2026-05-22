@@ -14,7 +14,8 @@ const {
   sequelize,
   MoveInCase,
   MoveInPayment,
-  MoveInServiceTask
+  MoveInServiceTask,
+  User
 } = require('../models');
 const { ErrorCodes, success, error, created } = require('../utils/responseHelper');
 const cryptoHelper = require('../utils/cryptoHelper');
@@ -23,6 +24,7 @@ const { generateMoveInOrderId } = require('../utils/orderIdGenerator');
 const paytagClient = require('../utils/paytagClient');
 const { isCleaningPayable } = require('../utils/moveInCleaningPaymentGuard');
 const { evaluateCleaningRefund } = require('../utils/moveInRefundPolicy');
+const AlimtalkService = require('../services/alimtalkService');
 
 const USE_MOCK = process.env.PAYMENT_USE_MOCK === 'true';
 
@@ -433,6 +435,27 @@ const confirmCleaningPayment = async (req, res) => {
 
     await transaction.commit();
 
+    // 청소 결제 완료 알림톡 — 임대인 수신 (UI_1373, best-effort)
+    try {
+      const host = await User.findByPk(hostId, { attributes: ['id', 'phoneNumber'] });
+      if (host?.phoneNumber) {
+        const snapshot = caseRow.roomSnapshot || {};
+        const address = [snapshot.address, snapshot.detailAddress].filter(Boolean).join(' ');
+        await AlimtalkService.sendMoveInCleaningPaid(
+          { id: host.id, phoneNumber: host.phoneNumber },
+          {
+            address,
+            cleaningDate: caseRow.cleaningDate || '',
+            cleaningStartTime: (caseRow.cleaningTime || '').slice(0, 5),
+            totalAmount: payment.amount
+          },
+          { moveInCaseId: caseRow.id }
+        );
+      }
+    } catch (notifyErr) {
+      console.error('[moveInCleaning.confirm] 청소 결제완료 알림톡 발송 실패:', notifyErr.message);
+    }
+
     return success(res, {
       paymentId: payment.id,
       orderId: payment.orderId,
@@ -641,6 +664,28 @@ const refundCleaningPayment = async (req, res) => {
       await tx.rollback();
       console.error('[moveInCleaning.refund] DB 반영 실패 (PG는 이미 취소됨):', dbErr);
       return error(res, ErrorCodes.INTERNAL_ERROR, 500, 'PG 취소는 완료됐으나 DB 반영에 실패했습니다.');
+    }
+
+    // 청소 결제 취소 알림톡 — 임대인 수신 (UI_1391, best-effort)
+    try {
+      const host = await User.findByPk(hostId, { attributes: ['id', 'phoneNumber'] });
+      if (host?.phoneNumber) {
+        const snapshot = caseRow.roomSnapshot || {};
+        const address = [snapshot.address, snapshot.detailAddress].filter(Boolean).join(' ');
+        await AlimtalkService.sendMoveInPaymentCanceled(
+          { id: host.id, phoneNumber: host.phoneNumber },
+          {
+            address,
+            checkInDate: caseRow.checkInDate,
+            checkOutDate: caseRow.checkOutDate,
+            optionLines: [{ name: '청소 서비스', quantity: 1 }],
+            cancelAmount: verdict.refundAmount
+          },
+          { receiverRole: 'host', moveInCaseId: caseRow.id }
+        );
+      }
+    } catch (notifyErr) {
+      console.error('[moveInCleaning.refund] 청소 결제취소 알림톡 발송 실패:', notifyErr.message);
     }
 
     return success(res, {
