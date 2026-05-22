@@ -187,7 +187,7 @@ move_in_options            임차인용 옵션 카탈로그 (관리자 CRUD, Ren
 - 방 심사 알림 deeplink target=`move-in-room` (프론트는 `/host/move-in/rooms/:id`)
 
 **알림톡 연동 상태**:
-- ✅ `move_in_payment_request_guest` (UH_8852) — 임차인 결제 요청. `AlimtalkService.sendMoveInPaymentRequest` 로 발송. 변수: 임대인 / 입주일 / 마감기한(=입주일-5일, `calculatePaymentDeadline`) / url. 버튼 "확인하기" → paymentLink (linkMo/linkPc override)
+- ✅ `move_in_payment_request_guest` (UI_0932) — 임차인 결제 요청. `AlimtalkService.sendMoveInPaymentRequest` 로 발송. 변수: 임대인 / 입주일 / 마감기한(=입주일-5일, `calculatePaymentDeadline`) / url. 버튼 "확인하기" → paymentLink (linkMo/linkPc override). **케이스당 1일(KST) 10회 발송 제한** — 수동 send/resend 만 카운트(자동·관리자 발송 제외), 초과 시 `4817 MOVE_IN_PAYMENT_REQUEST_DAILY_LIMIT`. 카운트 기준: `alimtalk_logs.move_in_case_id` 당일 row 수
 - 🔴 **TODO**: 방 심사 알림톡 — 템플릿 등록 후 `NotificationService.notifyMoveInRoomReviewResult` 또는 `adminMoveInRoomController.approve/rejectMoveInRoom` 에서 `AlimtalkService.send` 호출 hook 추가 필요
 
 ### 스케줄러 (`schedulers/moveInScheduler.js`) + ServiceTask 생성 정책 (2026-05-20)

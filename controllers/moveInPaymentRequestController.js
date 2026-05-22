@@ -8,7 +8,7 @@
  *
  * PRD 10.1: 임대인에게 임차인 결제 완료 여부 비노출 → status는 NOT_SENT/SENT만
  *
- * 알림톡: UH_8852 (move_in_payment_request_guest)
+ * 알림톡: UI_0932 (move_in_payment_request_guest)
  *  - 변수: 임대인, 입주일, 마감기한(=입주일-5일), url
  *  - 버튼: "확인하기" — paymentLink (모바일/PC 동일)
  */
@@ -47,7 +47,7 @@ async function loadCaseWithRequest(caseId, hostId, transaction = null) {
 }
 
 /**
- * 알림톡 + 인앱 알림 발송 (UH_8852)
+ * 알림톡 + 인앱 알림 발송 (UI_0932)
  *
  * 동작:
  *  1. 임대인 정보 조회 (이름 변수용)

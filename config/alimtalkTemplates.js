@@ -485,13 +485,13 @@ const templates = {
   },
 
   // =====================================================
-  // 입주 준비 서비스 - 임차인 결제 요청 (UH_8852)
+  // 입주 준비 서비스 - 임차인 결제 요청 (UI_0932)
   // 변수: 임대인 / 입주일 / 마감기한 / url
   // 버튼 URL: https://#{url} — sendMoveInPaymentRequest 에서 buttonOverride 로 실제 paymentLink 주입
   // 마감기한 = 입주일 -5일 KST 23:59:59 (utils/moveInGuestPaymentGuard.calculatePaymentDeadline)
   // =====================================================
   move_in_payment_request_guest: {
-    tplCode: 'UH_8852',
+    tplCode: 'UI_0932',
     targetRole: 'guest',
     eventLabel: '입주 준비 결제 요청_임차인',
     varMap: {
