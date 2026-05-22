@@ -437,13 +437,14 @@ class AlimtalkService {
    * `https://` + (scheme 제거한 host+path) 로 맞춰야 검수본과 일치해 알림톡으로 발송됨.
    * (스킴이 다르면 버튼 불일치로 알림톡 거부 → 대체문자 전환)
    *
-   * 마감기한: 입주일 -5일 (D-5 게이트, calculatePaymentDeadline 결과를 YYYY-MM-DD 로 포맷)
+   * #{임대인}: 임대인 닉네임 노출 정책 폐기 → '입주할 방의 임대인' 고정 문구.
+   * #{마감기한}: 입주일 -5일 KST 23:59:59 (D-5 게이트). 'YYYY-MM-DD HH:mm' 로 시각까지 안내.
    *
    * @param {Object} guest    - { phoneNumber } (가입돼있으면 id 도 포함 가능)
-   * @param {Object} payload  - { hostName, checkInDate, paymentDeadline, paymentLink }
+   * @param {Object} payload  - { checkInDate, paymentDeadline, paymentLink }
    * @param {Object} [opts]   - { moveInCaseId } 일별 발송 제한 카운트용 케이스 ID
    */
-  static async sendMoveInPaymentRequest(guest, { hostName, checkInDate, paymentDeadline, paymentLink }, opts = {}) {
+  static async sendMoveInPaymentRequest(guest, { checkInDate, paymentDeadline, paymentLink }, opts = {}) {
     // paymentLink 에서 scheme 분리 — 템플릿 #{url} 변수는 host+path 만 받음
     const urlWithoutScheme = String(paymentLink || '').replace(/^https?:\/\//, '');
     // 검수본 버튼이 `https://#{url}` 이므로 발송 버튼도 https 로 고정
@@ -460,9 +461,9 @@ class AlimtalkService {
       'move_in_payment_request_guest',
       guest,
       {
-        hostName: hostName || '임대인',
+        hostName: '입주할 방의 임대인',
         checkInDate: this._formatDate(checkInDate),
-        paymentDeadline: this._formatDate(paymentDeadline),
+        paymentDeadline: this._formatDateTimeKST(paymentDeadline),
         url: urlWithoutScheme
       },
       {
@@ -643,6 +644,24 @@ class AlimtalkService {
     if (!date) return '';
     const d = new Date(date);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  /**
+   * UTC Date → KST 기준 'YYYY-MM-DD HH:mm' 문자열.
+   * process.env.TZ 에 의존하지 않고 +9h 오프셋을 명시 적용 (CLAUDE.md 날짜 규칙).
+   * 마감기한 등 시각까지 안내해야 하는 알림톡 변수에 사용.
+   */
+  static _formatDateTimeKST(date) {
+    if (!date) return '';
+    const d = new Date(date);
+    if (Number.isNaN(d.getTime())) return '';
+    const kst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+    const Y = kst.getUTCFullYear();
+    const M = String(kst.getUTCMonth() + 1).padStart(2, '0');
+    const D = String(kst.getUTCDate()).padStart(2, '0');
+    const h = String(kst.getUTCHours()).padStart(2, '0');
+    const m = String(kst.getUTCMinutes()).padStart(2, '0');
+    return `${Y}-${M}-${D} ${h}:${m}`;
   }
 
   static _formatNumber(num) {

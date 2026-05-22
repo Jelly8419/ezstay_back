@@ -9,10 +9,10 @@
  * PRD 10.1: 임대인에게 임차인 결제 완료 여부 비노출 → status는 NOT_SENT/SENT만
  *
  * 알림톡: UI_0932 (move_in_payment_request_guest)
- *  - 변수: 임대인, 입주일, 마감기한(=입주일-5일), url
+ *  - 변수: 임대인('입주할 방의 임대인' 고정), 입주일, 마감기한(=입주일-5일 KST 23:59, 시각 포함), url
  *  - 버튼: "확인하기" — paymentLink (모바일/PC 동일)
  */
-const { sequelize, MoveInCase, MoveInPaymentRequest, User } = require('../models');
+const { sequelize, MoveInCase, MoveInPaymentRequest } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 const moveInCaseService = require('../services/moveInCaseService');
 const AlimtalkService = require('../services/alimtalkService');
@@ -74,10 +74,7 @@ async function dispatchPaymentRequestNotification({ caseRow, token, countTowardD
   let alimtalkSent = false;
 
   try {
-    const host = await User.findByPk(caseRow.hostId, {
-      attributes: ['id', 'name', 'nickname']
-    });
-    const hostName = host?.nickname || host?.name || '임대인';
+    // #{임대인} 변수는 '입주할 방의 임대인' 고정 문구 → 임대인 정보 조회 불필요
     const paymentDeadline = calculatePaymentDeadline(caseRow.checkInDate);
 
     // 가입된 임차인이면 id 도 함께 넘김 (미가입자는 id 없이 phone 만)
@@ -88,7 +85,6 @@ async function dispatchPaymentRequestNotification({ caseRow, token, countTowardD
     const result = await AlimtalkService.sendMoveInPaymentRequest(
       receiver,
       {
-        hostName,
         checkInDate: caseRow.checkInDate,
         paymentDeadline,
         paymentLink
