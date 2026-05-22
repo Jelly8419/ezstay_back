@@ -1,6 +1,6 @@
 /**
  * 07.cleaning-schedule-deadline.test.js
- * 청소 희망 시간 검증 + 청소 결제 D-2 마감 가드 통합 테스트
+ * 청소 희망 시간 검증 + 청소 결제 D-3 마감 가드 통합 테스트
  */
 
 'use strict';
@@ -17,7 +17,7 @@ const {
   cleanupMoveInByHost
 } = require('../../setup/factories/moveInFactory');
 
-describe('호스트 케이스 — 청소 희망 시간 / 결제 D-2 마감 가드', () => {
+describe('호스트 케이스 — 청소 희망 시간 / 결제 D-3 마감 가드', () => {
   let host, hostToken, room;
 
   beforeAll(async () => {
@@ -141,17 +141,17 @@ describe('호스트 케이스 — 청소 희망 시간 / 결제 D-2 마감 가�
         checkOutDate: '2028-10-05'
       });
       expect(res.status).toBe(201);
-      // 입주일 2028-10-01 → 청소 D-2 = 2028-09-29 23:59:59.999 KST → ISO '+09:00'
-      expect(res.body.data.cleaningPaymentDeadline).toMatch(/^2028-09-29T23:59/);
+      // 입주일 2028-10-01 → 청소 D-3 = 2028-09-28 23:59:59.999 KST → ISO '+09:00'
+      expect(res.body.data.cleaningPaymentDeadline).toMatch(/^2028-09-28T23:59/);
       // 옵션 D-5 = 2028-09-26 23:59:59.999 KST
       expect(res.body.data.optionPaymentDeadline).toMatch(/^2028-09-26T23:59/);
     });
   });
 
   // ──────────────────────────────────────────────────────────────
-  // 청소 결제 D-2 마감 가드
+  // 청소 결제 D-3 마감 가드
   // ──────────────────────────────────────────────────────────────
-  describe('청소 결제 init D-2 마감 가드', () => {
+  describe('청소 결제 init D-3 마감 가드', () => {
     test('마감 전 (입주일 미래) → 결제 init 성공', async () => {
       const create = await newCase({ checkInDate: '2030-06-01', checkOutDate: '2030-06-05' });
       const caseId = create.body.data.id;
@@ -167,7 +167,7 @@ describe('호스트 케이스 — 청소 희망 시간 / 결제 D-2 마감 가�
     });
 
     test('마감 지남 (입주일 어제) → 4797 거절', async () => {
-      // 입주일이 어제 기준이면 D-2 마감은 4일 전 → 이미 지남
+      // 입주일이 어제 기준이면 D-3 마감은 4일 전 → 이미 지남
       const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
       const checkIn = yesterday.toISOString().slice(0, 10);
       const day5 = new Date(yesterday.getTime() + 4 * 24 * 60 * 60 * 1000)

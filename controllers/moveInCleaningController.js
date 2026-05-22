@@ -237,7 +237,7 @@ const initCleaningPayment = async (req, res) => {
       return error(res, ErrorCodes.VALIDATION_ERROR, 400, '청소비가 산정되지 않았습니다.');
     }
 
-    // 청소 결제 D-2 마감 가드 (입주일 D-2 KST 23:59:59.999 까지만 결제 가능)
+    // 청소 결제 D-3 마감 가드 (입주일 D-3 KST 23:59:59.999 까지만 결제 가능)
     if (!isCleaningPayable(caseRow.checkInDate)) {
       await transaction.rollback();
       return error(res, ErrorCodes.MOVE_IN_CLEANING_PAYMENT_DEADLINE_PASSED, 400);

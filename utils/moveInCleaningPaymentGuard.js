@@ -3,16 +3,16 @@
 /**
  * 입주 준비 서비스 — 호스트 청소 결제 마감 가드
  *
- * 정책 (2026-05-14 PRD 결정):
- *   "입주일(check_in_date) 의 D-2 일 KST 23:59:59.999" 까지만 청소 결제 가능.
- *   예) 입주일 2026-05-27 → D-2 = 2026-05-25 → 2026-05-25 23:59:59.999 KST 가 마감.
- *       2026-05-26 00:00 KST 부터 결제 불가.
+ * 정책 (2026-05-22 PRD 변경: D-2 → D-3):
+ *   "입주일(check_in_date) 의 D-3 일 KST 23:59:59.999" 까지만 청소 결제 가능.
+ *   예) 입주일 2026-05-27 → D-3 = 2026-05-24 → 2026-05-24 23:59:59.999 KST 가 마감.
+ *       2026-05-25 00:00 KST 부터 결제 불가.
  *
  * 게스트 옵션 결제(D-5) 와 정책 다르므로 별도 모듈로 분리.
  * 게스트 옵션은 utils/moveInGuestPaymentGuard.js 참조.
  */
 
-const PAYMENT_DEADLINE_DAYS_BEFORE = 2;
+const PAYMENT_DEADLINE_DAYS_BEFORE = 3;
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 /**
@@ -46,7 +46,7 @@ function parseCheckInToKstMidnight(input) {
 }
 
 /**
- * 청소 결제 마감 시각 계산 — D-2 KST 23:59:59.999.
+ * 청소 결제 마감 시각 계산 — D-3 KST 23:59:59.999.
  */
 function calculateCleaningPaymentDeadline(checkInDate) {
   const kstMidnight = parseCheckInToKstMidnight(checkInDate);
