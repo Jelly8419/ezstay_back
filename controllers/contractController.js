@@ -401,6 +401,10 @@ const createContractRequest = async (req, res) => {
     serverCalculated.platformFee = guestFee.total;
     serverCalculated.platformFeeSupply = guestFee.supply;
     serverCalculated.platformFeeVat = guestFee.vat;
+    // 원본 보존 (프로모션 할인 적용 전 게스트 수수료 스냅샷)
+    serverCalculated.platformFeeOriginal = guestFee.total;
+    serverCalculated.platformFeeDiscount = 0;
+    serverCalculated.appliedPromotions = [];
 
     serverCalculated.hostPlatformFee = hostFee.total;
     serverCalculated.hostPlatformFeeSupply = hostFee.supply;
@@ -409,15 +413,37 @@ const createContractRequest = async (req, res) => {
     // ── 게스트 혜택 프리뷰 (적용 가능 금액 산정) ───────────
     // 호스트 혜택(HOST_FEE_WAIVER)은 정산 시점에 적용됨 (settlement 생성 시)
     // 실제 슬롯 소진은 Contract 생성 후 promotionService.consumeBenefits 로 처리
+    //
+    // 클램핑 규칙(consumeBenefits 와 일치시켜 preview ≡ actual 보장):
+    //   - id 오름차순으로 순차 적용
+    //   - 각 혜택 discount = min(event.discountAmount, remainingFee)
+    //   - remainingFee 가 0 이면 이후 혜택 스킵
     const now = new Date();
     const eligibleGuestBenefits = await promotionService.getUserEligibility({
       userId: req.user.id,
       targetRole: 'GUEST',
       applyTrigger: 'CONTRACT'
     });
-    const previewGuestDiscount = eligibleGuestBenefits.reduce((sum, b) => sum + b.discountAmount, 0);
+    const sortedEligible = [...eligibleGuestBenefits].sort((a, b) => a.eventId - b.eventId);
+    let previewRemainingFee = serverCalculated.platformFeeOriginal;
+    let previewGuestDiscount = 0;
+    const previewApplied = [];
+    for (const b of sortedEligible) {
+      if (previewRemainingFee <= 0) break;
+      const applied = Math.min(b.discountAmount, previewRemainingFee);
+      if (applied <= 0) continue;
+      previewGuestDiscount += applied;
+      previewRemainingFee -= applied;
+      previewApplied.push({
+        eventCode: b.eventCode,
+        eventName: b.eventName,
+        discountAmount: applied
+      });
+    }
     if (previewGuestDiscount > 0) {
-      serverCalculated.platformFee = Math.max(0, serverCalculated.platformFee - previewGuestDiscount);
+      serverCalculated.platformFee = serverCalculated.platformFeeOriginal - previewGuestDiscount;
+      serverCalculated.platformFeeDiscount = previewGuestDiscount;
+      serverCalculated.appliedPromotions = previewApplied;
       // VAT 분리 재계산 (할인 적용된 platformFee 기준)
       const split = splitVatFromTotal(serverCalculated.platformFee);
       serverCalculated.platformFeeSupply = split.supply;
@@ -540,11 +566,13 @@ const createContractRequest = async (req, res) => {
     );
 
     // 11-0. 혜택 슬롯 소진 (race-free 조건부 UPDATE) + ContractBenefit INSERT
+    //       feeCap = 원본 게스트 수수료 → consumeBenefits 가 수수료 상한으로 클램핑
     const consumedBenefits = await promotionService.consumeBenefits({
       userId: req.user.id,
       targetRole: 'GUEST',
       applyTrigger: 'CONTRACT',
       contractId: contract.id,
+      feeCap: serverCalculated.platformFeeOriginal,
       transaction
     });
     const actualGuestDiscount = consumedBenefits.reduce((sum, c) => sum + c.discountAmount, 0);
@@ -633,6 +661,11 @@ const createContractRequest = async (req, res) => {
         checkInDate: toKSTString(contract.checkInDate),
         checkOutDate: toKSTString(contract.checkOutDate),
         finalTotalAmount: contract.finalTotalAmount,
+        // 프로모션 적용 내역 (프론트 표기용: 원래 수수료, 할인액, 적용 이벤트)
+        platformFee: serverCalculated.platformFee,
+        platformFeeOriginal: serverCalculated.platformFeeOriginal,
+        platformFeeDiscount: serverCalculated.platformFeeDiscount,
+        appliedPromotions: serverCalculated.appliedPromotions,
         createdAt: contract.createdAt,
         autoApproved: finalStatus === 'APPROVED' && process.env.AUTO_APPROVE_CONTRACTS === 'true' // 디버깅용
       },
@@ -695,6 +728,16 @@ const getGuestContracts = async (req, res) => {
           as: 'depositAgreements',
           attributes: ['id', 'status', 'deductAmount', 'rejectedReason', 'rejectedAt', 'createdAt'],
           required: false
+        },
+        {
+          model: ContractBenefit,
+          as: 'benefits',
+          required: false,
+          include: [{
+            model: PromotionEvent,
+            as: 'event',
+            attributes: ['code', 'name']
+          }]
         }
       ],
       order: [['createdAt', 'DESC']]
@@ -864,6 +907,16 @@ const getHostContracts = async (req, res) => {
           as: 'depositAgreements',
           attributes: ['id', 'status', 'deductAmount', 'rejectedReason', 'rejectedAt', 'createdAt'],
           required: false
+        },
+        {
+          model: ContractBenefit,
+          as: 'benefits',
+          required: false,
+          include: [{
+            model: PromotionEvent,
+            as: 'event',
+            attributes: ['code', 'name']
+          }]
         }
       ],
       order: [['createdAt', 'DESC']]
@@ -872,7 +925,9 @@ const getHostContracts = async (req, res) => {
     return success(
       res,
       {
-        contracts: contracts.map(contract => ({
+        contracts: contracts.map(contract => {
+          const guestBenefit = promotionService.summarizeContractBenefits(contract.benefits, 'GUEST_DISCOUNT');
+          return {
           id: contract.id,
           orderId: contract.orderId,
           status: contract.status,
@@ -890,6 +945,10 @@ const getHostContracts = async (req, res) => {
           cleaningFee: contract.cleaningFee,
           rentalItemsFee: contract.rentalItemsFee,
           platformFee: contract.platformFee,
+          // 게스트 수수료 프로모션 스냅샷 (원본/할인액/적용 이벤트 - ACTIVE 만 집계)
+          platformFeeOriginal: contract.platformFee + guestBenefit.discount,
+          platformFeeDiscount: guestBenefit.discount,
+          appliedPromotions: guestBenefit.appliedPromotions,
           discountAmount: contract.discountAmount,
           discountType: contract.discountType,
           subtotal: contract.subtotal,
@@ -962,7 +1021,8 @@ const getHostContracts = async (req, res) => {
           snapshot: contract.snapshot,
 
           createdAt: contract.createdAt
-        }))
+          };
+        })
       },
       '계약 요청 목록 조회 성공'
     );
@@ -1002,6 +1062,16 @@ const getContractDetail = async (req, res) => {
           model: DepositAgreement,
           as: 'depositAgreements',
           required: false
+        },
+        {
+          model: ContractBenefit,
+          as: 'benefits',
+          required: false,
+          include: [{
+            model: PromotionEvent,
+            as: 'event',
+            attributes: ['code', 'name']
+          }]
         }
       ]
     });
@@ -1214,6 +1284,15 @@ const getContractDetail = async (req, res) => {
           cleaningFee: contract.cleaningFee,
           rentalItemsFee: contract.rentalItemsFee,
           platformFee: contract.platformFee,
+          // 게스트 수수료 프로모션 스냅샷 (원본/할인액/적용 이벤트 - ACTIVE 만 집계)
+          ...(() => {
+            const gb = promotionService.summarizeContractBenefits(contract.benefits, 'GUEST_DISCOUNT');
+            return {
+              platformFeeOriginal: contract.platformFee + gb.discount,
+              platformFeeDiscount: gb.discount,
+              appliedPromotions: gb.appliedPromotions
+            };
+          })(),
           discountAmount: contract.discountAmount,
           discountType: contract.discountType,
           subtotal: contract.subtotal,

@@ -157,6 +157,10 @@ initHolidayCache();
 // 계약 상태 자동 업데이트 스케줄러 시작
 const { startContractScheduler } = require('./schedulers/contractScheduler');
 startContractScheduler();
+const { startMoveInScheduler } = require('./schedulers/moveInScheduler');
+startMoveInScheduler();
+const { startMoveInGuestOrderScheduler } = require('./schedulers/moveInGuestOrderScheduler');
+startMoveInGuestOrderScheduler();
 
 // 채팅 알림 스케줄러 시작 (체크인/체크아웃 D-1 알림)
 const { startChatReminderScheduler } = require('./schedulers/chatReminderScheduler');
@@ -212,6 +216,12 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const gnbRoutes = require('./routes/gnbRoutes');
 const kmcRoutes = require('./routes/kmcRoutes');
 const promotionRoutes = require('./routes/promotionRoutes');
+const systemRoutes = require('./routes/systemRoutes');
+const moveInRoutes = require('./routes/moveInRoutes');
+const adminMoveInOptionRoutes = require('./routes/adminMoveInOptionRoutes');
+const adminGuestOrderRoutes = require('./routes/adminGuestOrderRoutes');
+const adminMoveInCaseRoutes = require('./routes/adminMoveInCaseRoutes');
+const guestMoveInRoutes = require('./routes/guestMoveInRoutes');
 
 app.use('/api/rooms', roomRoutes);
 app.use('/api/auth', authRoutes);
@@ -219,6 +229,11 @@ app.use('/api/account', accountRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/host', hostRoutes);
 app.use('/api/host', scheduleRoutes);  // 호스트 일정 관리
+app.use('/api/host/move-in', moveInRoutes);  // 입주 준비 서비스 (임대인)
+app.use('/api/admin/move-in', adminMoveInOptionRoutes);  // 입주 준비 서비스 (관리자 옵션 카탈로그)
+app.use('/api/admin/move-in', adminGuestOrderRoutes);    // 입주 준비 서비스 (관리자 게스트 주문 모니터링)
+app.use('/api/admin/move-in', adminMoveInCaseRoutes);    // 입주 준비 서비스 (관리자 케이스 단위 조회/수정/재발송)
+app.use('/api/guest/move-in', guestMoveInRoutes);  // 입주 준비 서비스 (임차인)
 app.use('/api/contracts', contractRoutes);
 app.use('/api/chats', chatRoutes);
 app.use('/api/admin', adminRoutes);
@@ -231,6 +246,7 @@ app.use('/api/notifications', notificationRoutes);  // 알림 API
 app.use('/api/gnb', gnbRoutes);  // GNB 배지 상태 API
 app.use('/api/auth', kmcRoutes);  // KMC 본인인증
 app.use('/api/promotions', promotionRoutes);  // 프로모션 이벤트 (공개 조회)
+app.use('/api/system', systemRoutes);  // 서비스 런칭 여부 등 시스템 플래그
 
 // TODO: 가상계좌 지원 시 웹훅 라우트 활성화
 // const paytagWebhookController = require('./controllers/paytagWebhookController');

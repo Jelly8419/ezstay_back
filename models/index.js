@@ -58,6 +58,23 @@ const BrokerHostMapping = require('./BrokerHostMapping');
 const BrokerIncentive = require('./BrokerIncentive');
 const BrokerIncentivePayout = require('./BrokerIncentivePayout');
 
+// 입주 준비 서비스 (Move-in Service) 모델
+const MoveInRoomModel = require('./MoveInRoom');
+const MoveInCaseModel = require('./MoveInCase');
+const MoveInPaymentRequestModel = require('./MoveInPaymentRequest');
+const MoveInPaymentModel = require('./MoveInPayment');
+const MoveInServiceTaskModel = require('./MoveInServiceTask');
+const MoveInServiceTaskLogModel = require('./MoveInServiceTaskLog');
+const MoveInRoomStatusHistoryModel = require('./MoveInRoomStatusHistory');
+
+// 입주 준비 서비스 - 임차인(게스트) 도메인 모델
+const MoveInOptionModel = require('./MoveInOption');
+const MoveInGuestOrderModel = require('./MoveInGuestOrder');
+const MoveInGuestOrderItemModel = require('./MoveInGuestOrderItem');
+const MoveInGuestPaymentModel = require('./MoveInGuestPayment');
+const MoveInGuestOrderLogModel = require('./MoveInGuestOrderLog');
+const MoveInGuestRefundRequestModel = require('./MoveInGuestRefundRequest');
+
 // 핵심 유저 모델 초기화
 const User = UserModel(sequelize);
 const LocalUser = LocalUserModel(sequelize);
@@ -94,6 +111,23 @@ const ServiceTask = ServiceTaskModel(sequelize);
 const ServiceTaskLog = ServiceTaskLogModel(sequelize);
 const ContractCancelRequest = ContractCancelRequestModel(sequelize);
 const KmcVerification = KmcVerificationModel(sequelize);
+
+// 입주 준비 서비스 모델 초기화
+const MoveInRoom = MoveInRoomModel(sequelize);
+const MoveInCase = MoveInCaseModel(sequelize);
+const MoveInPaymentRequest = MoveInPaymentRequestModel(sequelize);
+const MoveInPayment = MoveInPaymentModel(sequelize);
+const MoveInServiceTask = MoveInServiceTaskModel(sequelize);
+const MoveInServiceTaskLog = MoveInServiceTaskLogModel(sequelize);
+const MoveInRoomStatusHistory = MoveInRoomStatusHistoryModel(sequelize);
+
+// 임차인(게스트) 도메인 초기화
+const MoveInOption = MoveInOptionModel(sequelize);
+const MoveInGuestOrder = MoveInGuestOrderModel(sequelize);
+const MoveInGuestOrderItem = MoveInGuestOrderItemModel(sequelize);
+const MoveInGuestPayment = MoveInGuestPaymentModel(sequelize);
+const MoveInGuestOrderLog = MoveInGuestOrderLogModel(sequelize);
+const MoveInGuestRefundRequest = MoveInGuestRefundRequestModel(sequelize);
 
 // 방 관리 모델 초기화
 const RoomMemoModel = require('./RoomMemo');
@@ -1066,6 +1100,264 @@ ServiceTaskLog.belongsTo(ServiceTask, {
 });
 
 // =====================================================
+// MoveIn (입주 준비 서비스) 관계 설정
+// =====================================================
+
+// MoveInRoom ↔ User (host)
+User.hasMany(MoveInRoom, {
+  foreignKey: 'hostId',
+  as: 'moveInRooms',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInRoom.belongsTo(User, {
+  foreignKey: 'hostId',
+  as: 'host',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+
+// MoveInRoom ↔ MoveInCase
+MoveInRoom.hasMany(MoveInCase, {
+  foreignKey: 'moveInRoomId',
+  as: 'cases',
+  onDelete: 'RESTRICT',
+  onUpdate: 'CASCADE'
+});
+MoveInCase.belongsTo(MoveInRoom, {
+  foreignKey: 'moveInRoomId',
+  as: 'room',
+  onDelete: 'RESTRICT',
+  onUpdate: 'CASCADE'
+});
+
+// MoveInCase ↔ User (host / guest)
+User.hasMany(MoveInCase, {
+  foreignKey: 'hostId',
+  as: 'moveInCasesAsHost',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInCase.belongsTo(User, {
+  foreignKey: 'hostId',
+  as: 'host',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInCase.belongsTo(User, {
+  foreignKey: 'guestUserId',
+  as: 'guest',
+  onDelete: 'SET NULL',
+  onUpdate: 'CASCADE'
+});
+
+// MoveInCase ↔ Admin (최종 관리자 수정자, 관리자 화면 전용)
+Admin.hasMany(MoveInCase, {
+  foreignKey: 'lastModifiedByAdminId',
+  as: 'lastModifiedMoveInCases',
+  onDelete: 'SET NULL',
+  onUpdate: 'CASCADE'
+});
+MoveInCase.belongsTo(Admin, {
+  foreignKey: 'lastModifiedByAdminId',
+  as: 'lastModifiedByAdmin',
+  onDelete: 'SET NULL',
+  onUpdate: 'CASCADE'
+});
+
+// MoveInCase ↔ MoveInPaymentRequest (1:1)
+MoveInCase.hasOne(MoveInPaymentRequest, {
+  foreignKey: 'caseId',
+  as: 'paymentRequest',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInPaymentRequest.belongsTo(MoveInCase, {
+  foreignKey: 'caseId',
+  as: 'case'
+});
+
+// MoveInCase ↔ MoveInPayment (1:N)
+MoveInCase.hasMany(MoveInPayment, {
+  foreignKey: 'caseId',
+  as: 'payments',
+  onDelete: 'RESTRICT',
+  onUpdate: 'CASCADE'
+});
+MoveInPayment.belongsTo(MoveInCase, {
+  foreignKey: 'caseId',
+  as: 'case'
+});
+MoveInPayment.belongsTo(User, {
+  foreignKey: 'hostId',
+  as: 'host'
+});
+
+// MoveInCase ↔ MoveInServiceTask (1:N)
+MoveInCase.hasMany(MoveInServiceTask, {
+  foreignKey: 'caseId',
+  as: 'serviceTasks',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInServiceTask.belongsTo(MoveInCase, {
+  foreignKey: 'caseId',
+  as: 'case'
+});
+
+// MoveInServiceTask ↔ MoveInServiceTaskLog (1:N)
+MoveInServiceTask.hasMany(MoveInServiceTaskLog, {
+  foreignKey: 'serviceTaskId',
+  as: 'logs',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInServiceTaskLog.belongsTo(MoveInServiceTask, {
+  foreignKey: 'serviceTaskId',
+  as: 'serviceTask'
+});
+
+// MoveInRoom ↔ MoveInRoomStatusHistory (1:N) — 심사 이력
+MoveInRoom.hasMany(MoveInRoomStatusHistory, {
+  foreignKey: 'moveInRoomId',
+  as: 'statusHistories',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInRoomStatusHistory.belongsTo(MoveInRoom, {
+  foreignKey: 'moveInRoomId',
+  as: 'room'
+});
+MoveInRoomStatusHistory.belongsTo(Admin, {
+  foreignKey: 'adminId',
+  as: 'admin'
+});
+
+// =====================================================
+// MoveIn 임차인(게스트) 도메인 관계 설정
+// =====================================================
+
+// MoveInCase ↔ MoveInGuestOrder (1:N)
+MoveInCase.hasMany(MoveInGuestOrder, {
+  foreignKey: 'caseId',
+  as: 'guestOrders',
+  onDelete: 'RESTRICT',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestOrder.belongsTo(MoveInCase, {
+  foreignKey: 'caseId',
+  as: 'case'
+});
+
+// User ↔ MoveInGuestOrder (게스트)
+User.hasMany(MoveInGuestOrder, {
+  foreignKey: 'guestUserId',
+  as: 'moveInGuestOrders',
+  onDelete: 'RESTRICT',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestOrder.belongsTo(User, {
+  foreignKey: 'guestUserId',
+  as: 'guest'
+});
+
+// MoveInGuestOrder ↔ MoveInGuestOrderItem (1:N)
+MoveInGuestOrder.hasMany(MoveInGuestOrderItem, {
+  foreignKey: 'guestOrderId',
+  as: 'items',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestOrderItem.belongsTo(MoveInGuestOrder, {
+  foreignKey: 'guestOrderId',
+  as: 'order'
+});
+
+// MoveInOption ↔ MoveInGuestOrderItem (1:N)
+MoveInOption.hasMany(MoveInGuestOrderItem, {
+  foreignKey: 'optionId',
+  as: 'orderItems',
+  onDelete: 'RESTRICT',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestOrderItem.belongsTo(MoveInOption, {
+  foreignKey: 'optionId',
+  as: 'option'
+});
+
+// MoveInGuestOrder ↔ MoveInGuestPayment (1:N)
+MoveInGuestOrder.hasMany(MoveInGuestPayment, {
+  foreignKey: 'guestOrderId',
+  as: 'payments',
+  onDelete: 'RESTRICT',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestPayment.belongsTo(MoveInGuestOrder, {
+  foreignKey: 'guestOrderId',
+  as: 'order'
+});
+MoveInGuestPayment.belongsTo(MoveInCase, {
+  foreignKey: 'caseId',
+  as: 'case'
+});
+MoveInGuestPayment.belongsTo(User, {
+  foreignKey: 'guestUserId',
+  as: 'guest'
+});
+
+// MoveInGuestOrder ↔ MoveInGuestOrderLog (1:N)
+MoveInGuestOrder.hasMany(MoveInGuestOrderLog, {
+  foreignKey: 'guestOrderId',
+  as: 'logs',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestOrderLog.belongsTo(MoveInGuestOrder, {
+  foreignKey: 'guestOrderId',
+  as: 'order'
+});
+MoveInGuestOrderItem.hasMany(MoveInGuestOrderLog, {
+  foreignKey: 'guestOrderItemId',
+  as: 'logs',
+  onDelete: 'SET NULL',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestOrderLog.belongsTo(MoveInGuestOrderItem, {
+  foreignKey: 'guestOrderItemId',
+  as: 'orderItem'
+});
+
+// MoveInGuestOrder ↔ MoveInGuestRefundRequest (1:N — 반품 요청)
+MoveInGuestOrder.hasMany(MoveInGuestRefundRequest, {
+  foreignKey: 'guestOrderId',
+  as: 'refundRequests',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestRefundRequest.belongsTo(MoveInGuestOrder, {
+  foreignKey: 'guestOrderId',
+  as: 'order'
+});
+MoveInCase.hasMany(MoveInGuestRefundRequest, {
+  foreignKey: 'caseId',
+  as: 'guestRefundRequests',
+  onDelete: 'CASCADE',
+  onUpdate: 'CASCADE'
+});
+MoveInGuestRefundRequest.belongsTo(MoveInCase, {
+  foreignKey: 'caseId',
+  as: 'case'
+});
+MoveInGuestRefundRequest.belongsTo(User, {
+  foreignKey: 'requestedBy',
+  as: 'requester'
+});
+MoveInGuestRefundRequest.belongsTo(Admin, {
+  foreignKey: 'adminId',
+  as: 'processedByAdmin'
+});
+
+// =====================================================
 // PromotionEvent / PromotionParticipant 관계 설정
 // =====================================================
 PromotionEvent.hasMany(PromotionParticipant, {
@@ -1324,5 +1616,18 @@ module.exports = {
   BrokerRate,
   BrokerHostMapping,
   BrokerIncentive,
-  BrokerIncentivePayout
+  BrokerIncentivePayout,
+  MoveInRoom,
+  MoveInCase,
+  MoveInPaymentRequest,
+  MoveInPayment,
+  MoveInServiceTask,
+  MoveInServiceTaskLog,
+  MoveInRoomStatusHistory,
+  MoveInOption,
+  MoveInGuestOrder,
+  MoveInGuestOrderItem,
+  MoveInGuestPayment,
+  MoveInGuestOrderLog,
+  MoveInGuestRefundRequest
 };

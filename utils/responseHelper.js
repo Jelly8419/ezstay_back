@@ -126,6 +126,42 @@ const ErrorCodes = {
   RENTAL_ORDER_ALREADY_CANCELLED: { code: 4713, message: '이미 취소된 주문입니다.' },
   RENTAL_MINIMUM_AMOUNT_REQUIRED: { code: 4714, message: '별도 배송이 필요한 경우 최소 주문금액은 10,000원입니다.' },
 
+  // 입주 준비 서비스 - 임차인 (478x)
+  MOVE_IN_GUEST_TOKEN_INVALID:           { code: 4780, message: '입주 준비 서비스 링크가 유효하지 않습니다.' },
+  MOVE_IN_GUEST_TOKEN_EXPIRED:           { code: 4781, message: '해당 입주 준비 서비스 링크가 만료되었거나 사용할 수 없습니다.' },
+  MOVE_IN_GUEST_PHONE_MISMATCH:          { code: 4782, message: '임대인이 등록한 임차인 연락처와 현재 계정의 연락처가 일치하지 않습니다.' },
+  MOVE_IN_GUEST_CASE_NOT_FOUND:          { code: 4783, message: '입주 준비 요청을 찾을 수 없습니다.' },
+  MOVE_IN_GUEST_PAYMENT_DEADLINE_PASSED: { code: 4784, message: '입주일 5일 전까지만 결제할 수 있습니다.' },
+  MOVE_IN_GUEST_OPTION_REQUIRED:         { code: 4785, message: '결제할 입주 준비 옵션을 선택해주세요.' },
+  MOVE_IN_GUEST_OPTION_UNAVAILABLE:      { code: 4786, message: '선택한 옵션을 현재 사용할 수 없습니다.' },
+  MOVE_IN_GUEST_OPTION_NOT_FOUND:        { code: 4787, message: '옵션을 찾을 수 없습니다.' },
+  MOVE_IN_GUEST_STOCK_INSUFFICIENT:      { code: 4788, message: '선택한 옵션의 재고가 부족합니다.' },
+  MOVE_IN_GUEST_AMOUNT_MISMATCH:         { code: 4789, message: '결제 금액이 변경되었습니다. 다시 시도해주세요.' },
+  MOVE_IN_GUEST_ORDER_NOT_FOUND:         { code: 4790, message: '주문을 찾을 수 없습니다.' },
+  MOVE_IN_GUEST_ORDER_NOT_PAYABLE:       { code: 4791, message: '결제 가능한 상태의 주문이 아닙니다.' },
+  MOVE_IN_GUEST_ORDER_NOT_CANCELLABLE:   { code: 4792, message: '미결제 주문만 취소할 수 있습니다.' },
+  MOVE_IN_GUEST_PENDING_ORDER_EXISTS:    { code: 4793, message: '결제 대기 중인 주문이 있습니다. 기존 주문을 결제하거나 취소해주세요.' },
+  MOVE_IN_GUEST_PAYMENT_NOT_FOUND:       { code: 4794, message: '결제 정보를 찾을 수 없습니다.' },
+
+  // 입주 준비 - 방 심사 (4795~)
+  MOVE_IN_ROOM_NOT_APPROVED:             { code: 4795, message: '심사 승인된 방만 사용할 수 있습니다.' },
+
+  // 입주 준비 - 케이스 (4796~)
+  MOVE_IN_CASE_NOT_FOUND:                { code: 4796, message: '입주 준비 케이스를 찾을 수 없습니다.' },
+  MOVE_IN_CLEANING_PAYMENT_DEADLINE_PASSED: { code: 4797, message: '입주일 3일 전까지만 청소 결제가 가능합니다.' },
+  MOVE_IN_CLEANING_SCHEDULE_INVALID:     { code: 4798, message: '청소 희망 시간은 30분 단위로 09:00~18:00 사이여야 합니다.' },
+
+  // 입주 준비 - 환불/반품 (4799~)
+  MOVE_IN_GUEST_REFUND_NOT_ALLOWED:      { code: 4799, message: '현재 환불/취소가 불가한 상태입니다.' },
+  MOVE_IN_GUEST_RETURN_ALREADY_REQUESTED:{ code: 4810, message: '이미 처리 중인 반품 요청이 있습니다.' },
+  MOVE_IN_REFUND_REQUEST_NOT_FOUND:      { code: 4811, message: '반품 요청을 찾을 수 없습니다.' },
+  MOVE_IN_REFUND_REQUEST_NOT_PENDING:    { code: 4812, message: '이미 처리된 반품 요청입니다.' },
+  MOVE_IN_CLEANING_REFUND_NOT_ALLOWED:   { code: 4813, message: '현재 청소 환불이 불가한 상태입니다.' },
+  MOVE_IN_GUEST_CANCEL_QTY_INVALID:      { code: 4814, message: '취소/반품 수량이 올바르지 않습니다.' },
+  MOVE_IN_GUEST_CANCEL_REMAINING_INVALID:{ code: 4815, message: '취소 후 남은 옵션 금액이 10,000원 미만입니다. 전체 취소하거나 10,000원 이상 남도록 선택해주세요.' },
+  MOVE_IN_GUEST_OPTION_QTY_EXCEEDED:     { code: 4816, message: '품목당 5개를 초과할 수 없습니다.' },
+  MOVE_IN_PAYMENT_REQUEST_DAILY_LIMIT:   { code: 4817, message: '오늘은 더 이상 임차인에게 알림톡을 보낼 수 없습니다.' },
+
   // 알림 관련 (48xx)
   NOTIFICATION_NOT_FOUND: { code: 4801, message: '알림을 찾을 수 없습니다.' },
 

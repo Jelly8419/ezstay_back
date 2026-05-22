@@ -40,11 +40,22 @@ class AlimtalkService {
    * @param {Object} [options] - 추가 옵션
    * @param {number} [options.contractId] - 관련 계약 ID
    * @param {number} [options.chatRoomId] - 관련 채팅방 ID
+   * @param {number} [options.moveInCaseId] - 관련 입주 준비 케이스 ID (일별 발송 제한 카운트용)
    * @param {boolean} [options.skipDedup=false] - 중복 체크 skip 여부
+   * @param {Array} [options.buttonOverride] - 캐시된 버튼 대신 사용할 버튼 배열
+   *   - 알리고 콘솔에 버튼 URL 을 `http://#{url}` 처럼 등록한 템플릿 발송 시
+   *     {linkMo, linkPc} 등을 발송 시점에 실제 값으로 치환해서 넘겨야 함
    * @returns {Promise<{sent: boolean, skipped: boolean, logId: number|null, error: string|null}>}
    */
   static async send(eventName, receiver, templateData = {}, options = {}) {
-    const { contractId = null, chatRoomId = null, skipDedup = false, receiverRole = null } = options;
+    const {
+      contractId = null,
+      chatRoomId = null,
+      moveInCaseId = null,
+      skipDedup = false,
+      receiverRole = null,
+      buttonOverride = null
+    } = options;
 
     try {
       // 1. 템플릿 활성 여부 확인
@@ -83,7 +94,8 @@ class AlimtalkService {
         eventName,
         contractId,
         chatRoomId,
-        receiverId: receiver.id,
+        moveInCaseId,
+        receiverId: receiver.id ?? null,
         receiverPhone: receiver.phoneNumber,
         receiverRole,
         tplCode: template.tplCode,
@@ -91,14 +103,14 @@ class AlimtalkService {
         requestPayload: { message, fallbackSMS }
       });
 
-      // 6. 발송 (캐시된 버튼 정보 포함)
-      const cachedButtons = getCachedButtons(template.tplCode);
+      // 6. 발송 (버튼 우선순위: buttonOverride > 캐시된 버튼)
+      const buttons = buttonOverride || getCachedButtons(template.tplCode);
       const result = await sendAlimtalk({
         receiver: receiver.phoneNumber,
         tplCode: template.tplCode,
         subject: template.eventLabel || eventName,
         message,
-        button: cachedButtons || undefined,
+        button: buttons || undefined,
         failover: 'Y',
         fsubject: `[EZstay] ${template.eventLabel || eventName}`,
         fmessage: fallbackSMS
@@ -155,6 +167,35 @@ class AlimtalkService {
     });
 
     return !!existing;
+  }
+
+  // =====================================================
+  // 입주 준비 케이스 일별 발송 횟수
+  // =====================================================
+
+  /**
+   * 특정 입주 준비 케이스에 대해 오늘(KST) 발송 시도된 알림톡 건수.
+   *
+   * - 카운트 대상: PENDING/SENT/FAILED/RETRIED/FALLBACK_SENT 등 status 무관 — 발송 "시도" 기준
+   *   (실패해도 임차인 단말로 SMS fallback 이 갈 수 있고, 재시도 어뷰징 방지)
+   * - 기준 시각: created_at, KST 당일 00:00:00 ~ 23:59:59
+   *
+   * @param {number} moveInCaseId
+   * @returns {Promise<number>}
+   */
+  static async countMoveInSentToday(moveInCaseId) {
+    if (!moveInCaseId) return 0;
+
+    const { AlimtalkLog } = this.getModels();
+    const { kstDayRangeUtc } = require('../utils/dateHelper');
+    const { start, end } = kstDayRangeUtc();
+
+    return AlimtalkLog.count({
+      where: {
+        moveInCaseId,
+        createdAt: { [Op.between]: [start, end] }
+      }
+    });
   }
 
   // =====================================================
@@ -381,6 +422,149 @@ class AlimtalkService {
   // 미등록 템플릿용 편의 메서드 (TODO: 검수 후 활성화)
   // =====================================================
 
+  /** 방 심사 승인 안내 알림톡 (호스트에게) */
+  static async sendPropertyApproved(host, room) {
+    await this.send('property_approved_host', host, {
+      roomName: room?.roomName || ''
+    }, { receiverRole: 'host', skipDedup: true });
+  }
+
+  /**
+   * 입주 준비 결제 요청 알림톡 — 임차인 수신 (UI_0932)
+   *
+   * 템플릿 변수: #{임대인} / #{입주일} / #{마감기한} / #{url}
+   * 알리고 콘솔 검수 등록 버튼 URL 은 `https://#{url}` 형식 — 발송 버튼도 동일하게
+   * `https://` + (scheme 제거한 host+path) 로 맞춰야 검수본과 일치해 알림톡으로 발송됨.
+   * (스킴이 다르면 버튼 불일치로 알림톡 거부 → 대체문자 전환)
+   *
+   * #{임대인}: 임대인 닉네임 노출 정책 폐기 → '입주할 방의 임대인' 고정 문구.
+   * #{마감기한}: 입주일 -5일 KST 23:59:59 (D-5 게이트). 'YYYY-MM-DD HH:mm' 로 시각까지 안내.
+   *
+   * @param {Object} guest    - { phoneNumber } (가입돼있으면 id 도 포함 가능)
+   * @param {Object} payload  - { checkInDate, paymentDeadline, paymentLink }
+   * @param {Object} [opts]   - { moveInCaseId } 일별 발송 제한 카운트용 케이스 ID
+   */
+  static async sendMoveInPaymentRequest(guest, { checkInDate, paymentDeadline, paymentLink }, opts = {}) {
+    // paymentLink 에서 scheme 분리 — 템플릿 #{url} 변수는 host+path 만 받음
+    const urlWithoutScheme = String(paymentLink || '').replace(/^https?:\/\//, '');
+    // 검수본 버튼이 `https://#{url}` 이므로 발송 버튼도 https 로 고정
+    const buttonLink = `https://${urlWithoutScheme}`;
+
+    const buttonOverride = [{
+      name: '확인하기',
+      linkType: 'WL',          // 웹링크
+      linkMo: buttonLink,
+      linkPc: buttonLink
+    }];
+
+    return this.send(
+      'move_in_payment_request_guest',
+      guest,
+      {
+        hostName: '입주할 방의 임대인',
+        checkInDate: this._formatDate(checkInDate),
+        paymentDeadline: this._formatDateTimeKST(paymentDeadline),
+        url: urlWithoutScheme
+      },
+      {
+        receiverRole: 'guest',
+        skipDedup: true,        // 케이스 단위 재발송 허용 (resendCount 별도 추적)
+        moveInCaseId: opts.moveInCaseId ?? null, // 일별 10회 제한 카운트 기준
+        buttonOverride
+      }
+    );
+  }
+
+  /**
+   * 입주 준비 청소 결제 완료 알림톡 — 임대인 수신 (UI_1373)
+   *
+   * @param {Object} host  - { id, phoneNumber }
+   * @param {Object} data  - { address, cleaningDate, cleaningStartTime, totalAmount }
+   *   - address: 주소(상세주소 포함 전체)
+   *   - cleaningDate: 'YYYY-MM-DD'
+   *   - cleaningStartTime: 'HH:mm'
+   *   - totalAmount: 결제 총액 (숫자)
+   * @param {Object} [opts] - { moveInCaseId }
+   */
+  static async sendMoveInCleaningPaid(host, { address, cleaningDate, cleaningStartTime, totalAmount }, opts = {}) {
+    return this.send(
+      'move_in_payment_completed_host',
+      host,
+      {
+        address: address || '',
+        cleaningDate: cleaningDate || '',
+        cleaningStartTime: cleaningStartTime || '',
+        totalAmount: this._formatNumber(totalAmount)
+      },
+      { receiverRole: 'host', skipDedup: true, moveInCaseId: opts.moveInCaseId ?? null }
+    );
+  }
+
+  /**
+   * 입주 준비 옵션 결제 완료 알림톡 — 임차인 수신 (UI_1379)
+   *
+   * @param {Object} guest - { id, phoneNumber }
+   * @param {Object} data  - { address, checkInDate, optionLines, totalAmount }
+   *   - optionLines: [{ name, quantity }] — _formatMoveInOptionItems 로 가공
+   * @param {Object} [opts] - { moveInCaseId }
+   */
+  static async sendMoveInOptionPaid(guest, { address, checkInDate, optionLines, totalAmount }, opts = {}) {
+    return this.send(
+      'move_in_payment_completed_guest',
+      guest,
+      {
+        address: address || '',
+        checkInDate: this._formatDate(checkInDate),
+        optionItems: this._formatMoveInOptionItems(optionLines),
+        totalAmount: this._formatNumber(totalAmount)
+      },
+      { receiverRole: 'guest', skipDedup: true, moveInCaseId: opts.moveInCaseId ?? null }
+    );
+  }
+
+  /**
+   * 입주 준비 침구류 반납 안내 알림톡 — 임차인 수신 (UI_1355)
+   * 변수 없음. 퇴실 당일 침구류 대여 결제자에게 발송.
+   *
+   * @param {Object} guest - { id, phoneNumber }
+   * @param {Object} [opts] - { moveInCaseId } — skipDedup 미사용: 케이스 단위 1회만 발송
+   */
+  static async sendMoveInBeddingReturn(guest, opts = {}) {
+    return this.send(
+      'move_in_bedding_return_guest',
+      guest,
+      {},
+      { receiverRole: 'guest', moveInCaseId: opts.moveInCaseId ?? null }
+    );
+  }
+
+  /**
+   * 입주 준비 결제 취소 알림톡 — 공용 (UI_1391)
+   * 임차인 옵션 취소 → 임차인 수신 / 임대인 청소 환불 → 임대인 수신.
+   *
+   * @param {Object} receiver - { id, phoneNumber }
+   * @param {Object} data  - { address, checkInDate, checkOutDate, optionLines, cancelAmount }
+   * @param {Object} [opts] - { moveInCaseId, receiverRole: 'guest'|'host' }
+   */
+  static async sendMoveInPaymentCanceled(receiver, { address, checkInDate, checkOutDate, optionLines, cancelAmount }, opts = {}) {
+    return this.send(
+      'move_in_payment_canceled',
+      receiver,
+      {
+        address: address || '',
+        checkInDate: this._formatDate(checkInDate),
+        checkOutDate: this._formatDate(checkOutDate),
+        optionItems: this._formatMoveInOptionItems(optionLines),
+        cancelAmount: this._formatNumber(cancelAmount)
+      },
+      {
+        receiverRole: opts.receiverRole || null,
+        skipDedup: true,
+        moveInCaseId: opts.moveInCaseId ?? null
+      }
+    );
+  }
+
   /** 4-2. 계약 승인 알림톡 */
   static async sendContractApproved(contract, guest, room) {
     await this.send('contract_approved_guest', guest, {
@@ -552,9 +736,39 @@ class AlimtalkService {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
 
+  /**
+   * UTC Date → KST 기준 'YYYY-MM-DD HH:mm' 문자열.
+   * process.env.TZ 에 의존하지 않고 +9h 오프셋을 명시 적용 (CLAUDE.md 날짜 규칙).
+   * 마감기한 등 시각까지 안내해야 하는 알림톡 변수에 사용.
+   */
+  static _formatDateTimeKST(date) {
+    if (!date) return '';
+    const d = new Date(date);
+    if (Number.isNaN(d.getTime())) return '';
+    const kst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+    const Y = kst.getUTCFullYear();
+    const M = String(kst.getUTCMonth() + 1).padStart(2, '0');
+    const D = String(kst.getUTCDate()).padStart(2, '0');
+    const h = String(kst.getUTCHours()).padStart(2, '0');
+    const m = String(kst.getUTCMinutes()).padStart(2, '0');
+    return `${Y}-${M}-${D} ${h}:${m}`;
+  }
+
   static _formatNumber(num) {
     if (num == null) return '0';
     return Number(num).toLocaleString('ko-KR');
+  }
+
+  /**
+   * 입주 준비 옵션 라인 목록 → '입주 용품 세트 1개, 헤어드라이기 1개' 형식 문자열.
+   * @param {Array} lines - [{ name, quantity }] (MoveInGuestOrderItem 또는 itemsSnapshot)
+   * @returns {string} 빈 배열이면 '없음'
+   */
+  static _formatMoveInOptionItems(lines) {
+    if (!Array.isArray(lines) || lines.length === 0) return '없음';
+    return lines
+      .map((l) => `${l.name || l.optionName || '옵션'} ${l.quantity ?? 1}개`)
+      .join(', ');
   }
 }
 

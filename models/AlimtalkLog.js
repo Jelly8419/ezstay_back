@@ -33,13 +33,19 @@ const AlimtalkLog = sequelize.define('AlimtalkLog', {
     field: 'chat_room_id',
     comment: '관련 채팅방 ID (채팅 알림용)'
   },
+  moveInCaseId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    field: 'move_in_case_id',
+    comment: '관련 입주 준비 케이스 ID (입주 준비 알림톡 일별 발송 제한 카운트용)'
+  },
 
   // 수신자 정보
   receiverId: {
     type: DataTypes.INTEGER,
-    allowNull: false,
+    allowNull: true,
     field: 'receiver_id',
-    comment: '수신자 사용자 ID'
+    comment: '수신자 사용자 ID (미가입자 대상 발송 시 NULL — 예: 입주 준비 결제 요청 임차인)'
   },
   receiverPhone: {
     type: DataTypes.STRING(20),
@@ -159,6 +165,10 @@ const AlimtalkLog = sequelize.define('AlimtalkLog', {
     {
       fields: ['created_at'],
       name: 'idx_created_at'
+    },
+    {
+      fields: ['move_in_case_id', 'created_at'],
+      name: 'idx_move_in_case_created'
     }
   ]
 });

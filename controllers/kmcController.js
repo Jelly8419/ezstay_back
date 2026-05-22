@@ -12,6 +12,7 @@ const { Op } = require('sequelize');
 const kmcExec = require('../utils/kmcCrypto');
 const { User, KmcVerification, sequelize } = require('../models');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
+const { safeAutoBindByPhone } = require('../services/moveInGuestBindService');
 
 const KMC_API_URL = 'https://www.kmcert.com/kmcis/api/kmcisToken_api.jsp';
 const EXTEND_VAR = '0000000000000000';
@@ -134,6 +135,9 @@ const verifyResult = async (req, res) => {
           birth: cached.birth,
           gender: cached.gender
         }, { where: { id: req.user.id } });
+
+        // 입주 준비 서비스 자동 매칭 (마이페이지 재인증으로 phone 변경 시)
+        await safeAutoBindByPhone(req.user.id, cached.phoneNumber);
       }
 
       return success(res, {
@@ -257,6 +261,9 @@ const verifyResult = async (req, res) => {
       }, {
         where: { id: req.user.id }
       });
+
+      // 입주 준비 서비스 자동 매칭 (마이페이지 재인증으로 phone 변경 시)
+      await safeAutoBindByPhone(req.user.id, verificationData.phoneNo);
     } else {
       // 비로그인(이메일 가입) 또는 소셜 가입 진행 중(phoneVerified: false):
       // KmcVerification 임시 저장 → 가입 완료 API에서 꺼내 씀

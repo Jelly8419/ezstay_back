@@ -52,7 +52,14 @@ const Notification = sequelize.define('Notification', {
       'PROPERTY_REVIEW_RESULT',   // 매물 심사 결과
       'ADDITIONAL_OPTION_PAYMENT',// 옵션 추가 결제 발생
       'CHECKIN_CONFIRMED',        // 입주 확정
-      'CHECKOUT_REQUEST'          // 퇴실 확인 요청 (보증금 반환)
+      'CHECKOUT_REQUEST',         // 퇴실 확인 요청 (보증금 반환)
+
+      // 입주 준비 서비스 - 임차인 (Phase 12)
+      'MOVE_IN_PAYMENT_REQUEST',   // 임대인이 결제 요청 발송 (임차인 수신)
+      'MOVE_IN_PAYMENT_COMPLETED', // 임차인 옵션 결제 완료
+
+      // 입주 준비 서비스 - 임대인 (방 심사)
+      'MOVE_IN_ROOM_REVIEW_RESULT' // 관리자 방 심사 승인/반려 (임대인 수신)
     ),
     allowNull: false,
     comment: '알림 유형'
@@ -195,7 +202,14 @@ Notification.TYPE_LABELS = {
   PROPERTY_REVIEW_RESULT: '매물 심사 결과',
   ADDITIONAL_OPTION_PAYMENT: '옵션 결제',
   CHECKIN_CONFIRMED: '입주 확정',
-  CHECKOUT_REQUEST: '퇴실 확인 요청'
+  CHECKOUT_REQUEST: '퇴실 확인 요청',
+
+  // 입주 준비 서비스 - 임차인
+  MOVE_IN_PAYMENT_REQUEST: '입주 준비 결제 요청',
+  MOVE_IN_PAYMENT_COMPLETED: '입주 준비 결제 완료',
+
+  // 입주 준비 서비스 - 임대인 (방 심사)
+  MOVE_IN_ROOM_REVIEW_RESULT: '입주 준비 방 심사 결과'
 };
 
 /**
@@ -226,7 +240,14 @@ Notification.DEEPLINK_TARGETS = {
   INQUIRY_ANSWERED: 'inquiry',
 
   // 매물 → 방 관리
-  PROPERTY_REVIEW_RESULT: 'room'
+  PROPERTY_REVIEW_RESULT: 'room',
+
+  // 입주 준비 서비스 → 게스트 입주 준비 메뉴
+  MOVE_IN_PAYMENT_REQUEST: 'move-in',
+  MOVE_IN_PAYMENT_COMPLETED: 'move-in',
+
+  // 입주 준비 서비스 - 임대인 방 심사 → 입주 준비 방 관리
+  MOVE_IN_ROOM_REVIEW_RESULT: 'move-in-room'
 };
 
 module.exports = Notification;

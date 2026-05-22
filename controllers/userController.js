@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const { ErrorCodes, success, error } = require('../utils/responseHelper');
 const bcrypt = require('bcryptjs');
 const { validatePassword, validatePhoneNumber, validateNickname } = require('../utils/validator');
+const { safeAutoBindByPhone } = require('../services/moveInGuestBindService');
 
 // 소셜 게스트 본인인증 + 약관 저장
 const saveGuestVerification = async (req, res) => {
@@ -76,6 +77,10 @@ const saveGuestVerification = async (req, res) => {
     }
 
     await kmcRecord.update({ used: true }, { transaction });
+
+    // 입주 준비 서비스 자동 매칭 (PRD 4.4 / 10.2)
+    await safeAutoBindByPhone(userId, phone_number, transaction);
+
     await transaction.commit();
 
     return success(res, {
@@ -204,6 +209,10 @@ const saveHostVerification = async (req, res) => {
     } else {
       await UserBankAccount.create(accountData, { transaction });
     }
+
+    // 입주 준비 서비스 자동 매칭 (PRD 4.4 / 10.2)
+    // 호스트가 동시에 임차인이 될 수도 있으므로 같이 검사 (게스트 PRD 정책)
+    await safeAutoBindByPhone(userId, phone_number, transaction);
 
     await transaction.commit();
 

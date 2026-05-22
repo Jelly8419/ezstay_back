@@ -5,6 +5,7 @@ const { toAbsoluteUrl } = require('../utils/urlHelper');
 const { safeRedisOperation } = require('../config/redis');
 const crypto = require('crypto');
 const roomService = require('../services/roomService');
+const promotionService = require('../services/promotionService');
 const appConfig = require('../config/app.config');
 const { toKSTString } = require('../utils/dateHelper');
 
@@ -267,6 +268,25 @@ const getRoomById = async (req, res) => {
       roomData.availableRentalItems = availableRentalItems;
     }
     // === 대여 물품 재고 정보 추가 끝 ===
+
+    // === 게스트 프로모션 자격 (로그인 시에만) ===
+    // 방마다 다른 게 아니라 게스트 자격 기반 → 전역 리스트이지만 게스트별로 다름
+    // 수수료 금액은 기간·요금에 따라 달라지므로 여기서는 할인액 메타만 제공
+    if (req.user) {
+      const eligible = await promotionService.getUserEligibility({
+        userId: req.user.id,
+        targetRole: 'GUEST',
+        applyTrigger: 'CONTRACT'
+      });
+      roomData.eligiblePromotions = eligible.map(e => ({
+        eventCode: e.eventCode,
+        eventName: e.eventName,
+        discountAmount: e.discountAmount
+      }));
+    } else {
+      roomData.eligiblePromotions = [];
+    }
+    // === 게스트 프로모션 자격 끝 ===
 
     return success(res, roomData);
   } catch (err) {

@@ -129,8 +129,11 @@ function assertRecvPayparamIntegrity(recvPayparam, { payType, expectedOrderId, e
   }
 
   // orderid 검증 (서버 발급 값과 일치해야 함)
+  // PayTag 콜백 포맷별 키 차이: orderid / orderId / shop_orderno (PAYSTDMPI) 모두 지원
   if (expectedOrderId) {
-    const paramOrderId = parsed.get('orderid') || parsed.get('orderId');
+    const paramOrderId = parsed.get('orderid')
+      || parsed.get('orderId')
+      || parsed.get('shop_orderno');
     if (paramOrderId && paramOrderId !== expectedOrderId) {
       const err = new Error('orderId가 일치하지 않습니다.');
       err.paytagErrorCode = 'ORDERID_MISMATCH';
@@ -139,12 +142,15 @@ function assertRecvPayparamIntegrity(recvPayparam, { payType, expectedOrderId, e
     }
   }
 
-  // 금액 검증 (tranamt가 서버 기대 금액과 일치해야 함)
+  // 금액 검증 (서버 기대 금액과 일치해야 함)
   // 테스트 금액 모드(PAYMENT_TEST_AMOUNT)인 경우, PG 요청값은 테스트 금액이어야 함
+  // PayTag 콜백 포맷별 키 차이: tranamt / amount / tran_amt (PAYSTDMPI) 모두 지원
   if (expectedAmount != null) {
     const testAmount = getTestAmount(payType);
     const expectedPgAmount = testAmount != null ? testAmount : parseInt(expectedAmount, 10);
-    const paramAmountRaw = parsed.get('tranamt') || parsed.get('amount');
+    const paramAmountRaw = parsed.get('tranamt')
+      || parsed.get('amount')
+      || parsed.get('tran_amt');
     const paramAmount = paramAmountRaw != null ? parseInt(paramAmountRaw, 10) : null;
 
     if (paramAmount == null || Number.isNaN(paramAmount) || paramAmount !== expectedPgAmount) {
