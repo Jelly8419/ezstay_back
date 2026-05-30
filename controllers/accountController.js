@@ -201,6 +201,9 @@ const saveAccount = async (req, res) => {
       return error(res, { code: 4302, message: verificationResult.error || '계좌 확인에 실패했습니다.' }, 400);
     }
 
+    // 은행명 정규화 (코드/은행명 어느 쪽이 들어와도 항상 한글 은행명으로 저장)
+    const bankName = getBankNameByCode(bankCode);
+
     // 기존 계좌 확인
     const existingAccount = await UserBankAccount.findOne({
       where: { userId }
@@ -208,7 +211,7 @@ const saveAccount = async (req, res) => {
 
     const accountData = {
       userId,
-      bankName: bank_code,
+      bankName,
       accountNumber: cleanAccountNum,
       accountHolder: verificationResult.accountHolderName,
       isVerified: true,
